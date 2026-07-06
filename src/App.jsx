@@ -3,7 +3,7 @@ import { createDecartClient, models } from "@decartai/sdk";
 
 // Reads from a .env file (Vite: VITE_DECART_API_KEY=your_key_here).
 // NEVER hardcode a real key in source — it ends up in your bundle and git history.
-const MY_DECART_KEY = import.meta.env?.VITE_DECART_API_KEY || "dct_test_zrNuEsCLrkSwsnOeWYKtfjvRAWNrzshkdqhNsNjqnEEwaXbUIFBaAKZgHhVkoWUH";
+const MY_DECART_KEY = import.meta.env?.VITE_DECART_API_KEY || "dct_real_RtFqAzIrkBXWJyPzdxWdzLjvhyclrpBOQrENhTXvgQKZYnrOKXSwMgpaeabUuXNf";
 
 // How long a live transformation session is allowed to run before auto-stopping.
 // This is just a UX cap, unrelated to billing.
