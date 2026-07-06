@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>InspireTech — Admin</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 32px 20px; min-height: 100vh;
+    background: #090b11; color: #dde1e8;
+    font-family: "JetBrains Mono", Consolas, monospace;
+    display: flex; justify-content: center;
+  }
+  .wrap { width: 100%; max-width: 720px; }
+  h1 {
+    font-family: "Inter", system-ui, sans-serif; font-size: 20px; font-weight: 800;
+    color: #f4f6fa; margin: 0 0 4px;
+  }
+  .subtitle { font-size: 12px; color: #6b7385; margin: 0 0 28px; }
+  .card {
+    background: #0d111c; border: 1px solid #1a2030; border-radius: 10px;
+    padding: 20px; margin-bottom: 20px;
+  }
+  .card h2 {
+    font-size: 11px; font-weight: 700; letter-spacing: 0.08em; color: #8b93a7;
+    margin: 0 0 14px; border-bottom: 1px solid #1a2030; padding-bottom: 8px;
+  }
+  label { font-size: 10px; color: #6b7385; font-weight: 700; letter-spacing: 0.05em; display: block; margin-bottom: 4px; }
+  input {
+    width: 100%; background: #05070c; color: #e6e9ef; border: 1px solid #262e42;
+    border-radius: 6px; padding: 10px 12px; font-family: inherit; font-size: 13px;
+    margin-bottom: 14px;
+  }
+  input:focus { outline: none; border-color: #5b8def; box-shadow: 0 0 0 3px rgba(91,141,239,0.14); }
+  button {
+    background: #3f6fdb; background-image: linear-gradient(135deg, #6d97f2 0%, #3a63c7 100%);
+    color: #fff; border: 1px solid rgba(109,151,242,0.4); padding: 10px 16px;
+    border-radius: 6px; font-size: 12px; font-weight: 700; cursor: pointer;
+    font-family: inherit;
+  }
+  button:hover { filter: brightness(1.08); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  button.secondary {
+    background: #141a28; background-image: none; color: #9aa2b6; border: 1px solid #262e42;
+  }
+  .row { display: flex; gap: 10px; align-items: flex-end; }
+  .row > div { flex: 1; }
+  .msg { font-size: 11px; margin-top: 10px; line-height: 1.5; }
+  .msg.error { color: #f0576a; }
+  .msg.ok { color: #34d399; }
+  table { width: 100%; border-collapse: collapse; font-size: 11px; }
+  th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid #1a2030; }
+  th { color: #6b7385; font-weight: 700; letter-spacing: 0.04em; font-size: 10px; }
+  td.token { font-family: inherit; color: #5b8def; word-break: break-all; }
+  td.credits { color: #f4f6fa; font-weight: 700; }
+  .copy-btn {
+    background: #141a28; color: #9aa2b6; border: 1px solid #262e42; padding: 3px 8px;
+    border-radius: 4px; font-size: 10px; cursor: pointer; font-family: inherit;
+  }
+  .empty { font-size: 11px; color: #454e63; font-style: italic; }
+  .footnote { font-size: 10px; color: #454e63; font-style: italic; margin-top: 6px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🛸 InspireTech — Admin</h1>
+  <p class="subtitle">Mint access tokens for customers and see everyone's balance. This page never leaves your own machine's/deployment's backend — it isn't part of the public app bundle.</p>
+
+  <div class="card">
+    <h2>ADMIN SECRET</h2>
+    <label>Enter the ADMIN_SECRET from your backend's .env</label>
+    <input type="password" id="adminSecret" placeholder="paste your ADMIN_SECRET here" />
+    <div class="footnote">Kept only in this browser tab's memory for convenience — never sent anywhere except your own backend, and never saved to disk.</div>
+  </div>
+
+  <div class="card">
+    <h2>CREATE A NEW TOKEN</h2>
+    <div class="row">
+      <div>
+        <label>Label (name/note for this customer)</label>
+        <input type="text" id="newLabel" placeholder="e.g. jane@example.com or 'Instagram customer #4'" />
+      </div>
+      <button id="createBtn" style="margin-bottom:14px;">+ Create Token</button>
+    </div>
+    <div id="createMsg" class="msg"></div>
+  </div>
+
+  <div class="card">
+    <h2>MIGRATE AN EXISTING USER (e.g. moving to a new deployment)</h2>
+    <div class="footnote" style="margin-bottom:14px;">
+      Use this to recreate someone's exact token — and their prior balance — on THIS database.
+      Their saved token keeps working as-is once your frontend points here; they don't need a new one.
+    </div>
+    <label>Their existing token (copy it from the old server's admin page first)</label>
+    <input type="text" id="migrateToken" placeholder="the exact token value they already have" />
+    <label>Their balance at time of migration</label>
+    <input type="number" id="migrateCredits" placeholder="e.g. 366" />
+    <label>Label (optional)</label>
+    <input type="text" id="migrateLabel" placeholder="e.g. jane@example.com" />
+    <button id="migrateBtn">Recreate This Token Here</button>
+    <div id="migrateMsg" class="msg"></div>
+  </div>
+
+  <div class="card">
+    <h2>ALL TOKENS</h2>
+    <div class="row" style="margin-bottom:14px;">
+      <button id="refreshBtn" class="secondary">↻ Refresh List</button>
+    </div>
+    <div id="usersMsg" class="msg"></div>
+    <div id="usersTableWrap"></div>
+  </div>
+</div>
+
+<script>
+  // Point this at wherever your ledger backend actually runs.
+  // Same page, so no CORS setup is needed for this admin tool itself.
+  const BACKEND_URL = window.location.origin;
+
+  const secretInput = document.getElementById("adminSecret");
+  const createBtn = document.getElementById("createBtn");
+  const refreshBtn = document.getElementById("refreshBtn");
+  const newLabelInput = document.getElementById("newLabel");
+  const createMsg = document.getElementById("createMsg");
+  const usersMsg = document.getElementById("usersMsg");
+  const usersTableWrap = document.getElementById("usersTableWrap");
+  const migrateBtn = document.getElementById("migrateBtn");
+  const migrateTokenInput = document.getElementById("migrateToken");
+  const migrateCreditsInput = document.getElementById("migrateCredits");
+  const migrateLabelInput = document.getElementById("migrateLabel");
+  const migrateMsg = document.getElementById("migrateMsg");
+
+  // Convenience only — lets you refresh the page without retyping the secret
+  // every time. Cleared automatically when the tab/browser session ends.
+  secretInput.value = sessionStorage.getItem("itc_admin_secret") || "";
+  secretInput.addEventListener("input", () => {
+    sessionStorage.setItem("itc_admin_secret", secretInput.value);
+  });
+
+  function setMsg(el, text, kind) {
+    el.textContent = text;
+    el.className = "msg" + (kind ? " " + kind : "");
+  }
+
+  async function createToken() {
+    const secret = secretInput.value.trim();
+    if (!secret) return setMsg(createMsg, "Enter your ADMIN_SECRET above first.", "error");
+
+    createBtn.disabled = true;
+    setMsg(createMsg, "Creating...", "");
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/admin/tokens`, {
+        method: "POST",
+        headers: { "X-Admin-Secret": secret, "Content-Type": "application/json" },
+        body: JSON.stringify({ label: newLabelInput.value.trim() || null }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setMsg(createMsg, data.error || "Something went wrong.", "error");
+        return;
+      }
+      setMsg(createMsg, `Created! Token: ${data.token}`, "ok");
+      newLabelInput.value = "";
+      loadUsers();
+    } catch (err) {
+      setMsg(createMsg, "Couldn't reach the backend at " + BACKEND_URL, "error");
+    } finally {
+      createBtn.disabled = false;
+    }
+  }
+
+  async function migrateToken() {
+    const secret = secretInput.value.trim();
+    if (!secret) return setMsg(migrateMsg, "Enter your ADMIN_SECRET above first.", "error");
+    const token = migrateTokenInput.value.trim();
+    if (!token) return setMsg(migrateMsg, "Paste the existing token to recreate.", "error");
+    const credits = Number(migrateCreditsInput.value || 0);
+
+    migrateBtn.disabled = true;
+    setMsg(migrateMsg, "Migrating...", "");
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/admin/tokens`, {
+        method: "POST",
+        headers: { "X-Admin-Secret": secret, "Content-Type": "application/json" },
+        body: JSON.stringify({ token, credits, label: migrateLabelInput.value.trim() || null }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setMsg(migrateMsg, data.error || "Something went wrong.", "error");
+        return;
+      }
+      setMsg(migrateMsg, `Recreated with ${data.credits} credits. This user's saved token now works against this server.`, "ok");
+      migrateTokenInput.value = "";
+      migrateCreditsInput.value = "";
+      migrateLabelInput.value = "";
+      loadUsers();
+    } catch (err) {
+      setMsg(migrateMsg, "Couldn't reach the backend at " + BACKEND_URL, "error");
+    } finally {
+      migrateBtn.disabled = false;
+    }
+  }
+
+  async function adjustCredits(token) {
+    const secret = secretInput.value.trim();
+    if (!secret) return alert("Enter your ADMIN_SECRET above first.");
+    const input = prompt("Add credits (use a negative number to remove):", "0");
+    if (input === null) return;
+    const delta = Number(input);
+    if (!delta) return alert("Enter a non-zero number.");
+
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/admin/tokens/${encodeURIComponent(token)}/adjust-credits`, {
+        method: "POST",
+        headers: { "X-Admin-Secret": secret, "Content-Type": "application/json" },
+        body: JSON.stringify({ delta, note: "admin_ui" }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        alert(data.error || "Something went wrong.");
+        return;
+      }
+      loadUsers();
+    } catch (err) {
+      alert("Couldn't reach the backend at " + BACKEND_URL);
+    }
+  }
+  window.adjustCredits = adjustCredits;
+
+  async function loadUsers() {
+    const secret = secretInput.value.trim();
+    if (!secret) return setMsg(usersMsg, "Enter your ADMIN_SECRET above first.", "error");
+
+    setMsg(usersMsg, "Loading...", "");
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/admin/users`, {
+        headers: { "X-Admin-Secret": secret },
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setMsg(usersMsg, data.error || "Something went wrong.", "error");
+        usersTableWrap.innerHTML = "";
+        return;
+      }
+      setMsg(usersMsg, "", "");
+      renderUsers(data.users || []);
+    } catch (err) {
+      setMsg(usersMsg, "Couldn't reach the backend at " + BACKEND_URL, "error");
+    }
+  }
+
+  function renderUsers(users) {
+    if (!users.length) {
+      usersTableWrap.innerHTML = '<div class="empty">No tokens created yet.</div>';
+      return;
+    }
+    const rows = users.map(u => `
+      <tr>
+        <td class="token">${u.token}</td>
+        <td>${u.label || "<span class='empty'>—</span>"}</td>
+        <td class="credits">${u.credits}</td>
+        <td>${new Date(u.created_at).toLocaleString()}</td>
+        <td style="white-space:nowrap;">
+          <button class="copy-btn" onclick="navigator.clipboard.writeText('${u.token}')">Copy</button>
+          <button class="copy-btn" onclick="adjustCredits('${u.token}')">Adjust</button>
+        </td>
+      </tr>
+    `).join("");
+    usersTableWrap.innerHTML = `
+      <table>
+        <thead><tr><th>Token</th><th>Label</th><th>Credits</th><th>Created</th><th></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+  }
+
+  createBtn.addEventListener("click", createToken);
+  refreshBtn.addEventListener("click", loadUsers);
+  migrateBtn.addEventListener("click", migrateToken);
+
+  // Auto-load the list on page open if a secret is already remembered.
+  if (secretInput.value) loadUsers();
+</script>
+</body>
+</html>

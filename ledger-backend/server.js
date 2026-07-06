@@ -1,55 +1,68 @@
-// server.js — the real credit ledger.
+// server.js — the real credit ledger, with per-user (per-token) accounts.
 //
-// Why this exists: Decart's own dashboard shows a real credit balance, but
-// doesn't expose it via API. This backend becomes YOUR OWN source of truth:
-// you sell credits to your user via Paystack, track balance in a real
-// database, and meter usage server-side (never trust a browser timer with money).
+// Model: there's no signup form. YOU (the admin) mint an access token for a
+// customer via a protected admin endpoint, hand it to them (however you like
+// — email, WhatsApp, whatever), and they paste it into the app once. From
+// then on, every request they make includes that token, and it's what scopes
+// their balance, purchases, and usage — completely separate from anyone
+// else's token.
+//
+// A small browser-based admin page lives at /admin.html (see ./public) so
+// you don't have to run curl/PowerShell by hand — open it in your browser,
+// paste your ADMIN_SECRET, and mint/view tokens from there.
 //
 // Run with: node server.js   (after `npm install` + setting up .env)
 
 import express from "express";
 import cors from "cors";
 import crypto from "crypto";
+import path from "path";
+import { fileURLToPath } from "url";
 import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "crypto";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const PORT = process.env.PORT || 3002;
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
 const CREDITS_PER_SECOND = Number(process.env.CREDITS_PER_SECOND || 2);
-const MAX_HEARTBEAT_GAP_SECONDS = 10; // caps deduction if a heartbeat is late/missed, so a stalled tab can't rack up unlimited debt in one jump
+const MAX_HEARTBEAT_GAP_SECONDS = 10; // caps deduction if a heartbeat is late/missed
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY || "";
+const ADMIN_SECRET = process.env.ADMIN_SECRET || "";
 
 if (!PAYSTACK_SECRET_KEY) {
   console.warn("\n⚠️  PAYSTACK_SECRET_KEY is not set — checkout will fail until you add it to .env\n");
 }
+if (!ADMIN_SECRET) {
+  console.warn("⚠️  ADMIN_SECRET is not set — anyone could mint themselves a token. Set this before deploying.\n");
+}
 
 const app = express();
 
+// Serves ./public/admin.html at http://localhost:3002/admin.html (and on
+// whatever your deployed backend URL is, e.g. https://your-app.up.railway.app/admin.html).
+// This is separate from your public React app's bundle — the admin secret
+// is typed in by hand on this page, never baked into any shipped JS.
+app.use(express.static(path.join(__dirname, "public")));
+
 // --- Database setup -------------------------------------------------------
 // Uses Node's built-in SQLite (node:sqlite) — requires Node 22.5+, no native
-// compilation, no Visual Studio / build tools needed.
-//
-// NOTE: this table used to have a column called stripe_session_id — it's now
-// provider_reference (Paystack's transaction reference). If you have an
-// existing ledger.db from testing with Stripe, delete that file and let it
-// recreate fresh — node:sqlite's CREATE TABLE IF NOT EXISTS won't rename an
-// existing column for you.
-// DB_PATH lets you point this at a mounted persistent volume on your host
-// (e.g. "/data/ledger.db") — without that, most container platforms wipe the
-// filesystem on every redeploy, and you'd lose real customer balances.
+// compilation needed.
 const DB_PATH = process.env.DB_PATH || "ledger.db";
 const db = new DatabaseSync(DB_PATH);
 db.exec("PRAGMA journal_mode = WAL;");
 
 db.exec(`
-  CREATE TABLE IF NOT EXISTS ledger (
-    id INTEGER PRIMARY KEY CHECK (id = 1),
-    credits INTEGER NOT NULL DEFAULT 0
+  CREATE TABLE IF NOT EXISTS users (
+    token TEXT PRIMARY KEY,
+    label TEXT,
+    credits INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
-  INSERT OR IGNORE INTO ledger (id, credits) VALUES (1, 0);
 
   CREATE TABLE IF NOT EXISTS transactions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    token TEXT NOT NULL,
     type TEXT NOT NULL,             -- 'purchase' | 'usage'
     credits INTEGER NOT NULL,       -- positive for purchase, negative for usage
     amount_ngn REAL,
@@ -59,6 +72,7 @@ db.exec(`
 
   CREATE TABLE IF NOT EXISTS usage_sessions (
     id TEXT PRIMARY KEY,
+    token TEXT NOT NULL,
     started_at TEXT NOT NULL,
     last_heartbeat_at TEXT NOT NULL,
     ended_at TEXT,
@@ -66,21 +80,26 @@ db.exec(`
   );
 `);
 
-function getBalance() {
-  return db.prepare("SELECT credits FROM ledger WHERE id = 1").get().credits;
+function getUser(token) {
+  return db.prepare("SELECT * FROM users WHERE token = ?").get(token);
 }
 
-function adjustBalance(delta) {
-  const current = getBalance();
+function getBalance(token) {
+  const user = getUser(token);
+  return user ? user.credits : 0;
+}
+
+function adjustBalance(token, delta) {
+  const current = getBalance(token);
   const next = Math.max(0, current + delta);
-  db.prepare("UPDATE ledger SET credits = ? WHERE id = 1").run(next);
+  db.prepare("UPDATE users SET credits = ? WHERE token = ?").run(next, token);
   return next;
 }
 
-function recordTransaction({ type, credits, amount_ngn = null, provider_reference = null }) {
+function recordTransaction({ token, type, credits, amount_ngn = null, provider_reference = null }) {
   db.prepare(
-    "INSERT INTO transactions (type, credits, amount_ngn, provider_reference) VALUES (?, ?, ?, ?)"
-  ).run(type, credits, amount_ngn, provider_reference);
+    "INSERT INTO transactions (token, type, credits, amount_ngn, provider_reference) VALUES (?, ?, ?, ?, ?)"
+  ).run(token, type, credits, amount_ngn, provider_reference);
 }
 
 function hasProcessedReference(reference) {
@@ -90,26 +109,33 @@ function hasProcessedReference(reference) {
   return Boolean(row);
 }
 
-// Credits a successful Paystack transaction exactly once, regardless of
-// whether the webhook or the verify-on-return call gets there first.
+// Credits a successful Paystack transaction exactly once. The token being
+// credited comes from the metadata attached at checkout time, NOT from
+// whoever happens to be calling this — that's what makes it safe to call
+// from both the webhook and the verify-on-return endpoint.
 function creditFromPaystackTransaction(data) {
   const reference = data.reference;
-  if (hasProcessedReference(reference)) {
-    return { credits: getBalance(), alreadyProcessed: true };
+  const token = data.metadata?.token;
+
+  if (!token || !getUser(token)) {
+    console.error(`Webhook/verify for unknown or missing token, reference ${reference}`);
+    return { credits: 0, alreadyProcessed: false, error: "Unknown access token" };
   }
+  if (hasProcessedReference(reference)) {
+    return { credits: getBalance(token), alreadyProcessed: true };
+  }
+
   const credits = Number(data.metadata?.credits || 0);
   const amountNgn = (data.amount || 0) / 100; // Paystack amounts are in kobo
   if (credits > 0) {
-    const newBalance = adjustBalance(credits);
-    recordTransaction({ type: "purchase", credits, amount_ngn: amountNgn, provider_reference: reference });
-    console.log(`✅ Credited ${credits} credits (balance now ${newBalance}) for reference ${reference}`);
+    const newBalance = adjustBalance(token, credits);
+    recordTransaction({ token, type: "purchase", credits, amount_ngn: amountNgn, provider_reference: reference });
+    console.log(`✅ Credited ${credits} credits (balance now ${newBalance}) for token ${token.slice(0, 8)}... ref ${reference}`);
   }
-  return { credits: getBalance(), alreadyProcessed: false };
+  return { credits: getBalance(token), alreadyProcessed: false };
 }
 
 // --- Middleware -------------------------------------------------------------
-// Wide-open CORS is fine for local dev but not once this is public — lock it
-// to your real frontend origin via FRONTEND_URL.
 app.use(cors({ origin: FRONTEND_URL }));
 
 // Paystack webhooks need the RAW body for signature verification, so this
@@ -118,7 +144,7 @@ app.post("/api/webhooks/paystack", express.raw({ type: "application/json" }), (r
   const signature = req.headers["x-paystack-signature"];
   const computedHash = crypto
     .createHmac("sha512", PAYSTACK_SECRET_KEY)
-    .update(req.body) // raw Buffer — hashing a re-serialized/parsed body gives a different signature
+    .update(req.body)
     .digest("hex");
 
   if (!signature || computedHash !== signature) {
@@ -127,39 +153,117 @@ app.post("/api/webhooks/paystack", express.raw({ type: "application/json" }), (r
   }
 
   const event = JSON.parse(req.body.toString("utf8"));
-
   if (event.event === "charge.success") {
     creditFromPaystackTransaction(event.data);
   }
-
   res.status(200).json({ received: true });
 });
 
 app.use(express.json());
 
-// --- Balance ----------------------------------------------------------------
-app.get("/api/credits", (req, res) => {
-  res.json({ credits: getBalance() });
+// Every user-facing route (except the webhook, verify, and admin routes)
+// requires a valid access token in the X-Access-Token header.
+function requireToken(req, res, next) {
+  const token = req.headers["x-access-token"];
+  if (!token) return res.status(401).json({ error: "Missing access token" });
+  const user = getUser(token);
+  if (!user) return res.status(401).json({ error: "Invalid access token" });
+  req.token = token;
+  next();
+}
+
+// --- Admin: mint access tokens ------------------------------------------------
+// Easiest way to call these: open /admin.html in your browser (see ./public).
+// You can still call them directly if you prefer:
+//
+//   curl -X POST https://your-backend/api/admin/tokens \
+//     -H "X-Admin-Secret: <your ADMIN_SECRET>" \
+//     -H "Content-Type: application/json" \
+//     -d '{"label": "customer name or note"}'
+//
+app.post("/api/admin/tokens", (req, res) => {
+  if (!ADMIN_SECRET || req.headers["x-admin-secret"] !== ADMIN_SECRET) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  const { label, token: requestedToken, credits: startingCredits } = req.body || {};
+
+  // Normally omitted — a fresh random token is minted. Passing an explicit
+  // `token` is for MIGRATION: recreating a specific user's exact existing
+  // token (e.g. one they already have saved in their browser from an old
+  // deployment) on a new/different database, optionally with their prior
+  // balance carried over via `credits`.
+  const token = requestedToken || randomUUID();
+  if (getUser(token)) {
+    return res.status(409).json({ error: "That token already exists" });
+  }
+  const initialCredits = Number.isFinite(Number(startingCredits)) ? Math.max(0, Number(startingCredits)) : 0;
+
+  db.prepare("INSERT INTO users (token, label, credits) VALUES (?, ?, ?)").run(token, label || null, initialCredits);
+  if (initialCredits > 0) {
+    recordTransaction({ token, type: "purchase", credits: initialCredits, amount_ngn: null, provider_reference: "manual_migration" });
+  }
+  res.json({ token, label: label || null, credits: initialCredits });
 });
 
-app.get("/api/transactions", (req, res) => {
-  const rows = db.prepare("SELECT * FROM transactions ORDER BY created_at DESC LIMIT 50").all();
+// Manually add (or remove, with a negative delta) credits on an existing
+// token — for migrations, comps, refunds, or correcting a mistake. This
+// bypasses Paystack entirely, so it's protected the same way as the other
+// admin routes: your ADMIN_SECRET, never exposed to customers.
+app.post("/api/admin/tokens/:token/adjust-credits", (req, res) => {
+  if (!ADMIN_SECRET || req.headers["x-admin-secret"] !== ADMIN_SECRET) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  const { token } = req.params;
+  const { delta, note } = req.body || {};
+  const deltaNum = Number(delta);
+  if (!getUser(token)) return res.status(404).json({ error: "Unknown token" });
+  if (!Number.isFinite(deltaNum) || deltaNum === 0) {
+    return res.status(400).json({ error: "Provide a non-zero numeric 'delta'" });
+  }
+
+  const remaining = adjustBalance(token, deltaNum);
+  recordTransaction({
+    token,
+    type: deltaNum > 0 ? "purchase" : "usage",
+    credits: deltaNum,
+    amount_ngn: null,
+    provider_reference: note ? `manual:${note}` : "manual_adjustment",
+  });
+  res.json({ token, credits: remaining });
+});
+
+app.get("/api/admin/users", (req, res) => {
+  if (!ADMIN_SECRET || req.headers["x-admin-secret"] !== ADMIN_SECRET) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  const rows = db.prepare("SELECT token, label, credits, created_at FROM users ORDER BY created_at DESC").all();
+  res.json({ users: rows });
+});
+
+// --- Balance ----------------------------------------------------------------
+app.get("/api/credits", requireToken, (req, res) => {
+  res.json({ credits: getBalance(req.token) });
+});
+
+app.get("/api/transactions", requireToken, (req, res) => {
+  const rows = db
+    .prepare("SELECT * FROM transactions WHERE token = ? ORDER BY created_at DESC LIMIT 50")
+    .all(req.token);
   res.json({ transactions: rows });
 });
 
 // --- Checkout (purchases) ----------------------------------------------------
 // Exchange rate: ₦1,900 per $1 (set by you — update this single number if the
 // rate changes, rather than recalculating each tier by hand).
-// Amounts are in KOBO (Paystack's subunit for NGN — 1 naira = 100 kobo).
 const NAIRA_PER_DOLLAR = 1900;
 const TIERS = {
-  1000: 10 * NAIRA_PER_DOLLAR * 100,  // $10  -> ₦19,000  -> 1,900,000 kobo
-  5000: 50 * NAIRA_PER_DOLLAR * 100,  // $50  -> ₦95,000  -> 9,500,000 kobo
-  10000: 100 * NAIRA_PER_DOLLAR * 100, // $100 -> ₦190,000 -> 19,000,000 kobo
-  50000: 500 * NAIRA_PER_DOLLAR * 100, // $500 -> ₦950,000 -> 95,000,000 kobo
+  1000: 10 * NAIRA_PER_DOLLAR * 100,
+  5000: 50 * NAIRA_PER_DOLLAR * 100,
+  10000: 100 * NAIRA_PER_DOLLAR * 100,
+  50000: 500 * NAIRA_PER_DOLLAR * 100,
 };
 
-app.post("/api/checkout", async (req, res) => {
+app.post("/api/checkout", requireToken, async (req, res) => {
   try {
     const { credits } = req.body || {};
     const amountKobo = TIERS[credits];
@@ -176,11 +280,11 @@ app.post("/api/checkout", async (req, res) => {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        email: req.body.email || "customer@example.com", // Paystack requires an email; swap in a real one if you collect it
+        email: req.body.email || "customer@example.com",
         amount: amountKobo,
         currency: "NGN",
         reference,
-        metadata: { credits: String(credits) },
+        metadata: { credits: String(credits), token: req.token }, // token carried through to the webhook/verify step
         callback_url: `${FRONTEND_URL}/?checkout=success`,
       }),
     });
@@ -197,9 +301,9 @@ app.post("/api/checkout", async (req, res) => {
   }
 });
 
-// Paystack's own docs recommend NOT relying on webhooks alone — verify the
-// transaction directly when the user lands back on your site, in case the
-// webhook is delayed or (during local dev without a public URL) never arrives.
+// Verify-on-return doesn't require the token header — the token travels
+// inside the Paystack transaction's own metadata instead, since this is
+// called right after a redirect where custom headers aren't practical.
 app.get("/api/verify/:reference", async (req, res) => {
   try {
     const { reference } = req.params;
@@ -210,7 +314,7 @@ app.get("/api/verify/:reference", async (req, res) => {
     const data = await verifyRes.json();
 
     if (!data.status || data.data.status !== "success") {
-      return res.status(400).json({ error: "Payment not verified as successful", credits: getBalance() });
+      return res.status(400).json({ error: "Payment not verified as successful" });
     }
 
     const result = creditFromPaystackTransaction(data.data);
@@ -222,39 +326,35 @@ app.get("/api/verify/:reference", async (req, res) => {
 });
 
 // --- Usage sessions (server-authoritative metering) --------------------------
-// The frontend can display whatever countdown it wants, but THIS is what
-// actually deducts real credits — based on server clock, not client timers.
-
-app.post("/api/sessions/start", (req, res) => {
-  const credits = getBalance();
+app.post("/api/sessions/start", requireToken, (req, res) => {
+  const credits = getBalance(req.token);
   if (credits <= 0) {
     return res.status(402).json({ error: "Out of credits", credits });
   }
   const id = randomUUID();
   const now = new Date().toISOString();
   db.prepare(
-    "INSERT INTO usage_sessions (id, started_at, last_heartbeat_at) VALUES (?, ?, ?)"
-  ).run(id, now, now);
+    "INSERT INTO usage_sessions (id, token, started_at, last_heartbeat_at) VALUES (?, ?, ?, ?)"
+  ).run(id, req.token, now, now);
   res.json({ sessionId: id, credits });
 });
 
-app.post("/api/sessions/:id/heartbeat", (req, res) => {
-  const session = db.prepare("SELECT * FROM usage_sessions WHERE id = ?").get(req.params.id);
+app.post("/api/sessions/:id/heartbeat", requireToken, (req, res) => {
+  const session = db
+    .prepare("SELECT * FROM usage_sessions WHERE id = ? AND token = ?")
+    .get(req.params.id, req.token);
   if (!session || session.ended_at) {
     return res.status(404).json({ error: "Session not found or already ended" });
   }
 
   const now = new Date();
   const last = new Date(session.last_heartbeat_at);
-  const elapsedSeconds = Math.min(
-    MAX_HEARTBEAT_GAP_SECONDS,
-    Math.max(0, (now - last) / 1000)
-  );
+  const elapsedSeconds = Math.min(MAX_HEARTBEAT_GAP_SECONDS, Math.max(0, (now - last) / 1000));
   const creditsToDeduct = Math.round(elapsedSeconds * CREDITS_PER_SECOND);
 
-  const remaining = adjustBalance(-creditsToDeduct);
+  const remaining = adjustBalance(req.token, -creditsToDeduct);
   if (creditsToDeduct > 0) {
-    recordTransaction({ type: "usage", credits: -creditsToDeduct });
+    recordTransaction({ token: req.token, type: "usage", credits: -creditsToDeduct });
   }
 
   db.prepare(
@@ -264,19 +364,20 @@ app.post("/api/sessions/:id/heartbeat", (req, res) => {
   res.json({ credits: remaining, depleted: remaining <= 0 });
 });
 
-app.post("/api/sessions/:id/end", (req, res) => {
-  const session = db.prepare("SELECT * FROM usage_sessions WHERE id = ?").get(req.params.id);
+app.post("/api/sessions/:id/end", requireToken, (req, res) => {
+  const session = db
+    .prepare("SELECT * FROM usage_sessions WHERE id = ? AND token = ?")
+    .get(req.params.id, req.token);
   if (!session) return res.status(404).json({ error: "Session not found" });
-  if (session.ended_at) return res.json({ credits: getBalance() }); // already ended, no-op
+  if (session.ended_at) return res.json({ credits: getBalance(req.token) });
 
-  // Deduct any final sliver of time since the last heartbeat before closing out.
   const now = new Date();
   const last = new Date(session.last_heartbeat_at);
   const elapsedSeconds = Math.min(MAX_HEARTBEAT_GAP_SECONDS, Math.max(0, (now - last) / 1000));
   const creditsToDeduct = Math.round(elapsedSeconds * CREDITS_PER_SECOND);
-  const remaining = adjustBalance(-creditsToDeduct);
+  const remaining = adjustBalance(req.token, -creditsToDeduct);
   if (creditsToDeduct > 0) {
-    recordTransaction({ type: "usage", credits: -creditsToDeduct });
+    recordTransaction({ token: req.token, type: "usage", credits: -creditsToDeduct });
   }
 
   db.prepare(
@@ -288,5 +389,5 @@ app.post("/api/sessions/:id/end", (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`Credit ledger backend listening on http://localhost:${PORT}`);
-  console.log(`Current balance: ${getBalance()} credits`);
+  console.log(`Admin page: http://localhost:${PORT}/admin.html`);
 });

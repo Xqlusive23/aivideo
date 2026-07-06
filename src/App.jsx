@@ -3,7 +3,7 @@ import { createDecartClient, models } from "@decartai/sdk";
 
 // Reads from a .env file (Vite: VITE_DECART_API_KEY=your_key_here).
 // NEVER hardcode a real key in source — it ends up in your bundle and git history.
-const MY_DECART_KEY = import.meta.env?.VITE_DECART_API_KEY || "dct_get_IANsMznYdoWSCdZXGToqfkHMJgJESsZcGHIoGxdFklsdDfxfpHyEMBsVgygIuDPD";
+const MY_DECART_KEY = import.meta.env?.VITE_DECART_API_KEY || "";
 
 // How long a live transformation session is allowed to run before auto-stopping.
 // This is just a UX cap, unrelated to billing.
@@ -48,6 +48,37 @@ export default function App() {
   };
   const getModelId = () => MODEL_ID_MAP[activeModel] || "lucy-2.1";
 
+  // --- Access token (given to you by the admin — see ledger-backend README) ---
+  const [accessToken, setAccessToken] = useState(() => {
+    try {
+      return window.localStorage.getItem("inspiretech_access_token") || "";
+    } catch {
+      return "";
+    }
+  });
+  const [tokenInput, setTokenInput] = useState("");
+  const [tokenError, setTokenError] = useState("");
+
+  const authHeaders = () => ({ "X-Access-Token": accessToken });
+
+  const saveAccessToken = (token) => {
+    setAccessToken(token);
+    try {
+      window.localStorage.setItem("inspiretech_access_token", token);
+    } catch {
+      // localStorage unavailable — token just won't persist across reloads
+    }
+  };
+
+  const clearAccessToken = () => {
+    setAccessToken("");
+    try {
+      window.localStorage.removeItem("inspiretech_access_token");
+    } catch {
+      // ignore
+    }
+  };
+
   // --- Real credit balance state (sourced from the ledger backend) ---
   const [credits, setCredits] = useState(0);
   const [creditsLoaded, setCreditsLoaded] = useState(false);
@@ -68,6 +99,7 @@ export default function App() {
 
   // --- Fetch the real balance on load, and handle returning from Paystack Checkout ---
   useEffect(() => {
+    if (!accessToken) return;
     refreshBalance();
 
     const params = new URLSearchParams(window.location.search);
@@ -85,7 +117,7 @@ export default function App() {
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [accessToken]);
 
   useEffect(() => {
     if (showAddCredits && creditSectionRef.current) {
@@ -95,7 +127,12 @@ export default function App() {
 
   const refreshBalance = async () => {
     try {
-      const res = await fetch(`${LEDGER_URL}/api/credits`);
+      const res = await fetch(`${LEDGER_URL}/api/credits`, { headers: authHeaders() });
+      if (res.status === 401) {
+        setTokenError("That access token was rejected by the server. Please re-enter it.");
+        clearAccessToken();
+        return;
+      }
       if (!res.ok) throw new Error(`Ledger responded ${res.status}`);
       const data = await res.json();
       setCredits(data.credits);
@@ -107,10 +144,9 @@ export default function App() {
     }
   };
 
-  // Actively verifies the transaction with Paystack via our backend, rather
-  // than passively waiting on a webhook (Paystack's own docs recommend this —
-  // webhooks can be delayed, and won't reach a backend running on localhost
-  // with no public URL at all during local dev).
+  // Note: verify-on-return intentionally does NOT send the token header — the
+  // backend recovers it from the Paystack transaction's own metadata instead,
+  // since this fires right after a browser redirect (no custom headers there).
   const verifyPurchase = async (reference) => {
     try {
       const res = await fetch(`${LEDGER_URL}/api/verify/${encodeURIComponent(reference)}`);
@@ -175,6 +211,7 @@ export default function App() {
       try {
         const res = await fetch(`${LEDGER_URL}/api/sessions/${sessionId}/heartbeat`, {
           method: "POST",
+          headers: authHeaders(),
         });
         if (!res.ok) throw new Error(`Heartbeat failed with ${res.status}`);
         const data = await res.json();
@@ -252,8 +289,13 @@ export default function App() {
     // real balance, not this client.
     let sessionId;
     try {
-      const res = await fetch(`${LEDGER_URL}/api/sessions/start`, { method: "POST" });
+      const res = await fetch(`${LEDGER_URL}/api/sessions/start`, { method: "POST", headers: authHeaders() });
       const data = await res.json();
+      if (res.status === 401) {
+        setStatus("ACCESS TOKEN REJECTED — PLEASE RE-ENTER IT");
+        clearAccessToken();
+        return;
+      }
       if (!res.ok) {
         setCredits(data.credits ?? 0);
         setStatus("OUT OF CREDITS — ADD MORE TO CONTINUE");
@@ -331,7 +373,7 @@ export default function App() {
   const endBillingSession = async (sessionId) => {
     if (!sessionId) return;
     try {
-      const res = await fetch(`${LEDGER_URL}/api/sessions/${sessionId}/end`, { method: "POST" });
+      const res = await fetch(`${LEDGER_URL}/api/sessions/${sessionId}/end`, { method: "POST", headers: authHeaders() });
       const data = await res.json();
       if (res.ok) setCredits(data.credits);
     } catch (err) {
@@ -363,7 +405,7 @@ export default function App() {
       setStatus("REDIRECTING TO CHECKOUT...");
       const res = await fetch(`${LEDGER_URL}/api/checkout`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authHeaders() },
         body: JSON.stringify({ credits: creditAmount }),
       });
       const data = await res.json();
@@ -378,14 +420,60 @@ export default function App() {
   const creditPercent = Math.min(100, (credits / 1000) * 100);
   const isLowCredit = credits <= LOW_CREDIT_THRESHOLD;
 
+  // No access token yet — show a simple entry gate instead of the app.
+  // Admin generates tokens via POST /api/admin/tokens (see ledger-backend README).
+  if (!accessToken) {
+    return (
+      <div style={styles.gateContainer}>
+        <style>{`
+          @import url('https://fonts.googleapis.com/css2?family=Inter:wght@600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+          html, body, #root { margin: 0; padding: 0; width: 100%; height: 100%; }
+          *, *::before, *::after { box-sizing: border-box; }
+        `}</style>
+        <div style={styles.gateCard}>
+          <div style={styles.gateBrand}>🛸 InspireTech</div>
+          <h1 style={styles.gateTitle}>Enter your access token</h1>
+          <p style={styles.gateSubtitle}>
+            You should have received this from whoever gave you access. Paste it below to continue.
+          </p>
+          <input
+            type="text"
+            value={tokenInput}
+            onChange={(e) => setTokenInput(e.target.value)}
+            placeholder="e.g. 3f2a9c1e-4b6d-4a8e-9c2f-1d7e5a6b8c90"
+            style={styles.gateInput}
+            className="itc-input"
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && tokenInput.trim()) {
+                setTokenError("");
+                saveAccessToken(tokenInput.trim());
+              }
+            }}
+          />
+          {tokenError && <div style={styles.gateError}>{tokenError}</div>}
+          <button
+            style={styles.gateButton}
+            className="itc-btn itc-btn-primary"
+            disabled={!tokenInput.trim()}
+            onClick={() => {
+              setTokenError("");
+              saveAccessToken(tokenInput.trim());
+            }}
+          >
+            Continue
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div style={styles.appContainer} className="itc-app">
+    <div style={styles.appContainer}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
-        html, body, #root { margin: 0; padding: 0; width: 100%; height: 100%; }
+        html, body, #root { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; }
         *, *::before, *::after { box-sizing: border-box; }
         :focus-visible { outline: 2px solid #5b8def; outline-offset: 2px; border-radius: 4px; }
-
         .itc-btn { position: relative; transition: transform 0.18s cubic-bezier(0.4,0,0.2,1), box-shadow 0.18s cubic-bezier(0.4,0,0.2,1), filter 0.18s cubic-bezier(0.4,0,0.2,1), border-color 0.18s cubic-bezier(0.4,0,0.2,1), background-color 0.18s cubic-bezier(0.4,0,0.2,1); }
         .itc-btn:hover:not(:disabled) { transform: translateY(-1px); filter: brightness(1.08); }
         .itc-btn:active:not(:disabled) { transform: translateY(0); filter: brightness(0.94); }
@@ -408,77 +496,52 @@ export default function App() {
         .itc-card:hover { border-color: #2a3348; box-shadow: 0 10px 28px -18px rgba(0,0,0,0.8); }
         @keyframes radarPing { 0% { transform: scale(0.55); opacity: 0.85; } 70% { transform: scale(1.6); opacity: 0; } 100% { transform: scale(1.6); opacity: 0; } }
         @keyframes creditPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
-
+        @media (max-width: 640px) {
+          .itc-credit-grid { grid-template-columns: repeat(2, 1fr) !important; }
+        }
         ::-webkit-scrollbar { width: 8px; height: 8px; }
         ::-webkit-scrollbar-track { background: #05070c; }
         ::-webkit-scrollbar-thumb { background: #1e2537; border-radius: 4px; }
         ::-webkit-scrollbar-thumb:hover { background: #2c3550; }
-
-        /* ============================================================
-           RESPONSIVE / MOBILE LAYOUT
-           Below this width the two-column dashboard (300px sidebar +
-           fixed 860x520 video canvas) can't fit — everything switches
-           to a single scrollable column instead.
-           ============================================================ */
-        @media (max-width: 900px) {
-          html, body, #root { height: auto; min-height: 100%; }
-          .itc-app { height: auto !important; min-height: 100dvh !important; overflow: visible !important; }
-          .itc-main-workspace { flex-direction: column !important; overflow: visible !important; }
-          .itc-sidebar { width: 100% !important; max-height: none !important; border-right: none !important; border-bottom: 1px solid #1a2030 !important; overflow-y: visible !important; }
-          .itc-output-canvas { overflow: visible !important; }
-          .itc-canvas-control-bar { flex-direction: column !important; align-items: stretch !important; gap: 12px !important; }
-          .itc-action-row { width: 100% !important; }
-          .itc-action-row .itc-btn { flex: 1 1 0 !important; padding: 14px 12px !important; font-size: 13px !important; }
-          .itc-canvas-viewport { padding: 12px !important; }
-          .itc-fixed-output { width: 100% !important; max-width: 100% !important; height: auto !important; aspect-ratio: 860 / 520 !important; }
-          .itc-terminal { height: auto !important; max-height: 120px !important; }
-          .itc-credit-grid { grid-template-columns: repeat(2, 1fr) !important; }
-          .itc-status-ribbon { width: 100% !important; }
-          .itc-top-header { padding: 10px 14px !important; }
-        }
-
-        @media (max-width: 480px) {
-          .itc-canvas-title { font-size: 12px !important; }
-          .itc-canvas-subtitle { font-size: 10px !important; }
-          .itc-status-pill, .itc-status-pill-last { font-size: 10px !important; padding: 4px 8px !important; }
-          .itc-section-card { padding: 12px !important; }
-          .itc-action-row { flex-direction: column !important; }
-          .itc-range { width: 100% !important; }
-          .itc-param-slider-group { width: 60% !important; }
-          /* Bigger touch targets on real phones */
-          .itc-checkbox { width: 20px !important; height: 20px !important; }
-          .itc-btn, select.itc-select { min-height: 44px !important; }
-        }
       `}</style>
 
-      <header style={styles.topHeader} className="itc-top-header">
+      <header style={styles.topHeader}>
         <div style={styles.brandingGroup}>
           <span style={styles.brandIcon}>🛸</span>
           <div style={styles.logoText}>
             InspireTech<span style={styles.logoVersion}>v2.7-ledger</span>
           </div>
+          <button
+            style={styles.switchTokenLink}
+            onClick={() => {
+              if (isRunning) stopTransformation();
+              clearAccessToken();
+            }}
+          >
+            switch token
+          </button>
         </div>
 
-        <div style={styles.systemStatusRibbon} className="itc-status-ribbon">
-          <div style={styles.statusPill} className="itc-status-pill">
+        <div style={styles.systemStatusRibbon}>
+          <div style={styles.statusPill}>
             <span style={styles.metaLabel}>ENGINE_STATUS:</span>
             <span style={{...styles.metaValue, color: isRunning ? "#22c55e" : "#f5a524"}}>{status}</span>
           </div>
-          <div style={styles.statusPill} className="itc-status-pill">
+          <div style={styles.statusPill}>
             <span style={styles.metaLabel}>FPS:</span>
             <span style={styles.metaValue}>{fps || "--"}</span>
           </div>
-          <div style={styles.statusPill} className="itc-status-pill">
+          <div style={styles.statusPill}>
             <span style={styles.metaLabel}>LATENCY:</span>
             <span style={styles.metaValue}>{latency}</span>
           </div>
-          <div style={styles.statusPill} className="itc-status-pill">
+          <div style={styles.statusPill}>
             <span style={styles.metaLabel}>SESSION_TIME:</span>
             <span style={{...styles.metaValue, color: isRunning && timeRemaining <= 30 ? "#f0576a" : "#5b8def"}}>
               {isRunning ? formatTime(timeRemaining) : "05:00"}
             </span>
           </div>
-          <div style={styles.statusPillLast} className="itc-status-pill-last">
+          <div style={styles.statusPillLast}>
             <span style={styles.metaLabel}>CREDITS:</span>
             <span style={{...styles.metaValue, color: isLowCredit ? "#f0576a" : "#5b8def", animation: isLowCredit && isRunning ? "creditPulse 1s infinite" : "none"}}>
               {creditsLoaded ? `${credits} ` : "…"}
@@ -488,10 +551,10 @@ export default function App() {
         </div>
       </header>
 
-      <div style={styles.mainWorkspace} className="itc-main-workspace">
-        <aside style={styles.controlSidebar} className="itc-sidebar">
+      <div style={styles.mainWorkspace}>
+        <aside style={styles.controlSidebar}>
 
-          <div style={styles.sectionCard} className="itc-card itc-section-card">
+          <div style={styles.sectionCard} className="itc-card">
             <div style={styles.cardHeaderStrip}>
               <span style={styles.cardHeaderIcon}>⚙️</span> I/O PERIPHERAL SELECTION
             </div>
@@ -507,7 +570,7 @@ export default function App() {
           </div>
 
           {/* --- Real credit meter card --- */}
-          <div style={styles.sectionCard} className="itc-card itc-section-card">
+          <div style={styles.sectionCard} className="itc-card">
             <div style={styles.cardHeaderStrip}>
               <span style={styles.cardHeaderIcon}>💳</span> CREDIT BALANCE
             </div>
@@ -539,7 +602,7 @@ export default function App() {
             </button>
           </div>
 
-          <div style={styles.sectionCard} className="itc-card itc-section-card">
+          <div style={styles.sectionCard} className="itc-card">
             <div style={styles.cardHeaderStrip}>
               <span style={styles.cardHeaderIcon}>🖼️</span> REFERENCE IMAGE
             </div>
@@ -552,7 +615,7 @@ export default function App() {
             </div>
           </div>
 
-          <div style={styles.sectionCard} className="itc-card itc-section-card">
+          <div style={styles.sectionCard} className="itc-card">
             <div style={styles.cardHeaderStrip}>
               <span style={styles.cardHeaderIcon}>👁️</span> LOCAL CAPTURE INTERCEPT
             </div>
@@ -561,7 +624,7 @@ export default function App() {
             </div>
           </div>
 
-          <div ref={creditSectionRef} style={{...styles.sectionCard, ...(showAddCredits ? styles.sectionCardAlert : {})}} className="itc-card itc-section-card">
+          <div ref={creditSectionRef} style={{...styles.sectionCard, ...(showAddCredits ? styles.sectionCardAlert : {})}} className="itc-card">
             <div style={styles.cardHeaderStrip}>
               <span style={styles.cardHeaderIcon}>💳</span> BUY MORE CREDITS
             </div>
@@ -588,13 +651,13 @@ export default function App() {
             </div>
           </div>
 
-          <div style={{...styles.sectionCard, flex: 1}} className="itc-card itc-section-card">
+          <div style={{...styles.sectionCard, flex: 1}} className="itc-card">
             <div style={styles.cardHeaderStrip}>
               <span style={styles.cardHeaderIcon}>🧬</span> PIPELINE PARAMS
             </div>
             <div style={styles.parameterRow}>
               <label style={styles.paramLabel}>INFERENCE WEIGHT</label>
-              <div style={styles.paramSliderGroup} className="itc-param-slider-group">
+              <div style={styles.paramSliderGroup}>
                 <input type="range" min="0" max="100" value={inferenceWeight} onChange={(e) => setInferenceWeight(Number(e.target.value))} disabled={isRunning} style={styles.paramSlider} className="itc-range" />
                 <span style={styles.paramValue}>{inferenceWeight}%</span>
               </div>
@@ -614,13 +677,13 @@ export default function App() {
           </div>
         </aside>
 
-        <main style={styles.outputCanvas} className="itc-output-canvas">
-          <div style={styles.canvasControlBar} className="itc-canvas-control-bar">
+        <main style={styles.outputCanvas}>
+          <div style={styles.canvasControlBar}>
             <div style={styles.canvasTitleGroup}>
-              <h2 style={styles.canvasTitle} className="itc-canvas-title">OUTPUT MONITOR</h2>
-              <span style={styles.canvasSubtitle} className="itc-canvas-subtitle">Matrix Field Resolution: 1280x720, scaled to fit viewport</span>
+              <h2 style={styles.canvasTitle}>OUTPUT MONITOR</h2>
+              <span style={styles.canvasSubtitle}>Matrix Field Resolution: 1280x720 downscaled directly to 860x520 viewport</span>
             </div>
-            <div style={styles.actionRow} className="itc-action-row">
+            <div style={styles.actionRow}>
               <button
                 style={{...styles.actionButton, ...styles.startButton, opacity: (isRunning || !selectedFile || credits <= 0 || ledgerUnreachable) ? 0.5 : 1}}
                 className="itc-btn itc-btn-start"
@@ -640,7 +703,7 @@ export default function App() {
             </div>
           </div>
 
-          <div style={styles.canvasViewportContainer} className="itc-canvas-viewport">
+          <div style={styles.canvasViewportContainer}>
             <div style={styles.outputColumn}>
               {isRunning && (
                 <div style={styles.timerBadgeRow}>
@@ -650,7 +713,7 @@ export default function App() {
                   </div>
                 </div>
               )}
-              <div style={styles.fixedOutputContainer} className="itc-fixed-output">
+              <div style={styles.fixedOutputContainer}>
                 <video ref={outputVideoRef} autoPlay playsInline style={styles.mirroredVideo} />
                 {!isRunning && (
                   <div style={styles.canvasOverlay}>
@@ -670,7 +733,7 @@ export default function App() {
             </div>
           </div>
 
-          <footer style={styles.terminalContainer} className="itc-terminal">
+          <footer style={styles.terminalContainer}>
             <div style={styles.terminalTab}>SYSTEM_CONSOLE_LOGS</div>
             <div style={styles.terminalBody}>
               <div style={styles.logLine}><span style={styles.logTimestamp}>[boot]</span> Initializing internal InspireTech compute components...</div>
@@ -687,12 +750,21 @@ export default function App() {
 }
 
 const styles = {
+  gateContainer: { backgroundColor: "#090b11", height: "100%", width: "100%", minHeight: "100vh", color: "#dde1e8", fontFamily: '"JetBrains Mono", Consolas, "Courier New", Monaco, monospace', display: "flex", alignItems: "center", justifyContent: "center", padding: "20px", boxSizing: "border-box" },
+  gateCard: { backgroundColor: "#0d111c", border: "1px solid #1a2030", borderRadius: "12px", padding: "32px", maxWidth: "420px", width: "100%", boxShadow: "0 30px 60px -20px rgba(0,0,0,0.8)" },
+  gateBrand: { fontSize: "14px", fontWeight: "800", fontFamily: '"Inter", system-ui, sans-serif', color: "#5b8def", marginBottom: "18px" },
+  gateTitle: { fontSize: "18px", fontWeight: "800", fontFamily: '"Inter", system-ui, sans-serif', color: "#f4f6fa", margin: "0 0 8px" },
+  gateSubtitle: { fontSize: "12px", color: "#6b7385", margin: "0 0 20px", lineHeight: "1.5" },
+  gateInput: { width: "100%", backgroundColor: "#05070c", color: "#e6e9ef", border: "1px solid #262e42", borderRadius: "6px", padding: "10px 12px", fontFamily: "inherit", fontSize: "12px", marginBottom: "8px" },
+  gateError: { fontSize: "11px", color: "#f0576a", marginBottom: "12px" },
+  gateButton: { width: "100%", backgroundColor: "#3f6fdb", backgroundImage: "linear-gradient(135deg, #6d97f2 0%, #3a63c7 100%)", color: "#fff", border: "1px solid rgba(109,151,242,0.4)", padding: "10px 14px", borderRadius: "6px", fontSize: "12px", fontWeight: "700", cursor: "pointer", fontFamily: "inherit", marginTop: "8px" },
   appContainer: { backgroundColor: "#090b11", height: "100%", width: "100%", color: "#dde1e8", fontFamily: '"JetBrains Mono", Consolas, "Courier New", Monaco, monospace', display: "flex", flexDirection: "column", overflow: "hidden", margin: 0, padding: 0, boxSizing: "border-box" },
   topHeader: { display: "flex", flexWrap: "wrap", rowGap: "8px", justifyContent: "space-between", alignItems: "center", padding: "8px 24px", minHeight: "56px", borderBottom: "1px solid #1a2030", backgroundColor: "#0d101a", backgroundImage: "linear-gradient(180deg, #0f1220 0%, #0d101a 100%)", flexShrink: 0, boxShadow: "0 1px 0 rgba(91,141,239,0.06)" },
   brandingGroup: { display: "flex", alignItems: "center", gap: "12px", flexShrink: 0 },
   brandIcon: { fontSize: "20px", color: "#5b8def", filter: "drop-shadow(0 0 6px rgba(91,141,239,0.4))" },
   logoText: { fontSize: "17px", fontWeight: "800", fontFamily: '"Inter", system-ui, sans-serif', letterSpacing: "-0.01em", color: "#f4f6fa", display: "flex", alignItems: "baseline", gap: "8px" },
   logoVersion: { fontSize: "10px", fontWeight: "700", fontFamily: '"JetBrains Mono", monospace', color: "#7c8698", backgroundColor: "#161b28", border: "1px solid #232a3c", borderRadius: "4px", padding: "2px 6px", letterSpacing: "0.03em" },
+  switchTokenLink: { background: "transparent", border: "none", color: "#5c6478", fontSize: "10px", fontFamily: "inherit", cursor: "pointer", textDecoration: "underline", padding: 0, marginLeft: "4px" },
   systemStatusRibbon: { display: "flex", flexWrap: "wrap", gap: "0px", backgroundColor: "#05070c", padding: "4px", borderRadius: "8px", border: "1px solid #1a2030" },
   statusPill: { backgroundColor: "transparent", padding: "4px 12px", display: "flex", alignItems: "center", gap: "8px", fontSize: "11px", borderRight: "1px solid #1a2030" },
   statusPillLast: { backgroundColor: "transparent", padding: "4px 12px", display: "flex", alignItems: "center", gap: "8px", fontSize: "11px" },
@@ -749,10 +821,10 @@ const styles = {
   startButton: { backgroundColor: "#22c55e", backgroundImage: "linear-gradient(135deg, #4ade80 0%, #16a34a 100%)", color: "#fff", boxShadow: "0 4px 14px -6px rgba(34,197,94,0.5)" },
   stopButton: { backgroundColor: "#f0576a", backgroundImage: "linear-gradient(135deg, #fb7185 0%, #dc3a52 100%)", color: "#fff", boxShadow: "0 4px 14px -6px rgba(240,87,106,0.5)" },
   canvasViewportContainer: { flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: "20px", overflow: "hidden" },
-  outputColumn: { display: "flex", flexDirection: "column", alignItems: "center", gap: "10px", width: "100%" },
+  outputColumn: { display: "flex", flexDirection: "column", alignItems: "center", gap: "10px" },
   timerBadgeRow: { display: "flex", gap: "10px" },
   timerBadgeOutside: { backgroundColor: "#0d111c", border: "1px solid #1a2030", borderRadius: "6px", padding: "6px 16px", fontSize: "13px", fontWeight: "700", color: "#5b8def", letterSpacing: "0.08em" },
-  fixedOutputContainer: { width: "860px", maxWidth: "100%", height: "520px", backgroundColor: "#000", borderRadius: "8px", border: "1px solid #1a2030", position: "relative", overflow: "hidden", boxShadow: "0 30px 60px -20px rgba(0,0,0,0.8), 0 0 0 1px rgba(91,141,239,0.05)" },
+  fixedOutputContainer: { width: "860px", height: "520px", backgroundColor: "#000", borderRadius: "8px", border: "1px solid #1a2030", position: "relative", overflow: "hidden", boxShadow: "0 30px 60px -20px rgba(0,0,0,0.8), 0 0 0 1px rgba(91,141,239,0.05)" },
   mirroredVideo: { width: "100%", height: "100%", objectFit: "cover", transform: "scaleX(-1)" },
   fittedImage: { width: "100%", height: "100%", objectFit: "contain" },
   canvasOverlay: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", backgroundColor: "rgba(5, 7, 12, 0.94)" },
