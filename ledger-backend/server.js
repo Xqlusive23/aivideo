@@ -34,7 +34,11 @@ const app = express();
 // existing ledger.db from testing with Stripe, delete that file and let it
 // recreate fresh — node:sqlite's CREATE TABLE IF NOT EXISTS won't rename an
 // existing column for you.
-const db = new DatabaseSync("ledger.db");
+// DB_PATH lets you point this at a mounted persistent volume on your host
+// (e.g. "/data/ledger.db") — without that, most container platforms wipe the
+// filesystem on every redeploy, and you'd lose real customer balances.
+const DB_PATH = process.env.DB_PATH || "ledger.db";
+const db = new DatabaseSync(DB_PATH);
 db.exec("PRAGMA journal_mode = WAL;");
 
 db.exec(`
