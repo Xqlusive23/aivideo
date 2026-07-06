@@ -3,7 +3,7 @@ import { createDecartClient, models } from "@decartai/sdk";
 
 // Reads from a .env file (Vite: VITE_DECART_API_KEY=your_key_here).
 // NEVER hardcode a real key in source — it ends up in your bundle and git history.
-const MY_DECART_KEY = import.meta.env?.VITE_DECART_API_KEY || "dct_real_RtFqAzIrkBXWJyPzdxWdzLjvhyclrpBOQrENhTXvgQKZYnrOKXSwMgpaeabUuXNf";
+const MY_DECART_KEY = import.meta.env?.VITE_DECART_API_KEY || "";
 
 // How long a live transformation session is allowed to run before auto-stopping.
 // This is just a UX cap, unrelated to billing.
@@ -379,12 +379,13 @@ export default function App() {
   const isLowCredit = credits <= LOW_CREDIT_THRESHOLD;
 
   return (
-    <div style={styles.appContainer}>
+    <div style={styles.appContainer} className="itc-app">
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
-        html, body, #root { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; }
+        html, body, #root { margin: 0; padding: 0; width: 100%; height: 100%; }
         *, *::before, *::after { box-sizing: border-box; }
         :focus-visible { outline: 2px solid #5b8def; outline-offset: 2px; border-radius: 4px; }
+
         .itc-btn { position: relative; transition: transform 0.18s cubic-bezier(0.4,0,0.2,1), box-shadow 0.18s cubic-bezier(0.4,0,0.2,1), filter 0.18s cubic-bezier(0.4,0,0.2,1), border-color 0.18s cubic-bezier(0.4,0,0.2,1), background-color 0.18s cubic-bezier(0.4,0,0.2,1); }
         .itc-btn:hover:not(:disabled) { transform: translateY(-1px); filter: brightness(1.08); }
         .itc-btn:active:not(:disabled) { transform: translateY(0); filter: brightness(0.94); }
@@ -407,16 +408,50 @@ export default function App() {
         .itc-card:hover { border-color: #2a3348; box-shadow: 0 10px 28px -18px rgba(0,0,0,0.8); }
         @keyframes radarPing { 0% { transform: scale(0.55); opacity: 0.85; } 70% { transform: scale(1.6); opacity: 0; } 100% { transform: scale(1.6); opacity: 0; } }
         @keyframes creditPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
-        @media (max-width: 640px) {
-          .itc-credit-grid { grid-template-columns: repeat(2, 1fr) !important; }
-        }
+
         ::-webkit-scrollbar { width: 8px; height: 8px; }
         ::-webkit-scrollbar-track { background: #05070c; }
         ::-webkit-scrollbar-thumb { background: #1e2537; border-radius: 4px; }
         ::-webkit-scrollbar-thumb:hover { background: #2c3550; }
+
+        /* ============================================================
+           RESPONSIVE / MOBILE LAYOUT
+           Below this width the two-column dashboard (300px sidebar +
+           fixed 860x520 video canvas) can't fit — everything switches
+           to a single scrollable column instead.
+           ============================================================ */
+        @media (max-width: 900px) {
+          html, body, #root { height: auto; min-height: 100%; }
+          .itc-app { height: auto !important; min-height: 100dvh !important; overflow: visible !important; }
+          .itc-main-workspace { flex-direction: column !important; overflow: visible !important; }
+          .itc-sidebar { width: 100% !important; max-height: none !important; border-right: none !important; border-bottom: 1px solid #1a2030 !important; overflow-y: visible !important; }
+          .itc-output-canvas { overflow: visible !important; }
+          .itc-canvas-control-bar { flex-direction: column !important; align-items: stretch !important; gap: 12px !important; }
+          .itc-action-row { width: 100% !important; }
+          .itc-action-row .itc-btn { flex: 1 1 0 !important; padding: 14px 12px !important; font-size: 13px !important; }
+          .itc-canvas-viewport { padding: 12px !important; }
+          .itc-fixed-output { width: 100% !important; max-width: 100% !important; height: auto !important; aspect-ratio: 860 / 520 !important; }
+          .itc-terminal { height: auto !important; max-height: 120px !important; }
+          .itc-credit-grid { grid-template-columns: repeat(2, 1fr) !important; }
+          .itc-status-ribbon { width: 100% !important; }
+          .itc-top-header { padding: 10px 14px !important; }
+        }
+
+        @media (max-width: 480px) {
+          .itc-canvas-title { font-size: 12px !important; }
+          .itc-canvas-subtitle { font-size: 10px !important; }
+          .itc-status-pill, .itc-status-pill-last { font-size: 10px !important; padding: 4px 8px !important; }
+          .itc-section-card { padding: 12px !important; }
+          .itc-action-row { flex-direction: column !important; }
+          .itc-range { width: 100% !important; }
+          .itc-param-slider-group { width: 60% !important; }
+          /* Bigger touch targets on real phones */
+          .itc-checkbox { width: 20px !important; height: 20px !important; }
+          .itc-btn, select.itc-select { min-height: 44px !important; }
+        }
       `}</style>
 
-      <header style={styles.topHeader}>
+      <header style={styles.topHeader} className="itc-top-header">
         <div style={styles.brandingGroup}>
           <span style={styles.brandIcon}>🛸</span>
           <div style={styles.logoText}>
@@ -424,26 +459,26 @@ export default function App() {
           </div>
         </div>
 
-        <div style={styles.systemStatusRibbon}>
-          <div style={styles.statusPill}>
+        <div style={styles.systemStatusRibbon} className="itc-status-ribbon">
+          <div style={styles.statusPill} className="itc-status-pill">
             <span style={styles.metaLabel}>ENGINE_STATUS:</span>
             <span style={{...styles.metaValue, color: isRunning ? "#22c55e" : "#f5a524"}}>{status}</span>
           </div>
-          <div style={styles.statusPill}>
+          <div style={styles.statusPill} className="itc-status-pill">
             <span style={styles.metaLabel}>FPS:</span>
             <span style={styles.metaValue}>{fps || "--"}</span>
           </div>
-          <div style={styles.statusPill}>
+          <div style={styles.statusPill} className="itc-status-pill">
             <span style={styles.metaLabel}>LATENCY:</span>
             <span style={styles.metaValue}>{latency}</span>
           </div>
-          <div style={styles.statusPill}>
+          <div style={styles.statusPill} className="itc-status-pill">
             <span style={styles.metaLabel}>SESSION_TIME:</span>
             <span style={{...styles.metaValue, color: isRunning && timeRemaining <= 30 ? "#f0576a" : "#5b8def"}}>
               {isRunning ? formatTime(timeRemaining) : "05:00"}
             </span>
           </div>
-          <div style={styles.statusPillLast}>
+          <div style={styles.statusPillLast} className="itc-status-pill-last">
             <span style={styles.metaLabel}>CREDITS:</span>
             <span style={{...styles.metaValue, color: isLowCredit ? "#f0576a" : "#5b8def", animation: isLowCredit && isRunning ? "creditPulse 1s infinite" : "none"}}>
               {creditsLoaded ? `${credits} ` : "…"}
@@ -453,10 +488,10 @@ export default function App() {
         </div>
       </header>
 
-      <div style={styles.mainWorkspace}>
-        <aside style={styles.controlSidebar}>
+      <div style={styles.mainWorkspace} className="itc-main-workspace">
+        <aside style={styles.controlSidebar} className="itc-sidebar">
 
-          <div style={styles.sectionCard} className="itc-card">
+          <div style={styles.sectionCard} className="itc-card itc-section-card">
             <div style={styles.cardHeaderStrip}>
               <span style={styles.cardHeaderIcon}>⚙️</span> I/O PERIPHERAL SELECTION
             </div>
@@ -472,7 +507,7 @@ export default function App() {
           </div>
 
           {/* --- Real credit meter card --- */}
-          <div style={styles.sectionCard} className="itc-card">
+          <div style={styles.sectionCard} className="itc-card itc-section-card">
             <div style={styles.cardHeaderStrip}>
               <span style={styles.cardHeaderIcon}>💳</span> CREDIT BALANCE
             </div>
@@ -504,7 +539,7 @@ export default function App() {
             </button>
           </div>
 
-          <div style={styles.sectionCard} className="itc-card">
+          <div style={styles.sectionCard} className="itc-card itc-section-card">
             <div style={styles.cardHeaderStrip}>
               <span style={styles.cardHeaderIcon}>🖼️</span> REFERENCE IMAGE
             </div>
@@ -517,7 +552,7 @@ export default function App() {
             </div>
           </div>
 
-          <div style={styles.sectionCard} className="itc-card">
+          <div style={styles.sectionCard} className="itc-card itc-section-card">
             <div style={styles.cardHeaderStrip}>
               <span style={styles.cardHeaderIcon}>👁️</span> LOCAL CAPTURE INTERCEPT
             </div>
@@ -526,7 +561,7 @@ export default function App() {
             </div>
           </div>
 
-          <div ref={creditSectionRef} style={{...styles.sectionCard, ...(showAddCredits ? styles.sectionCardAlert : {})}} className="itc-card">
+          <div ref={creditSectionRef} style={{...styles.sectionCard, ...(showAddCredits ? styles.sectionCardAlert : {})}} className="itc-card itc-section-card">
             <div style={styles.cardHeaderStrip}>
               <span style={styles.cardHeaderIcon}>💳</span> BUY MORE CREDITS
             </div>
@@ -553,13 +588,13 @@ export default function App() {
             </div>
           </div>
 
-          <div style={{...styles.sectionCard, flex: 1}} className="itc-card">
+          <div style={{...styles.sectionCard, flex: 1}} className="itc-card itc-section-card">
             <div style={styles.cardHeaderStrip}>
               <span style={styles.cardHeaderIcon}>🧬</span> PIPELINE PARAMS
             </div>
             <div style={styles.parameterRow}>
               <label style={styles.paramLabel}>INFERENCE WEIGHT</label>
-              <div style={styles.paramSliderGroup}>
+              <div style={styles.paramSliderGroup} className="itc-param-slider-group">
                 <input type="range" min="0" max="100" value={inferenceWeight} onChange={(e) => setInferenceWeight(Number(e.target.value))} disabled={isRunning} style={styles.paramSlider} className="itc-range" />
                 <span style={styles.paramValue}>{inferenceWeight}%</span>
               </div>
@@ -579,13 +614,13 @@ export default function App() {
           </div>
         </aside>
 
-        <main style={styles.outputCanvas}>
-          <div style={styles.canvasControlBar}>
+        <main style={styles.outputCanvas} className="itc-output-canvas">
+          <div style={styles.canvasControlBar} className="itc-canvas-control-bar">
             <div style={styles.canvasTitleGroup}>
-              <h2 style={styles.canvasTitle}>OUTPUT MONITOR</h2>
-              <span style={styles.canvasSubtitle}>Matrix Field Resolution: 1280x720 downscaled directly to 860x520 viewport</span>
+              <h2 style={styles.canvasTitle} className="itc-canvas-title">OUTPUT MONITOR</h2>
+              <span style={styles.canvasSubtitle} className="itc-canvas-subtitle">Matrix Field Resolution: 1280x720, scaled to fit viewport</span>
             </div>
-            <div style={styles.actionRow}>
+            <div style={styles.actionRow} className="itc-action-row">
               <button
                 style={{...styles.actionButton, ...styles.startButton, opacity: (isRunning || !selectedFile || credits <= 0 || ledgerUnreachable) ? 0.5 : 1}}
                 className="itc-btn itc-btn-start"
@@ -605,7 +640,7 @@ export default function App() {
             </div>
           </div>
 
-          <div style={styles.canvasViewportContainer}>
+          <div style={styles.canvasViewportContainer} className="itc-canvas-viewport">
             <div style={styles.outputColumn}>
               {isRunning && (
                 <div style={styles.timerBadgeRow}>
@@ -615,7 +650,7 @@ export default function App() {
                   </div>
                 </div>
               )}
-              <div style={styles.fixedOutputContainer}>
+              <div style={styles.fixedOutputContainer} className="itc-fixed-output">
                 <video ref={outputVideoRef} autoPlay playsInline style={styles.mirroredVideo} />
                 {!isRunning && (
                   <div style={styles.canvasOverlay}>
@@ -635,7 +670,7 @@ export default function App() {
             </div>
           </div>
 
-          <footer style={styles.terminalContainer}>
+          <footer style={styles.terminalContainer} className="itc-terminal">
             <div style={styles.terminalTab}>SYSTEM_CONSOLE_LOGS</div>
             <div style={styles.terminalBody}>
               <div style={styles.logLine}><span style={styles.logTimestamp}>[boot]</span> Initializing internal InspireTech compute components...</div>
@@ -714,10 +749,10 @@ const styles = {
   startButton: { backgroundColor: "#22c55e", backgroundImage: "linear-gradient(135deg, #4ade80 0%, #16a34a 100%)", color: "#fff", boxShadow: "0 4px 14px -6px rgba(34,197,94,0.5)" },
   stopButton: { backgroundColor: "#f0576a", backgroundImage: "linear-gradient(135deg, #fb7185 0%, #dc3a52 100%)", color: "#fff", boxShadow: "0 4px 14px -6px rgba(240,87,106,0.5)" },
   canvasViewportContainer: { flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: "20px", overflow: "hidden" },
-  outputColumn: { display: "flex", flexDirection: "column", alignItems: "center", gap: "10px" },
+  outputColumn: { display: "flex", flexDirection: "column", alignItems: "center", gap: "10px", width: "100%" },
   timerBadgeRow: { display: "flex", gap: "10px" },
   timerBadgeOutside: { backgroundColor: "#0d111c", border: "1px solid #1a2030", borderRadius: "6px", padding: "6px 16px", fontSize: "13px", fontWeight: "700", color: "#5b8def", letterSpacing: "0.08em" },
-  fixedOutputContainer: { width: "860px", height: "520px", backgroundColor: "#000", borderRadius: "8px", border: "1px solid #1a2030", position: "relative", overflow: "hidden", boxShadow: "0 30px 60px -20px rgba(0,0,0,0.8), 0 0 0 1px rgba(91,141,239,0.05)" },
+  fixedOutputContainer: { width: "860px", maxWidth: "100%", height: "520px", backgroundColor: "#000", borderRadius: "8px", border: "1px solid #1a2030", position: "relative", overflow: "hidden", boxShadow: "0 30px 60px -20px rgba(0,0,0,0.8), 0 0 0 1px rgba(91,141,239,0.05)" },
   mirroredVideo: { width: "100%", height: "100%", objectFit: "cover", transform: "scaleX(-1)" },
   fittedImage: { width: "100%", height: "100%", objectFit: "contain" },
   canvasOverlay: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", backgroundColor: "rgba(5, 7, 12, 0.94)" },
