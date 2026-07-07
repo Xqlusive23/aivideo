@@ -228,6 +228,32 @@
   }
   window.adjustCredits = adjustCredits;
 
+  async function revokeToken(token, currentlyRevoked) {
+    const secret = secretInput.value.trim();
+    if (!secret) return alert("Enter your ADMIN_SECRET above first.");
+    const action = currentlyRevoked ? "restore" : "revoke";
+    if (!confirm(currentlyRevoked
+      ? "Restore access for this token?"
+      : "Revoke access for this token? They'll immediately lose access, but their balance and history are kept.")) {
+      return;
+    }
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/admin/tokens/${encodeURIComponent(token)}/${action}`, {
+        method: "POST",
+        headers: { "X-Admin-Secret": secret },
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        alert(data.error || "Something went wrong.");
+        return;
+      }
+      loadUsers();
+    } catch (err) {
+      alert("Couldn't reach the backend at " + BACKEND_URL);
+    }
+  }
+  window.revokeToken = revokeToken;
+
   async function loadUsers() {
     const secret = secretInput.value.trim();
     if (!secret) return setMsg(usersMsg, "Enter your ADMIN_SECRET above first.", "error");
@@ -256,14 +282,15 @@
       return;
     }
     const rows = users.map(u => `
-      <tr>
-        <td class="token">${u.token}</td>
+      <tr${u.revoked ? ' style="opacity:0.55;"' : ''}>
+        <td class="token">${u.token}${u.revoked ? ' <span style="color:#f0576a;font-size:9px;font-weight:700;">REVOKED</span>' : ''}</td>
         <td>${u.label || "<span class='empty'>—</span>"}</td>
         <td class="credits">${u.credits}</td>
         <td>${new Date(u.created_at).toLocaleString()}</td>
         <td style="white-space:nowrap;">
           <button class="copy-btn" onclick="navigator.clipboard.writeText('${u.token}')">Copy</button>
           <button class="copy-btn" onclick="adjustCredits('${u.token}')">Adjust</button>
+          <button class="copy-btn" style="${u.revoked ? '' : 'color:#f0576a;border-color:#4a2530;'}" onclick="revokeToken('${u.token}', ${u.revoked ? "true" : "false"})">${u.revoked ? "Restore" : "Revoke"}</button>
         </td>
       </tr>
     `).join("");

@@ -80,6 +80,36 @@ db.exec(`
   );
 `);
 
+// Self-healing guard: if this DB_PATH previously belonged to an OLDER
+// version of this backend (single shared balance, or the email/password
+// design — both used different column names), CREATE TABLE IF NOT EXISTS
+// above silently does nothing to those pre-existing tables, and every insert
+// then crashes with "no column named token" the moment it's used. Rather
+// than fail at request time, patch any missing `token` column in at boot.
+// This does NOT fix an incompatible `users` table (different primary key
+// entirely) — if that's the case, point DB_PATH at a new filename instead.
+function ensureColumn(table, column, definition) {
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all();
+  const exists = columns.some((c) => c.name === column);
+  if (!exists) {
+    console.warn(`⚠️  ${table} table was missing column "${column}" — this DB file is from an older version. Adding it now.`);
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
+}
+try {
+  ensureColumn("transactions", "token", "TEXT DEFAULT ''");
+  ensureColumn("usage_sessions", "token", "TEXT DEFAULT ''");
+  // Lets you cut off a customer's access without deleting their history —
+  // a revoked token keeps its balance/transactions on record, it just can't
+  // be used to start sessions, buy credits, or check balance anymore.
+  ensureColumn("users", "revoked", "INTEGER NOT NULL DEFAULT 0");
+} catch (err) {
+  console.error("Schema self-heal failed — this DB file is likely from an incompatible older version.");
+  console.error("Fix: set DB_PATH to a new filename (e.g. /data/ledger_v2.db) and redeploy.");
+  console.error(err.message);
+  process.exit(1);
+}
+
 function getUser(token) {
   return db.prepare("SELECT * FROM users WHERE token = ?").get(token);
 }
@@ -116,10 +146,15 @@ function hasProcessedReference(reference) {
 function creditFromPaystackTransaction(data) {
   const reference = data.reference;
   const token = data.metadata?.token;
+  const user = token ? getUser(token) : null;
 
-  if (!token || !getUser(token)) {
+  if (!user) {
     console.error(`Webhook/verify for unknown or missing token, reference ${reference}`);
     return { credits: 0, alreadyProcessed: false, error: "Unknown access token" };
+  }
+  if (user.revoked) {
+    console.error(`Webhook/verify for a REVOKED token, reference ${reference} — not crediting.`);
+    return { credits: getBalance(token), alreadyProcessed: false, error: "This access token has been revoked" };
   }
   if (hasProcessedReference(reference)) {
     return { credits: getBalance(token), alreadyProcessed: true };
@@ -168,6 +203,7 @@ function requireToken(req, res, next) {
   if (!token) return res.status(401).json({ error: "Missing access token" });
   const user = getUser(token);
   if (!user) return res.status(401).json({ error: "Invalid access token" });
+  if (user.revoked) return res.status(403).json({ error: "This access token has been revoked" });
   req.token = token;
   next();
 }
@@ -236,8 +272,31 @@ app.get("/api/admin/users", (req, res) => {
   if (!ADMIN_SECRET || req.headers["x-admin-secret"] !== ADMIN_SECRET) {
     return res.status(401).json({ error: "Unauthorized" });
   }
-  const rows = db.prepare("SELECT token, label, credits, created_at FROM users ORDER BY created_at DESC").all();
+  const rows = db.prepare("SELECT token, label, credits, revoked, created_at FROM users ORDER BY created_at DESC").all();
   res.json({ users: rows });
+});
+
+// Cuts off a customer's access without deleting anything — their balance
+// and full transaction history stay on record, they just can't use the
+// token to check balance, start sessions, or buy more credits anymore.
+app.post("/api/admin/tokens/:token/revoke", (req, res) => {
+  if (!ADMIN_SECRET || req.headers["x-admin-secret"] !== ADMIN_SECRET) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  const { token } = req.params;
+  if (!getUser(token)) return res.status(404).json({ error: "Unknown token" });
+  db.prepare("UPDATE users SET revoked = 1 WHERE token = ?").run(token);
+  res.json({ token, revoked: true });
+});
+
+app.post("/api/admin/tokens/:token/restore", (req, res) => {
+  if (!ADMIN_SECRET || req.headers["x-admin-secret"] !== ADMIN_SECRET) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  const { token } = req.params;
+  if (!getUser(token)) return res.status(404).json({ error: "Unknown token" });
+  db.prepare("UPDATE users SET revoked = 0 WHERE token = ?").run(token);
+  res.json({ token, revoked: false });
 });
 
 // --- Balance ----------------------------------------------------------------
