@@ -3,7 +3,7 @@ import { createDecartClient, models } from "@decartai/sdk";
 
 // Reads from a .env file (Vite: VITE_DECART_API_KEY=your_key_here).
 // NEVER hardcode a real key in source — it ends up in your bundle and git history.
-const MY_DECART_KEY = import.meta.env?.VITE_DECART_API_KEY || "dct_real_RtFqAzIrkBXWJyPzdxWdzLjvhyclrpBOQrENhTXvgQKZYnrOKXSwMgpaeabUuXNf";
+const MY_DECART_KEY = import.meta.env?.VITE_DECART_API_KEY || "dct_testing_LzcVciqMZRXKDzojzcUsmXPKFLovrlRBiiSwiTqKKYyRLgFIzQKOxfzRndiVLhBu";
 
 // How long a live transformation session is allowed to run before auto-stopping.
 // This is just a UX cap, unrelated to billing.
@@ -327,9 +327,9 @@ export default function App() {
   //     (e.g. 4 or 5) so it demands a bigger jump above the ambient floor.
   //   - Missing soft speech? Lower VOICE_ACTIVITY_MULTIPLIER (e.g. 2), or
   //     lower VOICE_ACTIVITY_MIN_THRESHOLD if your room is extremely quiet.
-  const VOICE_ACTIVITY_MULTIPLIER = 3; // how many times louder than "quiet" counts as speech
-  const VOICE_ACTIVITY_MIN_THRESHOLD = 0.012; // absolute floor, for near-silent rooms
-  const VOICE_ACTIVITY_MIN_CONSECUTIVE = 2; // consecutive 100ms samples needed — filters clicks/taps
+  const VOICE_ACTIVITY_MULTIPLIER = 4; // how many times louder than "quiet" counts as speech
+  const VOICE_ACTIVITY_MIN_THRESHOLD = 0.010; // absolute floor, for near-silent rooms
+  const VOICE_ACTIVITY_MIN_CONSECUTIVE = 3; // consecutive 100ms samples needed — filters clicks/taps
   const VOICE_LEVEL_CHECK_MS = 100;
 
   const convertVoiceChunk = async (blob) => {

@@ -36,7 +36,7 @@ const ADMIN_SECRET = process.env.ADMIN_SECRET || "";
 // original words, timing, and delivery — NOT a conversational agent, and NOT
 // the same thing as Inworld's Realtime API (which generates new LLM speech).
 const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY || "";
-const ELEVENLABS_STS_MODEL_ID = process.env.ELEVENLABS_STS_MODEL_ID || "eleven_multilingual_v2";
+const ELEVENLABS_STS_MODEL_ID = process.env.ELEVENLABS_STS_MODEL_ID || "eleven_english_sts_v2";
 if (!ELEVENLABS_API_KEY) {
   console.warn("\n⚠️  ELEVENLABS_API_KEY is not set — the voice changer will fail until you add it to .env\n");
 }
