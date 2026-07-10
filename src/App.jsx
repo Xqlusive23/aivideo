@@ -32,6 +32,16 @@ const TOP_UP_OPTIONS = [
 const WHATSAPP_NUMBER = "13306717093";
 const WHATSAPP_DEFAULT_MESSAGE = "Hi, I need help getting access to InspireTech.";
 
+// --- Voice changer -----------------------------------------------------------
+// Converts your actual mic audio into a different voice (same words, same
+// timing) via ElevenLabs Speech-to-Speech, proxied through the ledger backend
+// so the API key never reaches the browser. Works in rolling chunks, not
+// sample-by-sample — there's always at least one chunk's worth of delay,
+// since ElevenLabs' Voice Changer converts complete clips, not a continuous
+// stream. Shorter chunks = snappier turnaround but slightly choppier/lower-
+// context conversion; longer chunks = smoother conversion but more delay.
+const VOICE_CHUNK_MS = 800;
+
 export default function App() {
   const [isRunning, setIsRunning] = useState(false);
   const [status, setStatus] = useState("SYSTEM STANDBY");
@@ -47,6 +57,13 @@ export default function App() {
   const [inferenceWeight, setInferenceWeight] = useState(85);
   const [enhanceMask, setEnhanceMask] = useState(true);
   const [activeModel, setActiveModel] = useState("lucy-realtime-v2.1");
+
+  // --- Voice changer state ---
+  const [voiceChangerEnabled, setVoiceChangerEnabled] = useState(false);
+  const [voices, setVoices] = useState([]);
+  const [selectedVoiceId, setSelectedVoiceId] = useState("");
+  const [voiceLoadError, setVoiceLoadError] = useState("");
+  const [voicesLoading, setVoicesLoading] = useState(true);
 
   const MODEL_ID_MAP = {
     "lucy-realtime-v2.1": "lucy-2.1",
@@ -91,6 +108,8 @@ export default function App() {
   const [ledgerUnreachable, setLedgerUnreachable] = useState(false);
   const [sessionCreditsUsed, setSessionCreditsUsed] = useState(0);
   const [showAddCredits, setShowAddCredits] = useState(false);
+  const [isPoppedOut, setIsPoppedOut] = useState(false);
+  const pipSupported = typeof document !== "undefined" && document.pictureInPictureEnabled;
 
   const localVideoRef = useRef(null);
   const outputVideoRef = useRef(null);
@@ -102,6 +121,18 @@ export default function App() {
   const heartbeatTimerRef = useRef(null); // the real billing tick, talking to the server
   const billingSessionIdRef = useRef(null);
   const creditSectionRef = useRef(null);
+  const startInProgressRef = useRef(false);
+
+  // --- Voice changer refs ---
+  const voiceChangerActiveRef = useRef(false);
+  const voiceRecorderRef = useRef(null);
+  const audioContextRef = useRef(null);
+  const voiceDestinationRef = useRef(null);
+  const voicePlaybackQueueTimeRef = useRef(0);
+  const analyserRef = useRef(null);
+  const voiceLevelIntervalRef = useRef(null);
+  const chunkHadSpeechRef = useRef(false);
+  const noiseFloorRef = useRef(0.005); // adaptive ambient-noise estimate, updated continuously while quiet
 
   // --- Fetch the real balance on load, and handle returning from Paystack Checkout ---
   useEffect(() => {
@@ -142,6 +173,75 @@ export default function App() {
       creditSectionRef.current.scrollIntoView({ behavior: "smooth", block: "nearest" });
     }
   }, [showAddCredits]);
+
+  // Keep the button label in sync if the user closes the PiP window
+  // directly (its own native close control) rather than clicking our button.
+  useEffect(() => {
+    const video = outputVideoRef.current;
+    if (!video) return;
+    const onEnter = () => setIsPoppedOut(true);
+    const onLeave = () => setIsPoppedOut(false);
+    video.addEventListener("enterpictureinpicture", onEnter);
+    video.addEventListener("leavepictureinpicture", onLeave);
+    return () => {
+      video.removeEventListener("enterpictureinpicture", onEnter);
+      video.removeEventListener("leavepictureinpicture", onLeave);
+    };
+  }, []);
+
+  // Pops the OUTPUT MONITOR video into its own floating, chrome-free window
+  // via the browser's native Picture-in-Picture — this is the one built-in
+  // way to move a live MediaStream into its own window without having to
+  // re-establish the WebRTC connection there, since a plain window.open()
+  // popup can't share a live stream with the tab that created it. In OBS,
+  // add a Window Capture source pointed at this floating PiP window and
+  // there's nothing to crop — it contains only the video.
+  const handlePopOutVideo = async () => {
+    try {
+      if (document.pictureInPictureElement) {
+        await document.exitPictureInPicture();
+      } else if (outputVideoRef.current) {
+        await outputVideoRef.current.requestPictureInPicture();
+      }
+    } catch (err) {
+      console.error("Picture-in-Picture failed:", err);
+      setStatus(`POP-OUT FAILED: ${err.message}`);
+    }
+  };
+
+  // Load the voice list once, right after the token is accepted.
+  useEffect(() => {
+    if (!accessToken) return;
+    setVoicesLoading(true);
+    (async () => {
+      try {
+        const res = await fetch(`${LEDGER_URL}/api/voice/voices`, { headers: authHeaders() });
+        const data = await res.json().catch(() => ({}));
+        // Note: a 401/403 here is NOT necessarily your app access token being
+        // invalid/revoked (the /api/credits poll elsewhere already handles
+        // that case and logs you out). This endpoint can also return 401 if
+        // ElevenLabs itself rejects the configured ELEVENLABS_API_KEY — a
+        // completely different problem, so it's shown here rather than hidden.
+        if (res.ok && Array.isArray(data.voices)) {
+          setVoices(data.voices);
+          if (data.voices.length === 0) {
+            setVoiceLoadError("Your ElevenLabs account has no voices available.");
+          } else {
+            setVoiceLoadError("");
+            if (!selectedVoiceId) setSelectedVoiceId(data.voices[0].voice_id);
+          }
+        } else {
+          setVoiceLoadError(data.error || `Could not load voices (server responded ${res.status})`);
+        }
+      } catch (err) {
+        console.error("Could not load voice list:", err);
+        setVoiceLoadError("Could not reach the voice changer backend");
+      } finally {
+        setVoicesLoading(false);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accessToken]);
 
   // Single place that handles "the server no longer accepts this token" —
   // covers both an invalid token (401) and a revoked one (403). Always safe
@@ -204,6 +304,179 @@ export default function App() {
         setLatency("0ms");
       }
     }, 1000);
+  };
+
+  // --- Voice changer pipeline --------------------------------------------
+  // Records the mic in short, complete clips (a fresh MediaRecorder each
+  // cycle rather than one long recorder with a timeslice — WebM chunks from
+  // a timeslice aren't reliably standalone-decodable, but a full stop/start
+  // cycle always produces a valid file). Each clip is sent to the backend,
+  // converted by ElevenLabs, decoded, and scheduled to play back-to-back on
+  // a Web Audio destination node — which becomes a real MediaStreamTrack we
+  // swap in for the raw mic track before this is ever sent to Decart.
+
+  // Voice-activity gate: averaging loudness across an ENTIRE recorded clip
+  // (an earlier approach) dilutes a short spoken word into a low average,
+  // and a single fixed threshold (the approach after that) has no idea what
+  // "quiet" sounds like in your specific room — this instead tracks your
+  // room's actual ambient noise floor continuously and gates on being
+  // clearly louder than THAT, sustained for a moment (see startVoiceChangerCapture).
+  //
+  // TUNING, if it's still off after this change:
+  //   - Still triggering on background noise? Raise VOICE_ACTIVITY_MULTIPLIER
+  //     (e.g. 4 or 5) so it demands a bigger jump above the ambient floor.
+  //   - Missing soft speech? Lower VOICE_ACTIVITY_MULTIPLIER (e.g. 2), or
+  //     lower VOICE_ACTIVITY_MIN_THRESHOLD if your room is extremely quiet.
+  const VOICE_ACTIVITY_MULTIPLIER = 3; // how many times louder than "quiet" counts as speech
+  const VOICE_ACTIVITY_MIN_THRESHOLD = 0.012; // absolute floor, for near-silent rooms
+  const VOICE_ACTIVITY_MIN_CONSECUTIVE = 2; // consecutive 100ms samples needed — filters clicks/taps
+  const VOICE_LEVEL_CHECK_MS = 100;
+
+  const convertVoiceChunk = async (blob) => {
+    if (!blob || blob.size < 500) return; // skip empty/near-empty clips outright
+
+    const form = new FormData();
+    form.append("audio", blob, "chunk.webm");
+    form.append("voice_id", selectedVoiceId);
+
+    const res = await fetch(`${LEDGER_URL}/api/voice/convert`, {
+      method: "POST",
+      headers: authHeaders(), // no Content-Type — browser sets the multipart boundary
+      body: form,
+    });
+
+    if (res.status === 401) return handleTokenRejected("Your access token was rejected. Please re-enter it.");
+    if (res.status === 403) return handleTokenRejected("Your access has been revoked. If you think this is a mistake, message us on WhatsApp below.");
+    if (!res.ok) throw new Error(`Voice conversion failed: ${res.status}`);
+
+    const arrayBuffer = await res.arrayBuffer();
+    const audioCtx = audioContextRef.current;
+    const destination = voiceDestinationRef.current;
+    if (!audioCtx || !destination) return; // pipeline was stopped while this was in flight
+
+    const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+    const source = audioCtx.createBufferSource();
+    source.buffer = audioBuffer;
+    source.connect(destination);
+
+    // Schedule sequentially so chunks play back-to-back instead of overlapping
+    // or leaving gaps if one comes back slower than another.
+    const now = audioCtx.currentTime;
+    const startAt = Math.max(now, voicePlaybackQueueTimeRef.current);
+    source.start(startAt);
+    voicePlaybackQueueTimeRef.current = startAt + audioBuffer.duration;
+  };
+
+  // Starts the continuous record → convert → schedule loop, and returns the
+  // synthetic converted-voice MediaStream to use instead of the raw mic.
+  const startVoiceChangerCapture = (micStream) => {
+    const micTrack = micStream.getAudioTracks()[0];
+    if (!micTrack) return null;
+
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    const audioCtx = new AudioCtx();
+    const destination = audioCtx.createMediaStreamDestination();
+    audioContextRef.current = audioCtx;
+    voiceDestinationRef.current = destination;
+    voicePlaybackQueueTimeRef.current = audioCtx.currentTime;
+    voiceChangerActiveRef.current = true;
+    noiseFloorRef.current = 0.005; // reset to a sane starting estimate each session
+
+    // Continuous live level monitor — a separate tap on the mic track, runs
+    // independently of the MediaRecorder below and never touches what gets
+    // uploaded, only whether it gets sent at all.
+    //
+    // Adaptive noise gate: a single fixed threshold has no idea what "quiet"
+    // sounds like in your specific room on your specific mic — a fan, AC
+    // hum, or keyboard click all just look like "energy above X" to it.
+    // Instead this continuously tracks the ambient noise floor (a slow-
+    // moving average of recent quiet levels) and only fires when a sample is
+    // clearly louder than THAT — and only counts it once it's stayed loud
+    // for a couple of consecutive samples, so a single click/tap can't
+    // trigger it the way sustained speech does.
+    const analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 2048;
+    const levelSource = audioCtx.createMediaStreamSource(new MediaStream([micTrack]));
+    levelSource.connect(analyser);
+    const timeDomainData = new Float32Array(analyser.fftSize);
+    analyserRef.current = analyser;
+
+    chunkHadSpeechRef.current = false;
+    let consecutiveLoudSamples = 0;
+
+    voiceLevelIntervalRef.current = setInterval(() => {
+      analyser.getFloatTimeDomainData(timeDomainData);
+      let sumSquares = 0;
+      for (let i = 0; i < timeDomainData.length; i++) sumSquares += timeDomainData[i] * timeDomainData[i];
+      const rms = Math.sqrt(sumSquares / timeDomainData.length);
+
+      // A real speech threshold: clearly above whatever "quiet" has recently
+      // measured as, with a small absolute floor so a near-silent room
+      // (noise floor ~0) doesn't end up with a near-zero threshold.
+      const dynamicThreshold = Math.max(noiseFloorRef.current * VOICE_ACTIVITY_MULTIPLIER, VOICE_ACTIVITY_MIN_THRESHOLD);
+
+      if (rms > dynamicThreshold) {
+        consecutiveLoudSamples += 1;
+        if (consecutiveLoudSamples >= VOICE_ACTIVITY_MIN_CONSECUTIVE) {
+          chunkHadSpeechRef.current = true;
+        }
+      } else {
+        consecutiveLoudSamples = 0;
+        // Only adapt the noise floor during quiet moments, so a burst of
+        // actual speech doesn't drag the "quiet" baseline upward with it.
+        noiseFloorRef.current = noiseFloorRef.current * 0.95 + rms * 0.05;
+      }
+    }, VOICE_LEVEL_CHECK_MS);
+
+    const recordCycle = () => {
+      if (!voiceChangerActiveRef.current) return;
+      chunkHadSpeechRef.current = false; // reset the flag for this chunk's window
+      const recorder = new MediaRecorder(new MediaStream([micTrack]), { mimeType: "audio/webm" });
+      const chunks = [];
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) chunks.push(e.data);
+      };
+      recorder.onstop = () => {
+        const blob = new Blob(chunks, { type: "audio/webm" });
+        // Only send this clip on if the live monitor actually caught real
+        // speech energy at some point during it — true silence never
+        // reaches ElevenLabs at all.
+        if (chunkHadSpeechRef.current) {
+          convertVoiceChunk(blob).catch((err) => console.error("Voice chunk conversion failed:", err));
+        }
+        if (voiceChangerActiveRef.current) recordCycle(); // keep going
+      };
+      recorder.start();
+      voiceRecorderRef.current = recorder;
+      setTimeout(() => {
+        if (recorder.state !== "inactive") recorder.stop();
+      }, VOICE_CHUNK_MS);
+    };
+
+    recordCycle();
+    return destination.stream;
+  };
+
+  const stopVoiceChangerCapture = () => {
+    voiceChangerActiveRef.current = false;
+    if (voiceRecorderRef.current && voiceRecorderRef.current.state !== "inactive") {
+      try {
+        voiceRecorderRef.current.stop();
+      } catch {
+        // already stopped — fine
+      }
+    }
+    voiceRecorderRef.current = null;
+    if (voiceLevelIntervalRef.current) {
+      clearInterval(voiceLevelIntervalRef.current);
+      voiceLevelIntervalRef.current = null;
+    }
+    analyserRef.current = null;
+    if (audioContextRef.current) {
+      audioContextRef.current.close().catch(() => {});
+      audioContextRef.current = null;
+    }
+    voiceDestinationRef.current = null;
   };
 
   // Local 5-minute UX countdown — purely a display/cap concern, not billing.
@@ -291,7 +564,10 @@ export default function App() {
       const model = models.realtime(getModelId());
 
       const stream = await navigator.mediaDevices.getUserMedia({
-        audio: true,
+        // Explicit rather than relying on browser defaults — these actively
+        // reduce steady background noise (fan/AC hum, hiss) at the source,
+        // before it ever reaches the voice-activity gate below.
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
         video: { frameRate: model.fps || 24, width: 1280, height: 720 },
       });
 
@@ -314,12 +590,21 @@ export default function App() {
   };
 
   const startTransformation = async () => {
+    // isRunning is React state — it doesn't update synchronously, so a fast
+    // double-click can fire this twice before the Start button visually
+    // disables. This ref-based guard closes that gap: it's set the instant
+    // we commit to starting, not on the next render.
+    if (isRunning || startInProgressRef.current) return;
+    startInProgressRef.current = true;
+
     if (!selectedFile || !localStreamRef.current) {
       setStatus("ERROR: CONFIGURATION INCOMPLETE");
+      startInProgressRef.current = false;
       return;
     }
     if (ledgerUnreachable) {
       setStatus("LEDGER BACKEND UNREACHABLE — CHECK IT'S RUNNING");
+      startInProgressRef.current = false;
       return;
     }
 
@@ -331,16 +616,19 @@ export default function App() {
       const data = await res.json();
       if (res.status === 401) {
         handleTokenRejected("Your access token was rejected. Please re-enter it.");
+        startInProgressRef.current = false;
         return;
       }
       if (res.status === 403) {
         handleTokenRejected("Your access has been revoked. If you think this is a mistake, message us on WhatsApp below.");
+        startInProgressRef.current = false;
         return;
       }
       if (!res.ok) {
         setCredits(data.credits ?? 0);
         setStatus("OUT OF CREDITS — ADD MORE TO CONTINUE");
         setShowAddCredits(true);
+        startInProgressRef.current = false;
         return;
       }
       sessionId = data.sessionId;
@@ -349,12 +637,31 @@ export default function App() {
       console.error("Failed to start billing session:", err);
       setStatus("LEDGER BACKEND UNREACHABLE — CHECK IT'S RUNNING");
       setLedgerUnreachable(true);
+      startInProgressRef.current = false;
       return;
     }
 
     billingSessionIdRef.current = sessionId;
     setIsRunning(true);
+    // From here on, isRunning (true) covers the double-click guard duty via
+    // the Start button's disabled state — safe to release the ref lock.
+    startInProgressRef.current = false;
     setStatus("HANDSHAKING WITH DECART WEBRTC CLUSTER...");
+
+    // If the voice changer is on, swap the raw mic track for a synthetic one
+    // carrying the converted voice — Decart only ever sees/forwards this,
+    // never the original audio.
+    let streamForDecart = localStreamRef.current;
+    if (voiceChangerEnabled && selectedVoiceId) {
+      const convertedAudioStream = startVoiceChangerCapture(localStreamRef.current);
+      if (convertedAudioStream) {
+        const videoTrack = localStreamRef.current.getVideoTracks()[0];
+        const convertedAudioTrack = convertedAudioStream.getAudioTracks()[0];
+        streamForDecart = new MediaStream([videoTrack, convertedAudioTrack].filter(Boolean));
+      } else {
+        setStatus("VOICE CHANGER UNAVAILABLE — CONTINUING WITH ORIGINAL AUDIO");
+      }
+    }
 
     try {
       const client = createDecartClient({ apiKey: MY_DECART_KEY });
@@ -363,7 +670,7 @@ export default function App() {
       reader.onloadend = async () => {
         const base64Image = reader.result;
         try {
-          const session = await client.realtime.connect(localStreamRef.current, {
+          const session = await client.realtime.connect(streamForDecart, {
             model: models.realtime(getModelId()),
             mirror: false,
             onRemoteStream: (remoteStream) => {
@@ -375,12 +682,14 @@ export default function App() {
               setIsRunning(false);
               clearClockTimer();
               clearHeartbeat();
+              stopVoiceChangerCapture();
             },
             onDisconnect: () => {
               setStatus("PIPELINE TERMINATED");
               setIsRunning(false);
               clearClockTimer();
               clearHeartbeat();
+              stopVoiceChangerCapture();
             },
             initialState: {
               prompt: {
@@ -400,6 +709,7 @@ export default function App() {
           console.error(connectErr);
           setStatus(`HANDSHAKE REJECTED: ${connectErr.message}`);
           setIsRunning(false);
+          stopVoiceChangerCapture();
           endBillingSession(sessionId);
         }
       };
@@ -407,6 +717,7 @@ export default function App() {
       console.error("Failed to initialize Decart client:", err);
       setStatus(`CLIENT INIT FAILED: ${err.message || "check VITE_DECART_API_KEY is set"}`);
       setIsRunning(false);
+      stopVoiceChangerCapture();
       endBillingSession(sessionId);
     }
   };
@@ -430,6 +741,7 @@ export default function App() {
     if (fpsIntervalRef.current) clearInterval(fpsIntervalRef.current);
     clearClockTimer();
     clearHeartbeat();
+    stopVoiceChangerCapture();
 
     const sessionId = billingSessionIdRef.current;
     billingSessionIdRef.current = null;
@@ -720,6 +1032,48 @@ export default function App() {
 
           <div style={styles.sectionCard} className="itc-card itc-section-card">
             <div style={styles.cardHeaderStrip}>
+              <span style={styles.cardHeaderIcon}>🎙️</span> VOICE CHANGER
+            </div>
+            <div style={styles.parameterRow}>
+              <label style={styles.paramLabel}>ENABLE VOICE CHANGER</label>
+              <input
+                type="checkbox"
+                checked={voiceChangerEnabled}
+                onChange={(e) => setVoiceChangerEnabled(e.target.checked)}
+                disabled={isRunning}
+                style={styles.paramCheckbox}
+                className="itc-checkbox"
+              />
+            </div>
+            {voiceChangerEnabled && (
+              <div style={styles.voiceSelectGroup}>
+                <label style={styles.paramLabel}>TARGET VOICE</label>
+                <select
+                  value={selectedVoiceId}
+                  onChange={(e) => setSelectedVoiceId(e.target.value)}
+                  disabled={isRunning || voices.length === 0}
+                  style={styles.voiceSelect}
+                  className="itc-select"
+                >
+                  {voices.length === 0 && (
+                    <option value="">{voicesLoading ? "Loading voices..." : "No voices available"}</option>
+                  )}
+                  {voices.map((v) => (
+                    <option key={v.voice_id} value={v.voice_id}>{v.name}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+            {voiceLoadError && <div style={styles.ledgerErrorNote}>{voiceLoadError}</div>}
+            <div style={styles.paramsLockedNote}>
+              {isRunning
+                ? "Locked while live — changes apply on next deploy"
+                : `Converts your voice in ~${VOICE_CHUNK_MS / 1000}s rolling clips — short delay per phrase, not instant.`}
+            </div>
+          </div>
+
+          <div style={styles.sectionCard} className="itc-card itc-section-card">
+            <div style={styles.cardHeaderStrip}>
               <span style={styles.cardHeaderIcon}>👁️</span> LOCAL CAPTURE INTERCEPT
             </div>
             <div style={styles.sidebarVideoWrapper} className="itc-local-video-wrapper">
@@ -727,7 +1081,7 @@ export default function App() {
             </div>
           </div>
 
-          <div ref={creditSectionRef} style={{...styles.sectionCard, ...(showAddCredits ? styles.sectionCardAlert : {})}} className="itc-card itc-section-card">
+          <div ref={creditSectionRef} style={{...styles.sectionCard, ...(showAddCredits ? styles.sectionCardAlert : {}), flex: 1}} className="itc-card itc-section-card">
             <div style={styles.cardHeaderStrip}>
               <span style={styles.cardHeaderIcon}>💳</span> BUY MORE CREDITS
             </div>
@@ -753,31 +1107,6 @@ export default function App() {
               Real Paystack Checkout — this redirects off-app to a live payment page.
             </div>
           </div>
-
-          <div style={{...styles.sectionCard, flex: 1}} className="itc-card itc-section-card">
-            <div style={styles.cardHeaderStrip}>
-              <span style={styles.cardHeaderIcon}>🧬</span> PIPELINE PARAMS
-            </div>
-            <div style={styles.parameterRow}>
-              <label style={styles.paramLabel}>INFERENCE WEIGHT</label>
-              <div style={styles.paramSliderGroup} className="itc-param-slider-group">
-                <input type="range" min="0" max="100" value={inferenceWeight} onChange={(e) => setInferenceWeight(Number(e.target.value))} disabled={isRunning} style={styles.paramSlider} className="itc-range" />
-                <span style={styles.paramValue}>{inferenceWeight}%</span>
-              </div>
-            </div>
-            <div style={styles.parameterRow}>
-              <label style={styles.paramLabel}>ENHANCE MASK VECTOR</label>
-              <input type="checkbox" checked={enhanceMask} onChange={(e) => setEnhanceMask(e.target.checked)} disabled={isRunning} style={styles.paramCheckbox} className="itc-checkbox" />
-            </div>
-            <div style={styles.parameterRow}>
-              <label style={styles.paramLabel}>ACTIVE MODEL CORE</label>
-              <select value={activeModel} onChange={(e) => setActiveModel(e.target.value)} disabled={isRunning} style={styles.paramSelect} className="itc-select">
-                <option value="lucy-realtime-v2.1">lucy-realtime-v2.1</option>
-                <option value="lucy-speed-v1.9">lucy-speed-v1.9</option>
-              </select>
-            </div>
-            {isRunning && <div style={styles.paramsLockedNote}>Locked while live — changes apply on next deploy</div>}
-          </div>
         </aside>
 
         <main style={styles.outputCanvas} className="itc-output-canvas">
@@ -802,6 +1131,15 @@ export default function App() {
                 disabled={!isRunning}
               >
                 🛑 STOP TRANSFORMATION
+              </button>
+              <button
+                style={{...styles.actionButton, ...styles.popOutButton, opacity: !pipSupported ? 0.5 : 1}}
+                className="itc-btn itc-btn-secondary"
+                onClick={handlePopOutVideo}
+                disabled={!pipSupported}
+                title={pipSupported ? "Pop the output video into its own floating window — capture that window in OBS/your calling app" : "Picture-in-Picture isn't supported in this browser — try Chrome or Edge"}
+              >
+                {isPoppedOut ? "↩ Return to App" : "🗗 Pop Out for OBS"}
               </button>
             </div>
           </div>
@@ -874,7 +1212,7 @@ const styles = {
   secondaryButton: { backgroundColor: "#141a28", color: "#9aa2b6", border: "1px solid #262e42", padding: "10px 14px", borderRadius: "6px", fontSize: "12px", fontWeight: "600", cursor: "pointer", fontFamily: "inherit", textAlign: "left" },
   imageBox: { height: "auto", backgroundColor: "#05070c", borderRadius: "6px", border: "1px dashed #262e42", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", minHeight: "80px" },
   emptyBoxPlaceholder: { fontSize: "10px", color: "#454e63", letterSpacing: "0.05em" },
-  sidebarVideoWrapper: { aspectRatio: "16/9", backgroundColor: "#05070c", borderRadius: "6px", overflow: "hidden", border: "1px solid #1a2030" },
+  sidebarVideoWrapper: { aspectRatio: "3/4", backgroundColor: "#05070c", borderRadius: "6px", overflow: "hidden", border: "1px solid #1a2030" },
   parameterRow: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px", fontSize: "11px" },
   paramLabel: { color: "#6b7385", fontWeight: "600" },
   paramSliderGroup: { display: "flex", alignItems: "center", gap: "8px" },
@@ -882,6 +1220,8 @@ const styles = {
   paramValue: { color: "#5b8def", fontWeight: "700", fontSize: "11px", minWidth: "32px", textAlign: "right" },
   paramCheckbox: { width: "14px", height: "14px", accentColor: "#5b8def" },
   paramSelect: { backgroundColor: "#05070c", color: "#e6e9ef", border: "1px solid #262e42", borderRadius: "5px", padding: "4px 8px", fontFamily: "inherit", fontSize: "11px" },
+  voiceSelectGroup: { display: "flex", flexDirection: "column", gap: "6px", marginBottom: "10px" },
+  voiceSelect: { width: "100%", maxWidth: "100%", boxSizing: "border-box", backgroundColor: "#05070c", color: "#e6e9ef", border: "1px solid #262e42", borderRadius: "5px", padding: "6px 8px", fontFamily: "inherit", fontSize: "11px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
   paramsLockedNote: { fontSize: "10px", color: "#5c6478", fontStyle: "italic", marginTop: "4px", paddingTop: "8px", borderTop: "1px solid #1a2030" },
   creditBalanceRow: { display: "flex", alignItems: "baseline", gap: "8px", marginBottom: "8px" },
   creditBalanceNumber: { fontSize: "22px", fontWeight: "800", fontFamily: '"Inter", system-ui, sans-serif', color: "#f4f6fa" },
@@ -913,6 +1253,7 @@ const styles = {
   actionButton: { border: "1px solid transparent", padding: "10px 20px", borderRadius: "6px", fontSize: "12px", fontWeight: "700", cursor: "pointer", fontFamily: "inherit", letterSpacing: "0.02em" },
   startButton: { backgroundColor: "#22c55e", backgroundImage: "linear-gradient(135deg, #4ade80 0%, #16a34a 100%)", color: "#fff", boxShadow: "0 4px 14px -6px rgba(34,197,94,0.5)" },
   stopButton: { backgroundColor: "#f0576a", backgroundImage: "linear-gradient(135deg, #fb7185 0%, #dc3a52 100%)", color: "#fff", boxShadow: "0 4px 14px -6px rgba(240,87,106,0.5)" },
+  popOutButton: { backgroundColor: "#141a28", color: "#9aa2b6", border: "1px solid #262e42" },
   canvasViewportContainer: { flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: "20px", overflow: "hidden" },
   outputColumn: { display: "flex", flexDirection: "column", alignItems: "center", gap: "10px", width: "100%" },
   timerBadgeRow: { display: "flex", gap: "10px" },

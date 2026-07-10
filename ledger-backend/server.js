@@ -15,6 +15,7 @@
 
 import express from "express";
 import cors from "cors";
+import multer from "multer";
 import crypto from "crypto";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -29,6 +30,20 @@ const CREDITS_PER_SECOND = Number(process.env.CREDITS_PER_SECOND || 2);
 const MAX_HEARTBEAT_GAP_SECONDS = 10; // caps deduction if a heartbeat is late/missed
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY || "";
 const ADMIN_SECRET = process.env.ADMIN_SECRET || "";
+
+// --- Voice changer (ElevenLabs Speech-to-Speech / Voice Changer API) --------
+// This converts recorded audio into a different voice while preserving the
+// original words, timing, and delivery — NOT a conversational agent, and NOT
+// the same thing as Inworld's Realtime API (which generates new LLM speech).
+const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY || "";
+const ELEVENLABS_STS_MODEL_ID = process.env.ELEVENLABS_STS_MODEL_ID || "eleven_multilingual_v2";
+if (!ELEVENLABS_API_KEY) {
+  console.warn("\n⚠️  ELEVENLABS_API_KEY is not set — the voice changer will fail until you add it to .env\n");
+}
+// Audio chunks arrive as multipart file uploads — kept in memory only
+// (never written to disk) since they're small (~2.5s clips) and immediately
+// forwarded to ElevenLabs, not stored.
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 if (!PAYSTACK_SECRET_KEY) {
   console.warn("\n⚠️  PAYSTACK_SECRET_KEY is not set — checkout will fail until you add it to .env\n");
@@ -311,6 +326,73 @@ app.get("/api/transactions", requireToken, (req, res) => {
   res.json({ transactions: rows });
 });
 
+// --- Voice changer -----------------------------------------------------------
+// List available ElevenLabs voices, so the frontend can populate a dropdown
+// without ever holding the real API key itself.
+app.get("/api/voice/voices", requireToken, async (req, res) => {
+  try {
+    if (!ELEVENLABS_API_KEY) return res.status(500).json({ error: "Voice changer is not configured on the server" });
+    const elevenRes = await fetch("https://api.elevenlabs.io/v1/voices", {
+      headers: { "xi-api-key": ELEVENLABS_API_KEY },
+    });
+    const data = await elevenRes.json();
+    if (!elevenRes.ok) {
+      return res.status(elevenRes.status).json({ error: data.detail?.message || "Failed to fetch voices" });
+    }
+    const voices = (data.voices || []).map((v) => ({ voice_id: v.voice_id, name: v.name, category: v.category }));
+    res.json({ voices });
+  } catch (err) {
+    console.error("Fetching ElevenLabs voices failed:", err);
+    res.status(500).json({ error: "Could not reach ElevenLabs" });
+  }
+});
+
+// Converts one short audio clip (a rolling ~2.5s chunk from the frontend)
+// into the chosen target voice, preserving the original words/delivery, and
+// streams the converted audio straight back. Gated behind requireToken so
+// your ElevenLabs key/quota can't be hit by anyone without a valid access token.
+app.post("/api/voice/convert", requireToken, upload.single("audio"), async (req, res) => {
+  try {
+    if (!ELEVENLABS_API_KEY) return res.status(500).json({ error: "Voice changer is not configured on the server" });
+    const voiceId = req.body?.voice_id;
+    if (!voiceId) return res.status(400).json({ error: "voice_id is required" });
+    if (!req.file) return res.status(400).json({ error: "audio file is required" });
+
+    const form = new FormData();
+    form.append("audio", new Blob([req.file.buffer], { type: req.file.mimetype || "audio/webm" }), "chunk.webm");
+    form.append("model_id", ELEVENLABS_STS_MODEL_ID);
+
+    // /stream (not the plain endpoint) + optimize_streaming_latency=4 asks
+    // ElevenLabs itself to generate as fast as possible (some quality
+    // tradeoff). Piping the response straight through below — rather than
+    // buffering the whole clip into memory first — removes a second,
+    // avoidable delay on top of that.
+    const elevenRes = await fetch(
+      `https://api.elevenlabs.io/v1/speech-to-speech/${encodeURIComponent(voiceId)}/stream?output_format=mp3_44100_128&optimize_streaming_latency=4`,
+      {
+        method: "POST",
+        headers: { "xi-api-key": ELEVENLABS_API_KEY },
+        body: form,
+      }
+    );
+
+    if (!elevenRes.ok) {
+      const errText = await elevenRes.text();
+      console.error("ElevenLabs speech-to-speech failed:", elevenRes.status, errText);
+      return res.status(elevenRes.status).json({ error: "Voice conversion failed" });
+    }
+
+    res.setHeader("Content-Type", "audio/mpeg");
+    // Stream bytes to the browser as they arrive from ElevenLabs, instead of
+    // waiting for the entire clip to finish generating first.
+    const { Readable } = await import("node:stream");
+    Readable.fromWeb(elevenRes.body).pipe(res);
+  } catch (err) {
+    console.error("Voice conversion error:", err);
+    res.status(500).json({ error: err.message || "Voice conversion failed" });
+  }
+});
+
 // --- Checkout (purchases) ----------------------------------------------------
 // Exchange rate: ₦1,900 per $1 (set by you — update this single number if the
 // rate changes, rather than recalculating each tier by hand).
@@ -390,12 +472,42 @@ app.post("/api/sessions/start", requireToken, (req, res) => {
   if (credits <= 0) {
     return res.status(402).json({ error: "Out of credits", credits });
   }
+
+  // Defense in depth: if this token somehow already has an active (unended)
+  // session — a double-clicked Start button, a tab that closed before
+  // calling /end, whatever — close it out properly first, billing exactly
+  // the time it actually ran. Without this, two sessions could run their
+  // own independent heartbeat loops against the same balance in parallel,
+  // multiplying the effective drain rate.
+  const orphaned = db
+    .prepare("SELECT * FROM usage_sessions WHERE token = ? AND ended_at IS NULL")
+    .all(req.token);
+  for (const session of orphaned) {
+    const now = new Date();
+    const last = new Date(session.last_heartbeat_at);
+    const elapsedSeconds = Math.min(MAX_HEARTBEAT_GAP_SECONDS, Math.max(0, (now - last) / 1000));
+    const creditsToDeduct = Math.round(elapsedSeconds * CREDITS_PER_SECOND);
+    adjustBalance(req.token, -creditsToDeduct);
+    if (creditsToDeduct > 0) {
+      recordTransaction({ token: req.token, type: "usage", credits: -creditsToDeduct });
+    }
+    db.prepare(
+      "UPDATE usage_sessions SET ended_at = ?, credits_used = credits_used + ? WHERE id = ?"
+    ).run(now.toISOString(), creditsToDeduct, session.id);
+    console.warn(`⚠️  Auto-closed an orphaned session (${session.id}) for token ${req.token.slice(0, 8)}... before starting a new one.`);
+  }
+
+  const freshCredits = getBalance(req.token);
+  if (freshCredits <= 0) {
+    return res.status(402).json({ error: "Out of credits", credits: freshCredits });
+  }
+
   const id = randomUUID();
   const now = new Date().toISOString();
   db.prepare(
     "INSERT INTO usage_sessions (id, token, started_at, last_heartbeat_at) VALUES (?, ?, ?, ?)"
   ).run(id, req.token, now, now);
-  res.json({ sessionId: id, credits });
+  res.json({ sessionId: id, credits: freshCredits });
 });
 
 app.post("/api/sessions/:id/heartbeat", requireToken, (req, res) => {
