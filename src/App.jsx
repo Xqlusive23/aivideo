@@ -3,7 +3,7 @@ import { createDecartClient, models } from "@decartai/sdk";
 
 // Reads from a .env file (Vite: VITE_DECART_API_KEY=your_key_here).
 // NEVER hardcode a real key in source — it ends up in your bundle and git history.
-const MY_DECART_KEY = import.meta.env?.VITE_DECART_API_KEY || "dct_real_RtFqAzIrkBXWJyPzdxWdzLjvhyclrpBOQrENhTXvgQKZYnrOKXSwMgpaeabUuXNf";
+const MY_DECART_KEY = import.meta.env?.VITE_DECART_API_KEY || "dct_skl_EtlrTGntkgytDiuLlqlWkRcIGCZcUfGabuHdpkWMZxzvROXVmHWVQkbBWUivGkxo";
 
 // How long a live transformation session is allowed to run before auto-stopping.
 // This is just a UX cap, unrelated to billing.
@@ -13,17 +13,18 @@ const SESSION_DURATION_SECONDS = 5 * 60; // 5 minutes
 // See /ledger-backend. The browser NEVER decides the balance — it only ever
 // displays whatever this server last reported.
 const LEDGER_URL = import.meta.env?.VITE_LEDGER_BACKEND_URL || "http://localhost:3002";
-const NAIRA_PER_DOLLAR = 1900; // must match ledger-backend/server.js — keep these in sync
-const NAIRA_PER_CREDIT = NAIRA_PER_DOLLAR / 100; // 100 credits = $1, so 1 credit = ₦19
+const NAIRA_PER_DOLLAR = 2000; // must match ledger-backend/server.js — keep these in sync
+const CREDITS_PER_DOLLAR = 100; // must also match ledger-backend/server.js's TIERS
+const NAIRA_PER_CREDIT = NAIRA_PER_DOLLAR / CREDITS_PER_DOLLAR; // = ₦20 per credit
 const DISPLAY_CREDITS_PER_SECOND = 2; // for UI copy only — the server decides the real rate
 const LOW_CREDIT_THRESHOLD = 40; // ~20 seconds left at 2 credits/sec — warn before it runs out
 const HEARTBEAT_INTERVAL_MS = 2000; // how often the frontend checks in with the server ledger
 
 const TOP_UP_OPTIONS = [
-  { naira: 19000, credits: 1000 },
-  { naira: 95000, credits: 5000 },
-  { naira: 190000, credits: 10000, popular: true },
-  { naira: 950000, credits: 50000 },
+  { naira: 20000, credits: 1000 },
+  { naira: 100000, credits: 5000 },
+  { naira: 200000, credits: 10000, popular: true },
+  { naira: 1000000, credits: 50000 },
 ];
 
 // --- WhatsApp contact (shown on the access-token gate) ---------------------
@@ -41,6 +42,13 @@ const WHATSAPP_DEFAULT_MESSAGE = "Hi, I need help getting access to InspireTech.
 // stream. Shorter chunks = snappier turnaround but slightly choppier/lower-
 // context conversion; longer chunks = smoother conversion but more delay.
 const VOICE_CHUNK_MS = 800;
+
+// Real-time voice conversion server (voice-rt-server on RunPod) — a
+// continuous WebSocket alternative to the ElevenLabs chunk-based pipeline
+// above. See /voice-rt-server/README.md for what this actually is and why
+// it's architecturally different (no per-chunk delay).
+const VOICE_RT_URL = import.meta.env?.VITE_VOICE_RT_URL || "";
+const VOICE_RT_FRAME_SAMPLES = 640; // 40ms @ 16kHz — must match voice-rt-server's FRAME_SAMPLES
 
 export default function App() {
   const [isRunning, setIsRunning] = useState(false);
@@ -64,6 +72,15 @@ export default function App() {
   const [selectedVoiceId, setSelectedVoiceId] = useState("");
   const [voiceLoadError, setVoiceLoadError] = useState("");
   const [voicesLoading, setVoicesLoading] = useState(true);
+
+  // 'elevenlabs' = chunk-based (working today, has inherent per-chunk delay).
+  // 'realtime' = continuous WebSocket via voice-rt-server (requires that
+  // separate service to actually be deployed — see /voice-rt-server).
+  const [voiceEngine, setVoiceEngine] = useState("elevenlabs");
+  const [rtcVoices, setRtcVoices] = useState([]);
+  const [rtcSelectedVoiceId, setRtcSelectedVoiceId] = useState("");
+  const [rtcLoadError, setRtcLoadError] = useState("");
+  const [rtcVoicesLoading, setRtcVoicesLoading] = useState(true);
 
   const MODEL_ID_MAP = {
     "lucy-realtime-v2.1": "lucy-2.1",
@@ -133,6 +150,9 @@ export default function App() {
   const voiceLevelIntervalRef = useRef(null);
   const chunkHadSpeechRef = useRef(false);
   const noiseFloorRef = useRef(0.005); // adaptive ambient-noise estimate, updated continuously while quiet
+  const rtcSocketRef = useRef(null);
+  const rtcWorkletNodeRef = useRef(null);
+  const rtcMicSourceRef = useRef(null);
 
   // --- Fetch the real balance on load, and handle returning from Paystack Checkout ---
   useEffect(() => {
@@ -243,6 +263,45 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accessToken]);
 
+  // Load the real-time engine's voice list only when that engine is
+  // actually selected (no point minting tickets/hitting voice-rt-server
+  // otherwise) — needs a ticket from ledger-backend first, then asks
+  // voice-rt-server directly for whatever voice folders are on its volume.
+  useEffect(() => {
+    if (!accessToken || voiceEngine !== "realtime") return;
+    if (!VOICE_RT_URL) {
+      setRtcLoadError("VITE_VOICE_RT_URL is not set in the frontend's .env — point it at your voice-rt-server deployment.");
+      setRtcVoicesLoading(false);
+      return;
+    }
+    setRtcVoicesLoading(true);
+    (async () => {
+      try {
+        const ticketRes = await ledgerFetchTicket();
+        if (!ticketRes) return; // handleTokenRejected or an error already surfaced
+        const res = await fetch(`${VOICE_RT_URL}/voices?ticket=${encodeURIComponent(ticketRes.ticket)}`);
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && Array.isArray(data.voices)) {
+          setRtcVoices(data.voices);
+          if (data.voices.length === 0) {
+            setRtcLoadError("No voice models found on voice-rt-server — upload some to its /models volume.");
+          } else {
+            setRtcLoadError("");
+            if (!rtcSelectedVoiceId) setRtcSelectedVoiceId(data.voices[0].voice_id);
+          }
+        } else {
+          setRtcLoadError(data.error || `Could not reach voice-rt-server (status ${res.status})`);
+        }
+      } catch (err) {
+        console.error("Could not load real-time voice list:", err);
+        setRtcLoadError("Could not reach voice-rt-server — is it deployed and running?");
+      } finally {
+        setRtcVoicesLoading(false);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accessToken, voiceEngine]);
+
   // Single place that handles "the server no longer accepts this token" —
   // covers both an invalid token (401) and a revoked one (403). Always safe
   // to call: stopTransformation() itself no-ops if nothing is running.
@@ -250,6 +309,33 @@ export default function App() {
     stopTransformation();
     clearAccessToken();
     setTokenError(message);
+  };
+
+  // Shared helper: ask ledger-backend for a short-lived ticket to connect
+  // directly to voice-rt-server. Used both for listing voices and for
+  // opening the actual conversion WebSocket.
+  const ledgerFetchTicket = async () => {
+    try {
+      const res = await fetch(`${LEDGER_URL}/api/voice/rtc-ticket`, { method: "POST", headers: authHeaders() });
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 401) {
+        handleTokenRejected("Your access token was rejected. Please re-enter it.");
+        return null;
+      }
+      if (res.status === 403) {
+        handleTokenRejected("Your access has been revoked. If you think this is a mistake, message us on WhatsApp below.");
+        return null;
+      }
+      if (!res.ok) {
+        setRtcLoadError(data.error || "Could not get a connection ticket");
+        return null;
+      }
+      return data; // { ticket, expiresInSeconds }
+    } catch (err) {
+      console.error("Failed to fetch RTC ticket:", err);
+      setRtcLoadError("Could not reach the ledger backend for a connection ticket");
+      return null;
+    }
   };
 
   const refreshBalance = async () => {
@@ -327,9 +413,9 @@ export default function App() {
   //     (e.g. 4 or 5) so it demands a bigger jump above the ambient floor.
   //   - Missing soft speech? Lower VOICE_ACTIVITY_MULTIPLIER (e.g. 2), or
   //     lower VOICE_ACTIVITY_MIN_THRESHOLD if your room is extremely quiet.
-  const VOICE_ACTIVITY_MULTIPLIER = 4; // how many times louder than "quiet" counts as speech
-  const VOICE_ACTIVITY_MIN_THRESHOLD = 0.010; // absolute floor, for near-silent rooms
-  const VOICE_ACTIVITY_MIN_CONSECUTIVE = 3; // consecutive 100ms samples needed — filters clicks/taps
+  const VOICE_ACTIVITY_MULTIPLIER = 3; // how many times louder than "quiet" counts as speech
+  const VOICE_ACTIVITY_MIN_THRESHOLD = 0.012; // absolute floor, for near-silent rooms
+  const VOICE_ACTIVITY_MIN_CONSECUTIVE = 2; // consecutive 100ms samples needed — filters clicks/taps
   const VOICE_LEVEL_CHECK_MS = 100;
 
   const convertVoiceChunk = async (blob) => {
@@ -479,7 +565,122 @@ export default function App() {
     voiceDestinationRef.current = null;
   };
 
-  // Local 5-minute UX countdown — purely a display/cap concern, not billing.
+  // --- Real-time voice pipeline (voice-rt-server) --------------------------
+  // Continuous WebSocket instead of record→send→wait chunks: a worklet
+  // downsamples the live mic to 16kHz frames and posts each one back to the
+  // main thread, which forwards it over the socket; converted frames come
+  // back the same way and get scheduled onto the same kind of Web Audio
+  // destination node used by the ElevenLabs pipeline above, so the rest of
+  // the app (feeding this into the Decart stream) doesn't need to know or
+  // care which engine produced it.
+  const startRealtimeVoiceCapture = async (micStream) => {
+    const micTrack = micStream.getAudioTracks()[0];
+    if (!micTrack || !VOICE_RT_URL || !rtcSelectedVoiceId) return null;
+
+    const ticketRes = await ledgerFetchTicket();
+    if (!ticketRes) return null;
+
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    const audioCtx = new AudioCtx();
+    const destination = audioCtx.createMediaStreamDestination();
+    audioContextRef.current = audioCtx;
+    voiceDestinationRef.current = destination;
+    voicePlaybackQueueTimeRef.current = audioCtx.currentTime;
+
+    try {
+      await audioCtx.audioWorklet.addModule("/pcm-capture-worklet.js");
+    } catch (err) {
+      console.error("Failed to load capture worklet:", err);
+      setStatus("REAL-TIME VOICE UNAVAILABLE — WORKLET FAILED TO LOAD");
+      return null;
+    }
+
+    const wsProtocol = VOICE_RT_URL.startsWith("https") ? "wss" : "ws";
+    const wsUrl = `${VOICE_RT_URL.replace(/^https?/, wsProtocol)}/convert?ticket=${encodeURIComponent(ticketRes.ticket)}&voice_id=${encodeURIComponent(rtcSelectedVoiceId)}`;
+    const socket = new WebSocket(wsUrl);
+    socket.binaryType = "arraybuffer";
+    rtcSocketRef.current = socket;
+
+    socket.onmessage = (event) => {
+      const audioCtxNow = audioContextRef.current;
+      const destinationNow = voiceDestinationRef.current;
+      if (!audioCtxNow || !destinationNow) return;
+      if (typeof event.data === "string") {
+        // voice-rt-server sends JSON text only for error messages (see server.py)
+        console.error("voice-rt-server error:", event.data);
+        return;
+      }
+      const int16 = new Int16Array(event.data);
+      const float32 = new Float32Array(int16.length);
+      for (let i = 0; i < int16.length; i++) float32[i] = int16[i] / 32768;
+      // Web Audio resamples automatically if this buffer's rate differs from
+      // the context's — no manual upsampling needed for playback.
+      const audioBuffer = audioCtxNow.createBuffer(1, float32.length, 16000);
+      audioBuffer.copyToChannel(float32, 0);
+      const source = audioCtxNow.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(destinationNow);
+      const now = audioCtxNow.currentTime;
+      const startAt = Math.max(now, voicePlaybackQueueTimeRef.current);
+      source.start(startAt);
+      voicePlaybackQueueTimeRef.current = startAt + audioBuffer.duration;
+    };
+
+    socket.onerror = (err) => {
+      console.error("voice-rt-server WebSocket error:", err);
+      setStatus("REAL-TIME VOICE CONNECTION ERROR");
+    };
+
+    const micSource = audioCtx.createMediaStreamSource(new MediaStream([micTrack]));
+    rtcMicSourceRef.current = micSource;
+    const workletNode = new AudioWorkletNode(audioCtx, "pcm-capture-processor", {
+      processorOptions: { targetSampleRate: 16000, frameSamples: VOICE_RT_FRAME_SAMPLES },
+    });
+    rtcWorkletNodeRef.current = workletNode;
+
+    workletNode.port.onmessage = (event) => {
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(event.data); // ArrayBuffer of Int16 PCM samples
+      }
+    };
+
+    // The worklet needs to be part of the active render graph to keep
+    // processing — route it to destination through a silent (zero-gain)
+    // node so it never actually plays back locally.
+    const silentGain = audioCtx.createGain();
+    silentGain.gain.value = 0;
+    micSource.connect(workletNode);
+    workletNode.connect(silentGain);
+    silentGain.connect(audioCtx.destination);
+
+    return destination.stream;
+  };
+
+  const stopRealtimeVoiceCapture = () => {
+    if (rtcSocketRef.current) {
+      try {
+        rtcSocketRef.current.close();
+      } catch {
+        // already closed — fine
+      }
+      rtcSocketRef.current = null;
+    }
+    if (rtcWorkletNodeRef.current) {
+      rtcWorkletNodeRef.current.disconnect();
+      rtcWorkletNodeRef.current = null;
+    }
+    if (rtcMicSourceRef.current) {
+      rtcMicSourceRef.current.disconnect();
+      rtcMicSourceRef.current = null;
+    }
+    if (audioContextRef.current) {
+      audioContextRef.current.close().catch(() => {});
+      audioContextRef.current = null;
+    }
+    voiceDestinationRef.current = null;
+  };
+
+
   const startClockTimer = () => {
     clearClockTimer();
     setTimeRemaining(SESSION_DURATION_SECONDS);
@@ -568,7 +769,20 @@ export default function App() {
         // reduce steady background noise (fan/AC hum, hiss) at the source,
         // before it ever reaches the voice-activity gate below.
         audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-        video: { frameRate: model.fps || 24, width: 1280, height: 720 },
+        // `ideal` (not a bare number) — a bare number can be treated as a
+        // hard requirement, which some external cameras satisfy by digitally
+        // cropping/zooming rather than reporting their natural wider field
+        // of view. `ideal` lets the camera pick its closest natural mode instead.
+        video: {
+          // Not using model.fps here on purpose — it can return a non-finite
+          // value (e.g. Infinity) for some models, which `|| 24` doesn't
+          // catch (only falsy values like 0/undefined/NaN trigger that
+          // fallback — Infinity is truthy and sails right through), and the
+          // browser then rejects the constraint outright.
+          frameRate: { ideal: 24 },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
       });
 
       localStreamRef.current = stream;
@@ -577,7 +791,13 @@ export default function App() {
       startMetricsDemux();
     } catch (err) {
       console.error("Camera access failed:", err);
-      setStatus("HARDWARE ERROR: ACCESS DENIED");
+      // Surface the real reason — these have very different fixes:
+      //   NotAllowedError   -> permission blocked (browser site setting or OS privacy setting)
+      //   NotReadableError  -> another app already has the camera open
+      //   NotFoundError     -> no camera detected at all
+      //   OverconstrainedError -> the requested resolution/framerate isn't supported by any mode
+      const reason = err?.name ? `${err.name}${err.message ? ` — ${err.message}` : ""}` : (err?.message || "unknown error");
+      setStatus(`HARDWARE ERROR: ${reason}`);
     }
   };
 
@@ -778,7 +998,7 @@ export default function App() {
     }
   };
 
-  const creditPercent = Math.min(100, (credits / 1000) * 100);
+  const creditPercent = Math.min(100, (credits / 1000) * 100); // 1,000 credits ≈ the smallest top-up tier now
   const isLowCredit = credits <= LOW_CREDIT_THRESHOLD;
 
   // No access token yet — show a simple entry gate instead of the app.
@@ -1258,7 +1478,7 @@ const styles = {
   outputColumn: { display: "flex", flexDirection: "column", alignItems: "center", gap: "10px", width: "100%" },
   timerBadgeRow: { display: "flex", gap: "10px" },
   timerBadgeOutside: { backgroundColor: "#0d111c", border: "1px solid #1a2030", borderRadius: "6px", padding: "6px 16px", fontSize: "13px", fontWeight: "700", color: "#5b8def", letterSpacing: "0.08em" },
-  fixedOutputContainer: { width: "860px", maxWidth: "100%", height: "520px", backgroundColor: "#000", borderRadius: "8px", border: "1px solid #1a2030", position: "relative", overflow: "hidden", boxShadow: "0 30px 60px -20px rgba(0,0,0,0.8), 0 0 0 1px rgba(91,141,239,0.05)" },
+  fixedOutputContainer: { width: "960px", maxWidth: "100%", aspectRatio: "16/9", backgroundColor: "#000", borderRadius: "8px", border: "1px solid #1a2030", position: "relative", overflow: "hidden", boxShadow: "0 30px 60px -20px rgba(0,0,0,0.8), 0 0 0 1px rgba(91,141,239,0.05)" },
   mirroredVideo: { width: "100%", height: "100%", objectFit: "cover", transform: "scaleX(-1)" },
   fittedImage: { width: "100%", height: "100%", objectFit: "contain" },
   canvasOverlay: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", backgroundColor: "rgba(5, 7, 12, 0.94)" },

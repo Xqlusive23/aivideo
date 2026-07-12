@@ -40,6 +40,27 @@ const ELEVENLABS_STS_MODEL_ID = process.env.ELEVENLABS_STS_MODEL_ID || "eleven_e
 if (!ELEVENLABS_API_KEY) {
   console.warn("\n⚠️  ELEVENLABS_API_KEY is not set — the voice changer will fail until you add it to .env\n");
 }
+
+// --- Real-time voice conversion (voice-rt-server on RunPod) -----------------
+// A separate GPU-backed service (see /voice-rt-server) that does continuous
+// streaming voice conversion instead of the chunk-based ElevenLabs flow
+// above. This backend doesn't proxy that audio at all — it only mints a
+// short-lived, signed ticket that lets the browser connect DIRECTLY to
+// voice-rt-server's WebSocket (lower latency than relaying audio through
+// an extra hop). RTC_TICKET_SECRET must be the exact same value set on the
+// voice-rt-server pod's own environment variables.
+const RTC_TICKET_SECRET = process.env.RTC_TICKET_SECRET || "";
+const RTC_TICKET_TTL_SECONDS = 60; // short-lived on purpose — just long enough to connect
+if (!RTC_TICKET_SECRET) {
+  console.warn("\n⚠️  RTC_TICKET_SECRET is not set — the real-time voice server integration will fail until you add it to .env\n");
+}
+
+function mintRtcTicket(token) {
+  const payload = { token: token.slice(0, 16), exp: Math.floor(Date.now() / 1000) + RTC_TICKET_TTL_SECONDS };
+  const payloadB64 = Buffer.from(JSON.stringify(payload)).toString("base64url");
+  const signature = crypto.createHmac("sha256", RTC_TICKET_SECRET).update(payloadB64).digest("hex");
+  return `${payloadB64}.${signature}`;
+}
 // Audio chunks arrive as multipart file uploads — kept in memory only
 // (never written to disk) since they're small (~2.5s clips) and immediately
 // forwarded to ElevenLabs, not stored.
@@ -393,15 +414,32 @@ app.post("/api/voice/convert", requireToken, upload.single("audio"), async (req,
   }
 });
 
+// Mints a short-lived ticket for the browser to connect DIRECTLY to
+// voice-rt-server's WebSocket (see /voice-rt-server). Same credit check as
+// starting a Decart session, since using the real-time voice server is just
+// as much "real usage" as the video transformation is.
+app.post("/api/voice/rtc-ticket", requireToken, (req, res) => {
+  if (!RTC_TICKET_SECRET) return res.status(500).json({ error: "Real-time voice server is not configured" });
+  const credits = getBalance(req.token);
+  if (credits <= 0) return res.status(402).json({ error: "Out of credits", credits });
+  const ticket = mintRtcTicket(req.token);
+  res.json({ ticket, expiresInSeconds: RTC_TICKET_TTL_SECONDS });
+});
+
 // --- Checkout (purchases) ----------------------------------------------------
 // Exchange rate: ₦1,900 per $1 (set by you — update this single number if the
 // rate changes, rather than recalculating each tier by hand).
-const NAIRA_PER_DOLLAR = 1900;
+// Exchange rate: ₦1,900 per $1, and 2,000 credits per $1 (was 100 — a straight
+// 20x repricing). Same dollar/naira tiers as before, just more credits per tier.
+// Amounts are in KOBO (Paystack's subunit for NGN — 1 naira = 100 kobo).
+// Exchange rate: ₦2,000 per $1, and 100 credits per $1 (1 credit = ₦20).
+// Amounts are in KOBO (Paystack's subunit for NGN — 1 naira = 100 kobo).
+const NAIRA_PER_DOLLAR = 2000;
 const TIERS = {
-  1000: 10 * NAIRA_PER_DOLLAR * 100,
-  5000: 50 * NAIRA_PER_DOLLAR * 100,
-  10000: 100 * NAIRA_PER_DOLLAR * 100,
-  50000: 500 * NAIRA_PER_DOLLAR * 100,
+  1000: 10 * NAIRA_PER_DOLLAR * 100,   // $10  -> ₦20,000   -> 1,000 credits
+  5000: 50 * NAIRA_PER_DOLLAR * 100,   // $50  -> ₦100,000  -> 5,000 credits
+  10000: 100 * NAIRA_PER_DOLLAR * 100, // $100 -> ₦200,000  -> 10,000 credits
+  50000: 500 * NAIRA_PER_DOLLAR * 100, // $500 -> ₦1,000,000 -> 50,000 credits
 };
 
 app.post("/api/checkout", requireToken, async (req, res) => {
