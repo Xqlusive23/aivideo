@@ -7,7 +7,10 @@ const MY_DECART_KEY = import.meta.env?.VITE_DECART_API_KEY || "dct_real_RtFqAzIr
 
 // How long a live transformation session is allowed to run before auto-stopping.
 // This is just a UX cap, unrelated to billing.
-const SESSION_DURATION_SECONDS = 5 * 60; // 5 minutes
+// (Previously a hardcoded 5-minute session cap lived here — removed. Lucy
+// 2.5 is explicitly designed for indefinite runtime, so sessions now only
+// end when the user stops them or credits run out — see stopTransformation
+// and the heartbeat's `depleted` handling.)
 
 // --- Real credit ledger backend --------------------------------------------
 // See /ledger-backend. The browser NEVER decides the balance — it only ever
@@ -60,11 +63,11 @@ export default function App() {
   const [latency, setLatency] = useState("0 ms");
   const [fps, setFps] = useState(0);
 
-  const [timeRemaining, setTimeRemaining] = useState(SESSION_DURATION_SECONDS);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
 
   const [inferenceWeight, setInferenceWeight] = useState(85);
   const [enhanceMask, setEnhanceMask] = useState(true);
-  const [activeModel, setActiveModel] = useState("lucy-realtime-v2.1");
+  const [activeModel, setActiveModel] = useState("lucy-realtime-v2.5");
 
   // --- Voice changer state ---
   const [voiceChangerEnabled, setVoiceChangerEnabled] = useState(false);
@@ -83,10 +86,11 @@ export default function App() {
   const [rtcVoicesLoading, setRtcVoicesLoading] = useState(true);
 
   const MODEL_ID_MAP = {
+    "lucy-realtime-v2.5": "lucy-2.5", // current flagship — released after this app was first built
     "lucy-realtime-v2.1": "lucy-2.1",
     "lucy-speed-v1.9": "lucy-1.9",
   };
-  const getModelId = () => MODEL_ID_MAP[activeModel] || "lucy-2.1";
+  const getModelId = () => MODEL_ID_MAP[activeModel] || "lucy-2.5";
 
   // --- Access token (given to you by the admin — see ledger-backend README) ---
   const [accessToken, setAccessToken] = useState(() => {
@@ -680,20 +684,31 @@ export default function App() {
     voiceDestinationRef.current = null;
   };
 
+  // Checks which pipeline is ACTUALLY running (via refs, not just the
+  // voiceEngine state variable) so every stop path — button click, timeout,
+  // error, revocation — reliably cleans up the right one regardless of
+  // whether voiceEngine changed after the session started.
+  const stopActiveVoicePipeline = () => {
+    if (rtcSocketRef.current || rtcWorkletNodeRef.current) {
+      stopRealtimeVoiceCapture();
+    } else {
+      stopVoiceChangerCapture();
+    }
+  };
 
+
+  // Elapsed-time display only — no auto-stop tied to this anymore. Lucy 2.5
+  // is explicitly designed to run indefinitely (Decart's own "Smart History
+  // Augmentation" is meant to prevent quality drift over long sessions), so
+  // the old 5-minute hard cutoff was an artificial limit, not a real
+  // technical or quality requirement. The only thing that still ends a
+  // session automatically is running out of credits (handled elsewhere via
+  // the heartbeat's `depleted` flag) or the user hitting Stop themselves.
   const startClockTimer = () => {
     clearClockTimer();
-    setTimeRemaining(SESSION_DURATION_SECONDS);
+    setElapsedSeconds(0);
     clockTimerRef.current = setInterval(() => {
-      setTimeRemaining((prev) => {
-        if (prev <= 1) {
-          clearClockTimer();
-          stopTransformation();
-          setStatus("SESSION TIMEOUT: 5-MINUTE LIMIT REACHED");
-          return 0;
-        }
-        return prev - 1;
-      });
+      setElapsedSeconds((prev) => prev + 1);
     }, 1000);
   };
 
@@ -752,9 +767,10 @@ export default function App() {
   };
 
   const formatTime = (totalSeconds) => {
-    const m = Math.floor(totalSeconds / 60).toString().padStart(2, "0");
+    const h = Math.floor(totalSeconds / 3600);
+    const m = Math.floor((totalSeconds % 3600) / 60).toString().padStart(2, "0");
     const s = (totalSeconds % 60).toString().padStart(2, "0");
-    return `${m}:${s}`;
+    return h > 0 ? `${h}:${m}:${s}` : `${m}:${s}`;
   };
 
   const formatNaira = (creditAmount) => `₦${Math.round(creditAmount * NAIRA_PER_CREDIT).toLocaleString()}`;
@@ -780,8 +796,8 @@ export default function App() {
           // fallback — Infinity is truthy and sails right through), and the
           // browser then rejects the constraint outright.
           frameRate: { ideal: 24 },
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
         },
       });
 
@@ -870,16 +886,23 @@ export default function App() {
 
     // If the voice changer is on, swap the raw mic track for a synthetic one
     // carrying the converted voice — Decart only ever sees/forwards this,
-    // never the original audio.
+    // never the original audio. Which pipeline actually runs depends on
+    // voiceEngine — the two are mutually exclusive per session.
     let streamForDecart = localStreamRef.current;
-    if (voiceChangerEnabled && selectedVoiceId) {
-      const convertedAudioStream = startVoiceChangerCapture(localStreamRef.current);
-      if (convertedAudioStream) {
-        const videoTrack = localStreamRef.current.getVideoTracks()[0];
-        const convertedAudioTrack = convertedAudioStream.getAudioTracks()[0];
-        streamForDecart = new MediaStream([videoTrack, convertedAudioTrack].filter(Boolean));
-      } else {
-        setStatus("VOICE CHANGER UNAVAILABLE — CONTINUING WITH ORIGINAL AUDIO");
+    if (voiceChangerEnabled) {
+      const hasValidVoice = voiceEngine === "realtime" ? !!rtcSelectedVoiceId : !!selectedVoiceId;
+      if (hasValidVoice) {
+        const convertedAudioStream =
+          voiceEngine === "realtime"
+            ? await startRealtimeVoiceCapture(localStreamRef.current)
+            : startVoiceChangerCapture(localStreamRef.current);
+        if (convertedAudioStream) {
+          const videoTrack = localStreamRef.current.getVideoTracks()[0];
+          const convertedAudioTrack = convertedAudioStream.getAudioTracks()[0];
+          streamForDecart = new MediaStream([videoTrack, convertedAudioTrack].filter(Boolean));
+        } else {
+          setStatus("VOICE CHANGER UNAVAILABLE — CONTINUING WITH ORIGINAL AUDIO");
+        }
       }
     }
 
@@ -892,7 +915,7 @@ export default function App() {
         try {
           const session = await client.realtime.connect(streamForDecart, {
             model: models.realtime(getModelId()),
-            mirror: false,
+            mirror: "auto", // Decart's current docs recommend this over a hardcoded false/true
             onRemoteStream: (remoteStream) => {
               if (outputVideoRef.current) outputVideoRef.current.srcObject = remoteStream;
             },
@@ -902,14 +925,14 @@ export default function App() {
               setIsRunning(false);
               clearClockTimer();
               clearHeartbeat();
-              stopVoiceChangerCapture();
+              stopActiveVoicePipeline();
             },
             onDisconnect: () => {
               setStatus("PIPELINE TERMINATED");
               setIsRunning(false);
               clearClockTimer();
               clearHeartbeat();
-              stopVoiceChangerCapture();
+              stopActiveVoicePipeline();
             },
             initialState: {
               prompt: {
@@ -929,7 +952,7 @@ export default function App() {
           console.error(connectErr);
           setStatus(`HANDSHAKE REJECTED: ${connectErr.message}`);
           setIsRunning(false);
-          stopVoiceChangerCapture();
+          stopActiveVoicePipeline();
           endBillingSession(sessionId);
         }
       };
@@ -937,7 +960,7 @@ export default function App() {
       console.error("Failed to initialize Decart client:", err);
       setStatus(`CLIENT INIT FAILED: ${err.message || "check VITE_DECART_API_KEY is set"}`);
       setIsRunning(false);
-      stopVoiceChangerCapture();
+      stopActiveVoicePipeline();
       endBillingSession(sessionId);
     }
   };
@@ -961,7 +984,7 @@ export default function App() {
     if (fpsIntervalRef.current) clearInterval(fpsIntervalRef.current);
     clearClockTimer();
     clearHeartbeat();
-    stopVoiceChangerCapture();
+    stopActiveVoicePipeline();
 
     const sessionId = billingSessionIdRef.current;
     billingSessionIdRef.current = null;
@@ -969,7 +992,7 @@ export default function App() {
 
     setIsRunning(false);
     setStatus((prev) => (prev.startsWith("OUT OF CREDITS") ? prev : "PIPELINE DISCONNECTED"));
-    setTimeRemaining(SESSION_DURATION_SECONDS);
+    setElapsedSeconds(0);
     if (outputVideoRef.current) outputVideoRef.current.srcObject = null;
   };
 
@@ -1172,8 +1195,8 @@ export default function App() {
           </div>
           <div style={styles.statusPill} className="itc-status-pill">
             <span style={styles.metaLabel}>SESSION_TIME:</span>
-            <span style={{...styles.metaValue, color: isRunning && timeRemaining <= 30 ? "#f0576a" : "#5b8def"}}>
-              {isRunning ? formatTime(timeRemaining) : "05:00"}
+            <span style={styles.metaValue}>
+              {isRunning ? formatTime(elapsedSeconds) : "00:00"}
             </span>
           </div>
           <div style={styles.statusPillLast} className="itc-status-pill-last">
@@ -1266,29 +1289,72 @@ export default function App() {
               />
             </div>
             {voiceChangerEnabled && (
-              <div style={styles.voiceSelectGroup}>
-                <label style={styles.paramLabel}>TARGET VOICE</label>
-                <select
-                  value={selectedVoiceId}
-                  onChange={(e) => setSelectedVoiceId(e.target.value)}
-                  disabled={isRunning || voices.length === 0}
-                  style={styles.voiceSelect}
-                  className="itc-select"
-                >
-                  {voices.length === 0 && (
-                    <option value="">{voicesLoading ? "Loading voices..." : "No voices available"}</option>
-                  )}
-                  {voices.map((v) => (
-                    <option key={v.voice_id} value={v.voice_id}>{v.name}</option>
-                  ))}
-                </select>
-              </div>
+              <>
+                <div style={styles.voiceSelectGroup}>
+                  <label style={styles.paramLabel}>ENGINE</label>
+                  <select
+                    value={voiceEngine}
+                    onChange={(e) => setVoiceEngine(e.target.value)}
+                    disabled={isRunning}
+                    style={styles.voiceSelect}
+                    className="itc-select"
+                  >
+                    <option value="elevenlabs">ElevenLabs (chunk-based, ~{VOICE_CHUNK_MS / 1000}s delay)</option>
+                    <option value="realtime">Real-Time (voice-rt-server, continuous)</option>
+                  </select>
+                </div>
+
+                {voiceEngine === "elevenlabs" ? (
+                  <div style={styles.voiceSelectGroup}>
+                    <label style={styles.paramLabel}>TARGET VOICE</label>
+                    <select
+                      value={selectedVoiceId}
+                      onChange={(e) => setSelectedVoiceId(e.target.value)}
+                      disabled={isRunning || voices.length === 0}
+                      style={styles.voiceSelect}
+                      className="itc-select"
+                    >
+                      {voices.length === 0 && (
+                        <option value="">{voicesLoading ? "Loading voices..." : "No voices available"}</option>
+                      )}
+                      {voices.map((v) => (
+                        <option key={v.voice_id} value={v.voice_id}>{v.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                ) : (
+                  <div style={styles.voiceSelectGroup}>
+                    <label style={styles.paramLabel}>TARGET VOICE</label>
+                    <select
+                      value={rtcSelectedVoiceId}
+                      onChange={(e) => setRtcSelectedVoiceId(e.target.value)}
+                      disabled={isRunning || rtcVoices.length === 0}
+                      style={styles.voiceSelect}
+                      className="itc-select"
+                    >
+                      {rtcVoices.length === 0 && (
+                        <option value="">{rtcVoicesLoading ? "Loading voices..." : "No voices available"}</option>
+                      )}
+                      {rtcVoices.map((v) => (
+                        <option key={v.voice_id} value={v.voice_id}>{v.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </>
             )}
-            {voiceLoadError && <div style={styles.ledgerErrorNote}>{voiceLoadError}</div>}
+            {voiceChangerEnabled && voiceEngine === "elevenlabs" && voiceLoadError && (
+              <div style={styles.ledgerErrorNote}>{voiceLoadError}</div>
+            )}
+            {voiceChangerEnabled && voiceEngine === "realtime" && rtcLoadError && (
+              <div style={styles.ledgerErrorNote}>{rtcLoadError}</div>
+            )}
             <div style={styles.paramsLockedNote}>
               {isRunning
                 ? "Locked while live — changes apply on next deploy"
-                : `Converts your voice in ~${VOICE_CHUNK_MS / 1000}s rolling clips — short delay per phrase, not instant.`}
+                : voiceEngine === "elevenlabs"
+                ? `Converts your voice in ~${VOICE_CHUNK_MS / 1000}s rolling clips — short delay per phrase, not instant.`
+                : "Continuous conversion via voice-rt-server — requires that service to be deployed and running."}
             </div>
           </div>
 
@@ -1333,7 +1399,7 @@ export default function App() {
           <div style={styles.canvasControlBar} className="itc-canvas-control-bar">
             <div style={styles.canvasTitleGroup}>
               <h2 style={styles.canvasTitle} className="itc-canvas-title">OUTPUT MONITOR</h2>
-              <span style={styles.canvasSubtitle} className="itc-canvas-subtitle">Matrix Field Resolution: 1280x720, scaled to fit viewport</span>
+              <span style={styles.canvasSubtitle} className="itc-canvas-subtitle">Matrix Field Resolution: 1920x1080 (Lucy 2.5), scaled to fit viewport</span>
             </div>
             <div style={styles.actionRow} className="itc-action-row">
               <button
@@ -1368,7 +1434,7 @@ export default function App() {
             <div style={styles.outputColumn}>
               {isRunning && (
                 <div style={styles.timerBadgeRow}>
-                  <div style={styles.timerBadgeOutside}>{formatTime(timeRemaining)}</div>
+                  <div style={styles.timerBadgeOutside}>{formatTime(elapsedSeconds)}</div>
                   <div style={{...styles.timerBadgeOutside, color: isLowCredit ? "#f0576a" : "#5b8def"}}>
                     {credits} credits left
                   </div>
