@@ -14,6 +14,17 @@
     display: flex; justify-content: center;
   }
   .wrap { width: 100%; max-width: 720px; }
+  .admin-brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 4px;
+  }
+  .admin-brand img {
+    width: 40px;
+    height: 40px;
+    object-fit: contain;
+  }
   h1 {
     font-family: "Inter", system-ui, sans-serif; font-size: 20px; font-weight: 800;
     color: #f4f6fa; margin: 0 0 4px;
@@ -65,7 +76,10 @@
 </head>
 <body>
 <div class="wrap">
-  <h1>🛸 InspireTech — Admin</h1>
+  <div class="admin-brand">
+    <img src="/logo.png" alt="INSPIRE_TECH" />
+    <h1 style="margin:0">InspireTech — Admin</h1>
+  </div>
   <p class="subtitle">Mint access tokens for customers and see everyone's balance. This page never leaves your own machine's/deployment's backend — it isn't part of the public app bundle.</p>
 
   <div class="card">

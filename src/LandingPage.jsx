@@ -1,6 +1,7 @@
 import React from "react";
 import { Link, useNavigate } from "react-router-dom";
 import AccessGate from "./AccessGate";
+import { LogoLockup } from "./Logo.jsx";
 import { featureAccents } from "./theme";
 import {
   SITE_NAME,
@@ -60,8 +61,7 @@ export default function LandingPage() {
       <header className="itc-landing-header">
         <div className="itc-landing-nav">
           <div className="itc-landing-logo">
-            <span className="itc-landing-logo-mark">🛸</span>
-            {SITE_NAME}
+            <LogoLockup size="md" />
             <span className="itc-landing-badge">v2.8</span>
           </div>
           <nav className="itc-landing-nav-links">

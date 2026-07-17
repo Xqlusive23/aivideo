@@ -227,6 +227,7 @@ async function needsFirstRunSetup() {
 }
 
 function createSetupWindow() {
+  const iconPath = path.join(__dirname, "build", "icon.png");
   const win = new BrowserWindow({
     width: 560,
     height: 520,
@@ -235,6 +236,7 @@ function createSetupWindow() {
     minimizable: true,
     autoHideMenuBar: true,
     title: "InspireTech Setup",
+    icon: fs.existsSync(iconPath) ? iconPath : undefined,
     webPreferences: {
       preload: path.join(__dirname, "setup", "setup-preload.js"),
       contextIsolation: true,

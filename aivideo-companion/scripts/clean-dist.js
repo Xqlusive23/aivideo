@@ -15,7 +15,13 @@ function sleep(ms) {
 function killWindowsProcesses() {
   if (process.platform !== "win32") return;
 
-  for (const name of ["InspireTech.exe", "electron.exe", "virtualcam_feeder.exe"]) {
+  for (const name of [
+    "InspireTech.exe",
+    "electron.exe",
+    "virtualcam_feeder.exe",
+    "audio_feeder.exe",
+    "app-builder.exe",
+  ]) {
     try {
       execSync(`taskkill /F /IM ${name} /T`, { stdio: "ignore" });
     } catch {

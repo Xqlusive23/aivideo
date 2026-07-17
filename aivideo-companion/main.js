@@ -7,6 +7,7 @@
 // Capture) and virtual audio (VB-CABLE) drivers via the preload bridge.
 
 const { app, BrowserWindow, ipcMain } = require("electron");
+const fs = require("fs");
 const path = require("path");
 const {
   registerSetupIpc,
@@ -21,11 +22,17 @@ const {
 
 let mainWindow;
 
+function getWindowIcon() {
+  const iconPath = path.join(__dirname, "build", "icon.png");
+  return fs.existsSync(iconPath) ? iconPath : undefined;
+}
+
 function createMainWindow() {
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
     title: "InspireTech",
+    icon: getWindowIcon(),
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,

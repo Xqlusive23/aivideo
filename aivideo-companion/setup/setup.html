@@ -93,9 +93,29 @@
       a {
         color: #8fb4ff;
       }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 16px;
+      }
+      .brand img {
+        width: 48px;
+        height: 48px;
+        object-fit: contain;
+      }
+      .brand span {
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        font-size: 1rem;
+      }
     </style>
   </head>
   <body>
+    <div class="brand">
+      <img src="../build/icon.png" alt="INSPIRE_TECH" />
+      <span>INSPIRE_TECH</span>
+    </div>
     <h1>Welcome to InspireTech</h1>
     <p>
       Before your first call, we install two Windows drivers so Zoom, Discord, and

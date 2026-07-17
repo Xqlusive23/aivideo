@@ -16,7 +16,8 @@
     "build:feeders": "npm run build:feeder && npm run build:audio-feeder",
     "predist": "npm run prepare:drivers && npm run clean",
     "dist": "npm run build:web && npm run build:feeders && electron-builder --win",
-    "dist:dir": "npm run build:web && npm run build:feeders && electron-builder --win --dir"
+    "dist:dir": "npm run build:web && npm run build:feeders && electron-builder --win --dir",
+    "dist:fresh": "npm run build:web && npm run build:feeders && electron-builder --win -c.directories.output=release-new"
   },
   "dependencies": {},
   "devDependencies": {
@@ -74,6 +75,7 @@
           "arch": ["x64"]
         }
       ],
+      "icon": "build/icon.png",
       "requestedExecutionLevel": "asInvoker",
       "signAndEditExecutable": false
     },

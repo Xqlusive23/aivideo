@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { createDecartClient, models } from "@decartai/sdk";
 import AccessGate from "./AccessGate.jsx";
+import { LogoLockup } from "./Logo.jsx";
 import { WHATSAPP_NUMBER, WHATSAPP_DEFAULT_MESSAGE } from "./siteConfig.js";
 import { theme } from "./theme.js";
 
@@ -1482,12 +1483,9 @@ export default function App() {
     <div style={styles.appContainer} className="itc-app">
       <header className="itc-top-header">
         <div className="itc-header-brand">
-          <span className="itc-header-logo-mark">🛸</span>
-          <div>
-            <div className="itc-header-logo-text">
-              InspireTech
-              <span className="itc-header-version">v2.8</span>
-            </div>
+          <div className="itc-header-brand-id">
+            <LogoLockup size="md" />
+            <span className="itc-header-version">v2.8</span>
           </div>
           <div className="itc-header-actions">
             <button

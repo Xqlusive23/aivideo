@@ -124,12 +124,54 @@ body {
   width: 34px;
   height: 34px;
   border-radius: 10px;
-  background: var(--itc-gradient);
-  display: flex;
+  overflow: hidden;
+  flex-shrink: 0;
+  box-shadow: 0 4px 16px rgba(99, 102, 241, 0.25);
+}
+
+/* Brand logo (public/logo.png) */
+.itc-logo-img {
+  display: block;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
+.itc-logo-img-sm {
+  width: 32px;
+  height: 32px;
+}
+
+.itc-logo-img-md {
+  width: 40px;
+  height: 40px;
+}
+
+.itc-logo-img-lg {
+  width: 56px;
+  height: 56px;
+}
+
+.itc-logo-lockup {
+  display: inline-flex;
   align-items: center;
-  justify-content: center;
-  font-size: 16px;
-  box-shadow: 0 4px 16px rgba(99, 102, 241, 0.4);
+  gap: 10px;
+  min-width: 0;
+}
+
+.itc-logo-wordmark {
+  font-family: var(--itc-font-display);
+  font-weight: 800;
+  font-size: 0.9375rem;
+  letter-spacing: 0.06em;
+  color: var(--itc-text);
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .itc-logo-wordmark {
+    font-size: 0.8125rem;
+    letter-spacing: 0.04em;
+  }
 }
 
 .itc-landing-badge {
@@ -514,13 +556,8 @@ body {
 }
 
 .itc-access-brand {
-  font-family: var(--itc-font-display);
-  font-size: 15px;
-  font-weight: 800;
-  background: var(--itc-gradient);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
+  display: flex;
+  justify-content: center;
   margin-bottom: 16px;
 }
 
@@ -674,17 +711,20 @@ body {
   flex-shrink: 0;
 }
 
+.itc-header-brand-id {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
 .itc-header-logo-mark {
   width: 36px;
   height: 36px;
   border-radius: 11px;
-  background: var(--itc-gradient);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 17px;
-  box-shadow: 0 4px 16px rgba(99, 102, 241, 0.35);
+  overflow: hidden;
   flex-shrink: 0;
+  box-shadow: 0 4px 16px rgba(99, 102, 241, 0.25);
 }
 
 .itc-header-logo-text {

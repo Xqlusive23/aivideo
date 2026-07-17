@@ -10,3 +10,4 @@ export const WINDOWS_DOWNLOAD_URL =
 
 export const SITE_NAME = "InspireTech";
 export const SITE_TAGLINE = "Real-time AI video transformation for live calls";
+export const LOGO_SRC = `${import.meta.env.BASE_URL}logo.png`;

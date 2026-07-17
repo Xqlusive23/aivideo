@@ -3,8 +3,8 @@ import { Link } from "react-router-dom";
 import {
   WHATSAPP_NUMBER,
   WHATSAPP_DEFAULT_MESSAGE,
-  SITE_NAME,
 } from "./siteConfig";
+import { LogoLockup } from "./Logo.jsx";
 
 export default function AccessGate({
   onAuthenticated,
@@ -30,7 +30,9 @@ export default function AccessGate({
   return (
     <div className={wrapClass}>
       <div className={cardClass}>
-        <div className="itc-access-brand">🛸 {SITE_NAME}</div>
+        <div className="itc-access-brand">
+          <LogoLockup size="sm" />
+        </div>
         <h1 className="itc-access-title">
           {companionMode
             ? "Sign in to InspireTech Desktop"
