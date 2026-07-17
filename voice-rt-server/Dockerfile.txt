@@ -1,0 +1,20 @@
+# Base image with CUDA + PyTorch preinstalled — matches what RunPod's GPU
+# pods expect. Swap the CUDA version if your chosen RVC library needs a
+# different one (check its install docs).
+FROM runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY server.py .
+
+# Voice model checkpoints (.pth files) — mount these as a RunPod volume
+# rather than baking them into the image, so adding a new voice doesn't
+# require a rebuild+redeploy.
+ENV VOICE_MODELS_DIR=/models
+VOLUME /models
+
+EXPOSE 8000
+CMD ["python", "server.py"]

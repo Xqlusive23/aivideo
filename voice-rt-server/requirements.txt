@@ -1,0 +1,21 @@
+fastapi==0.115.0
+uvicorn[standard]==0.32.0
+numpy==1.26.4
+websockets==13.1
+soundfile==0.12.1
+
+# infer_rvc_python (MIT license, R3gm) — the actual RVC inference library
+# convert_chunk() in server.py is built on. Needs ffmpeg installed on the
+# system (already present in the RunPod pytorch base image used by the
+# Dockerfile). fairseq (an infer_rvc_python dependency) isn't yet compatible
+# with Python 3.11+ as of writing — if you hit a fairseq install error, run:
+#   pip install https://github.com/One-sixth/fairseq/archive/main.zip
+# BEFORE this line, then retry.
+infer-rvc-python==1.2.0
+
+# Torch is pulled in by infer-rvc-python, but pin explicitly so you control
+# which CUDA build gets installed rather than getting whatever the resolver
+# picks. Match this to your RunPod pod's actual CUDA version — check with
+# `nvidia-smi` on the pod once it's running.
+torch==2.4.0
+torchaudio==2.4.0
