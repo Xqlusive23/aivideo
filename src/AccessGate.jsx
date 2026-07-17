@@ -15,16 +15,23 @@ export default function AccessGate({
   setupMessage = "",
 }) {
   const [tokenInput, setTokenInput] = useState("");
+  const [installVirtualMic, setInstallVirtualMic] = useState(false);
 
   const submit = () => {
     const trimmed = tokenInput.trim();
     if (!trimmed || loading) return;
-    onAuthenticated(trimmed);
+    onAuthenticated(trimmed, { skipVirtualMic: !installVirtualMic });
   };
 
-  const wrapClass = embedded ? "itc-access-wrap-embedded" : "itc-access-wrap";
+  const wrapClass = embedded
+    ? "itc-access-wrap-embedded"
+    : companionMode
+    ? "itc-access-wrap-companion"
+    : "itc-access-wrap";
   const cardClass = embedded
     ? "itc-access-card itc-access-card-embedded"
+    : companionMode
+    ? "itc-access-card itc-access-card-companion"
     : "itc-access-card";
 
   return (
@@ -42,7 +49,7 @@ export default function AccessGate({
         </h1>
         <p className="itc-access-subtitle">
           {companionMode
-            ? "Enter the access token we sent you. After sign-in, InspireTech will install the virtual camera and microphone drivers your calling apps need."
+            ? "Enter your access token. We'll install the InspireTech Camera driver (UAC required). VB-CABLE is optional."
             : "Paste the access token you received from us. Tokens are issued manually after you request access."}
         </p>
         <input
@@ -56,6 +63,20 @@ export default function AccessGate({
             if (e.key === "Enter") submit();
           }}
         />
+        {companionMode && (
+          <label className="itc-access-option">
+            <input
+              type="checkbox"
+              checked={installVirtualMic}
+              onChange={(e) => setInstallVirtualMic(e.target.checked)}
+              disabled={loading}
+            />
+            <span>
+              Also install VB-CABLE virtual microphone (optional — only needed if you want
+              changed voice routed into calling apps instead of your physical mic).
+            </span>
+          </label>
+        )}
         {tokenError && <div className="itc-access-error">{tokenError}</div>}
         {setupMessage && <div className="itc-access-setup">{setupMessage}</div>}
         <button
@@ -67,7 +88,9 @@ export default function AccessGate({
           {loading
             ? "Please wait…"
             : companionMode
-            ? "Continue & install drivers"
+            ? installVirtualMic
+              ? "Continue & install drivers"
+              : "Continue & install camera"
             : "Open Studio"}
         </button>
         <a

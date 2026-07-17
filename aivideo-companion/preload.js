@@ -5,7 +5,7 @@ const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld("inspiretechCompanion", {
   isDesktop: true,
   getSetupStatus: () => ipcRenderer.invoke("inspiretech:setup:status"),
-  installDrivers: () => ipcRenderer.invoke("inspiretech:setup:install-all"),
+  installDrivers: (options) => ipcRenderer.invoke("inspiretech:setup:install-all", options),
   completeSetup: () => ipcRenderer.invoke("inspiretech:setup:complete"),
   sendFrame: (arrayBuffer) => {
     ipcRenderer.send("inspiretech:frame", arrayBuffer);

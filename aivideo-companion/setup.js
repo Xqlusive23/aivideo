@@ -1,4 +1,4 @@
-const { BrowserWindow, ipcMain, shell } = require("electron");
+const { app, BrowserWindow, ipcMain, shell } = require("electron");
 const fs = require("fs");
 const path = require("path");
 const { execFile } = require("child_process");
@@ -16,9 +16,9 @@ const VB_CABLE_SUCCESS_EXIT_CODES = [0, 3010, 1641];
 function readSetupState() {
   try {
     const raw = fs.readFileSync(getSetupStatePath(), "utf8");
-    return JSON.parse(raw);
+    return { skipVirtualAudio: true, ...JSON.parse(raw) };
   } catch {
-    return {};
+    return { skipVirtualAudio: true };
   }
 }
 
@@ -154,21 +154,49 @@ async function installVirtualCamera() {
     );
   }
 
-  const installerBat = path.join(installDir, "InstallInspireTech.bat");
-  if (!fs.existsSync(installerBat)) {
-    throw new Error(`Missing installer script: ${installerBat}`);
+  const dll64 = path.join(installDir, "UnityCaptureFilter64.dll");
+  if (!fs.existsSync(dll64)) {
+    throw new Error(`Missing driver file: ${dll64}`);
   }
 
+  const ps1Path = path.join(app.getPath("temp"), "inspiretech-register-camera.ps1");
+  const ps1Content = `
+$ErrorActionPreference = 'Stop'
+Set-Location -LiteralPath '${installDir.replace(/'/g, "''")}'
+Get-ChildItem -Filter 'UnityCaptureFilter*.dll' | Unblock-File -ErrorAction SilentlyContinue
+$nameArg = '/i:UnityCaptureName=InspireTech Camera'
+$dll64 = Join-Path $PWD 'UnityCaptureFilter64.dll'
+$p64 = Start-Process -FilePath "$env:SystemRoot\\System32\\regsvr32.exe" -ArgumentList @('/s', $dll64, $nameArg) -Wait -PassThru -WindowStyle Hidden
+if ($p64.ExitCode -ne 0) { exit $p64.ExitCode }
+$wow = Join-Path $env:SystemRoot 'SysWOW64\\regsvr32.exe'
+$dll32 = Join-Path $PWD 'UnityCaptureFilter32.dll'
+if ((Test-Path $wow) -and (Test-Path $dll32)) {
+  Start-Process -FilePath $wow -ArgumentList @('/s', $dll32, $nameArg) -Wait -PassThru -WindowStyle Hidden | Out-Null
+}
+exit 0
+`.trim();
+
+  fs.writeFileSync(ps1Path, ps1Content, "utf8");
   try {
-    await runElevated("cmd.exe", ["/c", installerBat], installDir);
+    await runElevated(
+      "powershell.exe",
+      ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ps1Path],
+      installDir
+    );
   } catch (error) {
     throw runElevatedError(error.code || 1, stepLabel);
+  } finally {
+    try {
+      fs.unlinkSync(ps1Path);
+    } catch {
+      // temp script may remain if UAC was cancelled mid-run
+    }
   }
 
-  const installed = await waitForDetection(isVirtualCameraInstalled);
+  const installed = await waitForDetection(isVirtualCameraInstalled, 12, 1000);
   if (!installed) {
     throw new Error(
-      `${stepLabel} was not detected after install. Reboot Windows and try again, or run the installer as Administrator from:\n${installDir}`
+      `${stepLabel} was not detected after install. Reboot Windows and try again, or run as Administrator from:\n${installDir}`
     );
   }
   return true;
@@ -211,7 +239,7 @@ function missingDriverMessage(status) {
   if (!status.cameraInstalled) {
     missing.push(`${VIRTUAL_CAMERA_NAME} (virtual webcam)`);
   }
-  if (status.vbCableBundled && !status.audioInstalled) {
+  if (status.vbCableBundled && !status.skipVirtualAudio && !status.audioInstalled) {
     missing.push("VB-Audio Virtual Cable");
   }
   if (missing.length === 0) return null;
@@ -227,11 +255,13 @@ async function getSetupStatus() {
   const state = readSetupState();
   const vbCableBundled = Boolean(getVbCableInstaller());
   const unityCaptureBundled = Boolean(getUnityCaptureInstallDir());
+  const skipVirtualAudio = Boolean(state.skipVirtualAudio);
 
   return {
     cameraInstalled,
     audioInstalled,
     setupComplete: Boolean(state.setupComplete),
+    skipVirtualAudio,
     vbCableBundled,
     unityCaptureBundled,
     virtualCameraName: VIRTUAL_CAMERA_NAME,
@@ -243,7 +273,7 @@ async function needsFirstRunSetup() {
   if (status.setupComplete) {
     return false;
   }
-  const audioRequired = status.vbCableBundled;
+  const audioRequired = status.vbCableBundled && !status.skipVirtualAudio;
   return !status.cameraInstalled || (audioRequired && !status.audioInstalled);
 }
 
@@ -282,13 +312,17 @@ function registerSetupIpc() {
     return getSetupStatus();
   });
 
-  ipcMain.handle(`${SETUP_CHANNEL}:install-all`, async () => {
+  ipcMain.handle(`${SETUP_CHANNEL}:install-all`, async (_event, options = {}) => {
+    const state = readSetupState();
+    const skipAudio = Boolean(options.skipAudio ?? state.skipVirtualAudio);
+    writeSetupState({ ...state, skipVirtualAudio: skipAudio });
+
     const before = await getSetupStatus();
 
     if (!before.cameraInstalled) {
       await installVirtualCamera();
     }
-    if (before.vbCableBundled && !before.audioInstalled) {
+    if (!skipAudio && before.vbCableBundled && !before.audioInstalled) {
       await installVirtualAudio();
     }
 
@@ -307,8 +341,15 @@ function registerSetupIpc() {
       completedAt: new Date().toISOString(),
       cameraInstalled: status.cameraInstalled,
       audioInstalled: status.audioInstalled,
+      skipVirtualAudio: status.skipVirtualAudio,
     });
     return status;
+  });
+
+  ipcMain.handle(`${SETUP_CHANNEL}:set-skip-audio`, async (_event, skipAudio) => {
+    const state = readSetupState();
+    writeSetupState({ ...state, skipVirtualAudio: Boolean(skipAudio) });
+    return getSetupStatus();
   });
 
   ipcMain.handle(`${SETUP_CHANNEL}:open-external`, async (_event, url) => {

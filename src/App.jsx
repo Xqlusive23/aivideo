@@ -120,9 +120,19 @@ export default function App() {
 
   const [videoDevices, setVideoDevices] = useState([]);
   const [selectedVideoDeviceId, setSelectedVideoDeviceId] = useState("");
+  const [audioDevices, setAudioDevices] = useState([]);
+  const [selectedAudioDeviceId, setSelectedAudioDeviceId] = useState("");
+  const [routeAudioToVirtualCable, setRouteAudioToVirtualCable] = useState(() => {
+    try {
+      return window.localStorage.getItem("inspiretech_route_virtual_audio") === "1";
+    } catch {
+      return false;
+    }
+  });
   const [cameraActive, setCameraActive] = useState(false);
   const selectedVideoDeviceIdRef = useRef("");
   const selectedVideoDeviceLabelRef = useRef("");
+  const selectedAudioDeviceIdRef = useRef("");
 
   const MODEL_ID_MAP = {
     "lucy-realtime-v2.5": "lucy-2.5", // current flagship — released after this app was first built
@@ -217,30 +227,60 @@ export default function App() {
     return constraints;
   };
 
-  const refreshVideoDevices = async () => {
+  const buildAudioConstraints = (deviceId) => {
+    const base = {
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+    };
+    if (deviceId) {
+      return { ...base, deviceId: { ideal: deviceId } };
+    }
+    return base;
+  };
+
+  const refreshMediaDevices = async () => {
     if (!navigator.mediaDevices?.enumerateDevices) return;
     try {
-      const previousId = selectedVideoDeviceIdRef.current;
-      const previousLabel = selectedVideoDeviceLabelRef.current;
+      const previousVideoId = selectedVideoDeviceIdRef.current;
+      const previousVideoLabel = selectedVideoDeviceLabelRef.current;
+      const previousAudioId = selectedAudioDeviceIdRef.current;
+      const previousAudioLabel = audioDevices.find((d) => d.deviceId === previousAudioId)?.label || "";
+
       const devices = await navigator.mediaDevices.enumerateDevices();
       const videoInputs = devices.filter((device) => device.kind === "videoinput");
+      const audioInputs = devices.filter((device) => device.kind === "audioinput");
       setVideoDevices(videoInputs);
+      setAudioDevices(audioInputs);
 
-      // Chrome/Electron may rotate deviceIds after permission — keep selection by label.
-      if (previousLabel) {
-        const remapped = videoInputs.find((device) => device.label && device.label === previousLabel);
-        if (remapped && remapped.deviceId !== previousId) {
-          selectedVideoDeviceIdRef.current = remapped.deviceId;
-          setSelectedVideoDeviceId(remapped.deviceId);
+      if (previousVideoLabel) {
+        const remappedVideo = videoInputs.find(
+          (device) => device.label && device.label === previousVideoLabel
+        );
+        if (remappedVideo && remappedVideo.deviceId !== previousVideoId) {
+          selectedVideoDeviceIdRef.current = remappedVideo.deviceId;
+          setSelectedVideoDeviceId(remappedVideo.deviceId);
+        }
+      }
+
+      if (previousAudioLabel) {
+        const remappedAudio = audioInputs.find(
+          (device) => device.label && device.label === previousAudioLabel
+        );
+        if (remappedAudio && remappedAudio.deviceId !== previousAudioId) {
+          selectedAudioDeviceIdRef.current = remappedAudio.deviceId;
+          setSelectedAudioDeviceId(remappedAudio.deviceId);
         }
       }
     } catch (err) {
-      console.warn("Could not enumerate video devices:", err);
+      console.warn("Could not enumerate media devices:", err);
     }
   };
 
+  const refreshVideoDevices = refreshMediaDevices;
+
   const openCameraStream = async (deviceId) => {
-    const audio = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
+    const audio = buildAudioConstraints(selectedAudioDeviceIdRef.current);
     if (!deviceId) {
       return navigator.mediaDevices.getUserMedia({
         audio,
@@ -266,11 +306,11 @@ export default function App() {
   };
 
   useEffect(() => {
-    refreshVideoDevices();
+    refreshMediaDevices();
     const mediaDevices = navigator.mediaDevices;
     if (!mediaDevices?.addEventListener) return undefined;
-    mediaDevices.addEventListener("devicechange", refreshVideoDevices);
-    return () => mediaDevices.removeEventListener("devicechange", refreshVideoDevices);
+    mediaDevices.addEventListener("devicechange", refreshMediaDevices);
+    return () => mediaDevices.removeEventListener("devicechange", refreshMediaDevices);
   }, []);
 
   const stopLocalVideoStream = () => {
@@ -318,8 +358,10 @@ export default function App() {
         if (!companion?.getSetupStatus || !companion?.installDrivers) return;
 
         const status = await companion.getSetupStatus();
+        const skipAudio = Boolean(status.skipVirtualAudio);
         const needs =
-          !status.cameraInstalled || (status.vbCableBundled && !status.audioInstalled);
+          !status.cameraInstalled ||
+          (status.vbCableBundled && !skipAudio && !status.audioInstalled);
         if (!needs || cancelled) {
           if (!status.setupComplete && companion.completeSetup) {
             await companion.completeSetup();
@@ -328,7 +370,7 @@ export default function App() {
         }
 
         setStatus("INSTALLING DRIVERS — APPROVE UAC");
-        await companion.installDrivers();
+        await companion.installDrivers({ skipAudio });
         if (companion.completeSetup) await companion.completeSetup();
         if (!cancelled) setStatus("SYSTEM STANDBY");
       } catch (err) {
@@ -605,13 +647,14 @@ export default function App() {
     }
   };
 
-  const runCompanionDriverSetup = async () => {
+  const runCompanionDriverSetup = async ({ skipVirtualMic = true } = {}) => {
     const companion = window.inspiretechCompanion;
     if (!companion?.getSetupStatus || !companion?.installDrivers) return;
 
     const status = await companion.getSetupStatus();
+    const skipAudio = skipVirtualMic || status.skipVirtualAudio;
     const needsCamera = !status.cameraInstalled;
-    const needsAudio = status.vbCableBundled && !status.audioInstalled;
+    const needsAudio = status.vbCableBundled && !status.audioInstalled && !skipAudio;
 
     if (!needsCamera && !needsAudio) {
       if (!status.setupComplete && companion.completeSetup) {
@@ -621,15 +664,17 @@ export default function App() {
     }
 
     setGateSetupMessage(
-      "Installing InspireTech Camera and VB-Audio drivers — approve the Windows UAC prompts when they appear…"
+      needsAudio
+        ? "Installing InspireTech Camera and VB-Audio drivers — approve the Windows UAC prompts when they appear…"
+        : "Installing InspireTech Camera — approve the Windows UAC prompt when it appears…"
     );
-    await companion.installDrivers();
+    await companion.installDrivers({ skipAudio });
     if (companion.completeSetup) {
       await companion.completeSetup();
     }
   };
 
-  const handleGateAuthenticated = async (token) => {
+  const handleGateAuthenticated = async (token, options = {}) => {
     setTokenError("");
     setGateSetupMessage("");
     setGateLoading(true);
@@ -641,7 +686,7 @@ export default function App() {
       }
 
       if (isCompanionApp()) {
-        await runCompanionDriverSetup();
+        await runCompanionDriverSetup(options);
       }
 
       saveAccessToken(token);
@@ -1224,7 +1269,7 @@ export default function App() {
       if (activeLabel) {
         selectedVideoDeviceLabelRef.current = activeLabel;
       }
-      await refreshVideoDevices();
+      await refreshMediaDevices();
       setCameraActive(true);
       setStatus("DEVICE READY // AWAITING DISPATCH");
       startMetricsDemux();
@@ -1247,6 +1292,23 @@ export default function App() {
     setSelectedVideoDeviceId(deviceId);
     if (cameraActive && !isRunning) {
       await startCamera(deviceId);
+    }
+  };
+
+  const handleAudioDeviceChange = async (deviceId) => {
+    selectedAudioDeviceIdRef.current = deviceId;
+    setSelectedAudioDeviceId(deviceId);
+    if (cameraActive && !isRunning) {
+      await startCamera(selectedVideoDeviceIdRef.current);
+    }
+  };
+
+  const handleRouteVirtualAudioChange = (enabled) => {
+    setRouteAudioToVirtualCable(enabled);
+    try {
+      window.localStorage.setItem("inspiretech_route_virtual_audio", enabled ? "1" : "0");
+    } catch {
+      // ignore storage failures
     }
   };
 
@@ -1346,7 +1408,9 @@ export default function App() {
     }
 
     const companionAudioStream = convertedAudioStream || localStreamRef.current;
-    await startCompanionAudioExport(companionAudioStream);
+    if (isCompanionApp() && routeAudioToVirtualCable) {
+      await startCompanionAudioExport(companionAudioStream);
+    }
 
     try {
       const client = createDecartClient({ apiKey: MY_DECART_KEY });
@@ -1566,16 +1630,54 @@ export default function App() {
                 ))}
               </select>
             </div>
+            <div style={styles.voiceSelectGroup}>
+              <label className="itc-studio-label" style={styles.paramLabel}>Microphone input</label>
+              <select
+                value={selectedAudioDeviceId}
+                onChange={(e) => handleAudioDeviceChange(e.target.value)}
+                disabled={isRunning}
+                style={styles.voiceSelect}
+                className="itc-select"
+              >
+                <option value="">
+                  {audioDevices.length === 0 ? "Default microphone" : "Default microphone"}
+                </option>
+                {audioDevices.map((device, index) => (
+                  <option key={device.deviceId || `mic-${index}`} value={device.deviceId}>
+                    {device.label || `Microphone ${index + 1}`}
+                  </option>
+                ))}
+              </select>
+            </div>
+            {typeof window !== "undefined" && window.inspiretechCompanion && (
+              <div style={styles.parameterRow}>
+                <label className="itc-studio-label" style={styles.paramLabel}>
+                  Route audio to VB-CABLE
+                </label>
+                <input
+                  type="checkbox"
+                  checked={routeAudioToVirtualCable}
+                  onChange={(e) => handleRouteVirtualAudioChange(e.target.checked)}
+                  disabled={isRunning}
+                  style={styles.paramCheckbox}
+                  className="itc-checkbox"
+                />
+              </div>
+            )}
             <div style={styles.paramsLockedNote}>
               {isRunning
                 ? "Camera locked while live — stop transformation to switch"
                 : cameraActive
-                ? "Change the dropdown to switch cameras instantly."
-                : "Pick a camera, then click Start Hardware Camera. Device names appear after camera permission is granted."}
+                ? "Change the dropdowns to switch camera or mic instantly."
+                : "Pick devices, then click Start Hardware Camera. Names appear after permission is granted."}
             </div>
             {typeof window !== "undefined" && window.inspiretechCompanion && (
               <div style={styles.compatNote}>
-                <strong>Calling app setup:</strong> Camera → <strong>InspireTech Camera</strong>. Microphone → <strong>CABLE Output (VB-Audio Virtual Cable)</strong>. Voice-changed audio routes there while live. WhatsApp Desktop cannot see InspireTech Camera — use Telegram/Discord or WhatsApp Web.
+                <strong>Calling app setup:</strong> Camera → <strong>InspireTech Camera</strong>.
+                {routeAudioToVirtualCable
+                  ? " Microphone → CABLE Output (VB-Audio Virtual Cable) when routing voice to calls."
+                  : " Use your normal physical microphone in calling apps unless you enable VB-CABLE routing above."}
+                {" "}WhatsApp Desktop cannot see InspireTech Camera — use Telegram/Discord or WhatsApp Web.
               </div>
             )}
             <div style={styles.buttonStack}>

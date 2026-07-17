@@ -152,8 +152,17 @@
       <a href="#" id="vb-link">Download VB-CABLE</a>, then rebuild the desktop app.
     </p>
 
+    <label id="skip-audio-wrap" style="display: none; align-items: flex-start; gap: 10px; margin: 12px 0 0; cursor: pointer;">
+      <input id="skip-audio" type="checkbox" checked style="margin-top: 4px" />
+      <span style="color: #b0b8c4; font-size: 0.9rem; line-height: 1.45">
+        Skip VB-CABLE — use my physical microphone in calling apps instead.
+        You can install VB-CABLE later from the studio if you want voice routing.
+      </span>
+    </label>
+
     <div class="actions">
-      <button id="install-all" class="primary">Install drivers (UAC required)</button>
+      <button id="install-camera" class="primary">Install camera only</button>
+      <button id="install-all" class="secondary">Install camera + VB-CABLE</button>
       <button id="continue" class="secondary" disabled>Continue</button>
     </div>
 
@@ -163,10 +172,13 @@
       const cameraStatus = document.getElementById("camera-status");
       const audioStatus = document.getElementById("audio-status");
       const installAllBtn = document.getElementById("install-all");
+      const installCameraBtn = document.getElementById("install-camera");
       const continueBtn = document.getElementById("continue");
       const logEl = document.getElementById("log");
       const bundleNote = document.getElementById("bundle-note");
       const vbLink = document.getElementById("vb-link");
+      const skipAudioWrap = document.getElementById("skip-audio-wrap");
+      const skipAudioInput = document.getElementById("skip-audio");
 
       function setStatus(el, installed, labelInstalled, labelMissing) {
         el.textContent = installed ? labelInstalled : labelMissing;
@@ -184,17 +196,19 @@
 
         if (!status.vbCableBundled) {
           bundleNote.style.display = "block";
-          installAllBtn.disabled = !status.unityCaptureBundled;
+          skipAudioWrap.style.display = "none";
+          installAllBtn.disabled = true;
         } else {
           bundleNote.style.display = "none";
+          skipAudioWrap.style.display = "flex";
         }
 
-        const ready =
-          status.cameraInstalled && (status.audioInstalled || !status.vbCableBundled);
+        skipAudioInput.checked = Boolean(status.skipVirtualAudio);
+        const audioOk = status.audioInstalled || status.skipVirtualAudio || !status.vbCableBundled;
+        const ready = status.cameraInstalled && audioOk;
         continueBtn.disabled = !ready;
-        installAllBtn.disabled =
-          ready ||
-          (!status.unityCaptureBundled && !status.vbCableBundled);
+        installCameraBtn.disabled = ready || !status.unityCaptureBundled;
+        installAllBtn.disabled = ready || !status.unityCaptureBundled || !status.vbCableBundled;
 
         return status;
       }
@@ -204,18 +218,39 @@
         window.inspiretechSetup.openExternal("https://vb-audio.com/Cable/");
       });
 
-      installAllBtn.addEventListener("click", async () => {
+      installCameraBtn.addEventListener("click", async () => {
+        installCameraBtn.disabled = true;
         installAllBtn.disabled = true;
-        log("Launching installers. Approve the Windows UAC prompt(s). If VB-CABLE opens, click through its setup wizard, then reboot if prompted.");
+        log("Installing InspireTech Camera only. Approve the Windows UAC prompt…");
         try {
-          await window.inspiretechSetup.installAll();
-          log("Drivers installed. In your calling app set Camera to InspireTech Camera and Microphone to CABLE Output (VB-Audio Virtual Cable).");
+          await window.inspiretechSetup.installAll({ skipAudio: true });
+          log("Camera driver installed. In your calling app, select InspireTech Camera as the webcam.");
           await refresh();
-      } catch (error) {
-        log(String(error.message || error));
-        installAllBtn.disabled = false;
+        } catch (error) {
+          log(String(error.message || error));
+          installCameraBtn.disabled = false;
+          await refresh();
+        }
+      });
+
+      installAllBtn.addEventListener("click", async () => {
+        installCameraBtn.disabled = true;
+        installAllBtn.disabled = true;
+        log("Installing InspireTech Camera and VB-CABLE. Approve UAC prompt(s). Complete the VB-CABLE wizard if it opens, then reboot if prompted.");
+        try {
+          await window.inspiretechSetup.installAll({ skipAudio: false });
+          log("Drivers installed. Camera → InspireTech Camera. Microphone → CABLE Output (VB-Audio Virtual Cable).");
+          await refresh();
+        } catch (error) {
+          log(String(error.message || error));
+          installAllBtn.disabled = false;
+          await refresh();
+        }
+      });
+
+      skipAudioInput.addEventListener("change", async () => {
+        await window.inspiretechSetup.setSkipAudio(skipAudioInput.checked);
         await refresh();
-      }
       });
 
       continueBtn.addEventListener("click", async () => {

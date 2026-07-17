@@ -510,6 +510,21 @@ body {
   gap: 12px;
 }
 
+.itc-btn-windows {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.itc-windows-icon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+
 .itc-landing-fine-print {
   font-size: 12px;
   color: #64748b;
@@ -610,6 +625,37 @@ body {
   border-radius: 10px;
   background: rgba(34, 211, 238, 0.08);
   border: 1px solid rgba(34, 211, 238, 0.2);
+}
+
+.itc-access-wrap-companion {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--itc-bg);
+  background-image:
+    radial-gradient(ellipse 70% 50% at 50% 0%, rgba(99, 102, 241, 0.25), transparent 60%);
+}
+
+.itc-access-card-companion {
+  width: 100%;
+  max-width: 420px;
+}
+
+.itc-access-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0 0 16px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--itc-text-muted);
+  cursor: pointer;
+}
+
+.itc-access-option input {
+  margin-top: 3px;
 }
 
 .itc-access-wrap {

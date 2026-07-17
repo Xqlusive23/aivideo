@@ -11,6 +11,26 @@ import {
   WINDOWS_DOWNLOAD_URL,
 } from "./siteConfig";
 
+function WindowsIcon() {
+  return (
+    <svg className="itc-windows-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        fill="currentColor"
+        d="M3 5.5 10.5 4.2v7.1H3V5.5zm0 8.4h7.5v7.3L3 19.5v-5.6zm9-9.3L21 3.1v8.6h-9V4.6zm0 9.3h9v8.6l-9-1.4v-7.2z"
+      />
+    </svg>
+  );
+}
+
+function WindowsDownloadButton({ className = "itc-btn itc-btn-primary itc-btn-windows" }) {
+  return (
+    <a href={WINDOWS_DOWNLOAD_URL} className={className} download>
+      <WindowsIcon />
+      <span>Windows</span>
+    </a>
+  );
+}
+
 const FEATURES = [
   {
     icon: "🎭",
@@ -87,7 +107,11 @@ export default function LandingPage() {
             </p>
             <div className="itc-landing-hero-actions">
               <a href="#access" className="itc-btn itc-btn-primary">Get access</a>
-              <a href="#download" className="itc-btn itc-btn-secondary">Download Windows app</a>
+              {downloadReady ? (
+                <WindowsDownloadButton className="itc-btn itc-btn-secondary itc-btn-windows" />
+              ) : (
+                <a href="#download" className="itc-btn itc-btn-secondary">Download Windows app</a>
+              )}
             </div>
           </div>
           <div className="itc-landing-preview">
@@ -188,9 +212,7 @@ export default function LandingPage() {
           </div>
           <div className="itc-landing-download-actions">
             {downloadReady ? (
-              <a href={WINDOWS_DOWNLOAD_URL} className="itc-btn itc-btn-primary" download>
-                Download InspireTech Setup.exe
-              </a>
+              <WindowsDownloadButton />
             ) : (
               <>
                 <button className="itc-btn itc-btn-primary" disabled>
