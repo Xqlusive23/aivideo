@@ -12,6 +12,23 @@ dist
 dist-ssr
 *.local
 
+# Secrets — use .env.example as templates
+.env
+.env.*
+!.env.example
+ledger-backend/.env
+
+# Desktop app build artifacts
+aivideo-companion/release/
+aivideo-companion/dist-electron/
+aivideo-companion/release-stale-*/
+aivideo-companion/dist-electron-stale-*/
+aivideo-companion/build/
+aivideo-companion/resources/feeder/
+aivideo-companion/resources/drivers/unity-capture/
+aivideo-companion/resources/drivers/unity-capture-src/
+aivideo-companion/resources/drivers/vb-cable/*.exe
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

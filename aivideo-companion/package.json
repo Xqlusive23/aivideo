@@ -1,0 +1,88 @@
+{
+  "name": "inspiretech-companion",
+  "version": "0.3.0",
+  "private": true,
+  "description": "InspireTech desktop app — virtual camera + virtual audio for calling apps",
+  "main": "main.js",
+  "author": "InspireTech",
+  "scripts": {
+    "start": "electron .",
+    "dev": "cross-env INSPIRETECH_DEV=1 electron .",
+    "prepare:drivers": "node scripts/prepare-drivers.js",
+    "clean": "node scripts/clean-dist.js",
+    "build:web": "npm run build --prefix ..",
+    "build:feeder": "pyinstaller virtualcam-feeder.spec --distpath resources/feeder --workpath build/feeder --noconfirm",
+    "build:audio-feeder": "pyinstaller audio-feeder.spec --distpath resources/feeder --workpath build/audio-feeder --noconfirm",
+    "build:feeders": "npm run build:feeder && npm run build:audio-feeder",
+    "predist": "npm run prepare:drivers && npm run clean",
+    "dist": "npm run build:web && npm run build:feeders && electron-builder --win",
+    "dist:dir": "npm run build:web && npm run build:feeders && electron-builder --win --dir"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "cross-env": "^7.0.3",
+    "electron": "^32.0.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.inspiretech.desktop",
+    "productName": "InspireTech",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "paths.js",
+      "setup.js",
+      "feeder.js",
+      "audio-feeder.js",
+      "preload.js",
+      "setup/**/*",
+      "virtualcam_feeder.py",
+      "audio_feeder.py"
+    ],
+    "extraResources": [
+      {
+        "from": "../dist",
+        "to": "app",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "resources/feeder/virtualcam_feeder.exe",
+        "to": "feeder/virtualcam_feeder.exe"
+      },
+      {
+        "from": "resources/feeder/audio_feeder.exe",
+        "to": "feeder/audio_feeder.exe"
+      },
+      {
+        "from": "resources/drivers/unity-capture",
+        "to": "drivers/unity-capture",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "resources/drivers/vb-cable",
+        "to": "drivers/vb-cable",
+        "filter": ["**/*"]
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ],
+      "requestedExecutionLevel": "asInvoker",
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "InspireTech"
+    }
+  }
+}

@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>InspireTech Setup</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: "Segoe UI", system-ui, sans-serif;
+        background: #0f1117;
+        color: #e8eaed;
+      }
+      body {
+        margin: 0;
+        padding: 24px;
+      }
+      h1 {
+        margin: 0 0 8px;
+        font-size: 1.5rem;
+      }
+      p {
+        margin: 0 0 16px;
+        color: #b0b8c4;
+        line-height: 1.5;
+      }
+      .card {
+        background: #171b24;
+        border: 1px solid #2a3140;
+        border-radius: 12px;
+        padding: 16px;
+        margin-bottom: 12px;
+      }
+      .row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      .title {
+        font-weight: 600;
+      }
+      .status {
+        font-size: 0.85rem;
+        padding: 4px 10px;
+        border-radius: 999px;
+        white-space: nowrap;
+      }
+      .ok {
+        background: #163a2a;
+        color: #7dffb2;
+      }
+      .missing {
+        background: #3a2416;
+        color: #ffb07d;
+      }
+      .warn {
+        background: #3a3016;
+        color: #ffd27d;
+      }
+      .actions {
+        display: flex;
+        gap: 10px;
+        margin-top: 20px;
+      }
+      button {
+        border: none;
+        border-radius: 10px;
+        padding: 12px 16px;
+        font-size: 0.95rem;
+        cursor: pointer;
+      }
+      button.primary {
+        background: #4f7cff;
+        color: white;
+        flex: 1;
+      }
+      button.secondary {
+        background: #2a3140;
+        color: #e8eaed;
+      }
+      button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      .log {
+        margin-top: 16px;
+        min-height: 72px;
+        font-size: 0.85rem;
+        color: #98a2b3;
+        white-space: pre-wrap;
+      }
+      a {
+        color: #8fb4ff;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Welcome to InspireTech</h1>
+    <p>
+      Before your first call, we install two Windows drivers so Zoom, Discord, and
+      Teams can use your transformed video and audio directly — no OBS or third-party
+      capture tools.
+    </p>
+
+    <div class="card">
+      <div class="row">
+        <div>
+          <div class="title">InspireTech Camera</div>
+          <div style="color: #98a2b3; font-size: 0.9rem; margin-top: 4px">
+            Virtual webcam for your transformed video
+          </div>
+        </div>
+        <span id="camera-status" class="status missing">Checking…</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="row">
+        <div>
+          <div class="title">InspireTech Audio (VB-CABLE)</div>
+          <div style="color: #98a2b3; font-size: 0.9rem; margin-top: 4px">
+            Virtual microphone cable for calling apps
+          </div>
+        </div>
+        <span id="audio-status" class="status missing">Checking…</span>
+      </div>
+    </div>
+
+    <p id="bundle-note" style="display: none">
+      VB-CABLE installer is not bundled in this build.
+      <a href="#" id="vb-link">Download VB-CABLE</a>, then rebuild the desktop app.
+    </p>
+
+    <div class="actions">
+      <button id="install-all" class="primary">Install drivers (UAC required)</button>
+      <button id="continue" class="secondary" disabled>Continue</button>
+    </div>
+
+    <div id="log" class="log"></div>
+
+    <script>
+      const cameraStatus = document.getElementById("camera-status");
+      const audioStatus = document.getElementById("audio-status");
+      const installAllBtn = document.getElementById("install-all");
+      const continueBtn = document.getElementById("continue");
+      const logEl = document.getElementById("log");
+      const bundleNote = document.getElementById("bundle-note");
+      const vbLink = document.getElementById("vb-link");
+
+      function setStatus(el, installed, labelInstalled, labelMissing) {
+        el.textContent = installed ? labelInstalled : labelMissing;
+        el.className = "status " + (installed ? "ok" : "missing");
+      }
+
+      function log(message) {
+        logEl.textContent = message;
+      }
+
+      async function refresh() {
+        const status = await window.inspiretechSetup.getStatus();
+        setStatus(cameraStatus, status.cameraInstalled, "Installed", "Not installed");
+        setStatus(audioStatus, status.audioInstalled, "Installed", "Not installed");
+
+        if (!status.vbCableBundled) {
+          bundleNote.style.display = "block";
+          installAllBtn.disabled = !status.unityCaptureBundled;
+        } else {
+          bundleNote.style.display = "none";
+        }
+
+        const ready =
+          status.cameraInstalled && (status.audioInstalled || !status.vbCableBundled);
+        continueBtn.disabled = !ready;
+        installAllBtn.disabled =
+          ready ||
+          (!status.unityCaptureBundled && !status.vbCableBundled);
+
+        return status;
+      }
+
+      vbLink.addEventListener("click", (event) => {
+        event.preventDefault();
+        window.inspiretechSetup.openExternal("https://vb-audio.com/Cable/");
+      });
+
+      installAllBtn.addEventListener("click", async () => {
+        installAllBtn.disabled = true;
+        log("Launching installers. Approve the Windows UAC prompts…");
+        try {
+          await window.inspiretechSetup.installAll();
+          log("Drivers installed. In your calling app set Camera to InspireTech Camera and Microphone to CABLE Output (VB-Audio Virtual Cable).");
+          await refresh();
+      } catch (error) {
+        log(String(error.message || error));
+        installAllBtn.disabled = false;
+        await refresh();
+      }
+      });
+
+      continueBtn.addEventListener("click", async () => {
+        continueBtn.disabled = true;
+        await window.inspiretechSetup.complete();
+        window.close();
+      });
+
+      refresh().catch((error) => log(String(error.message || error)));
+    </script>
+  </body>
+</html>

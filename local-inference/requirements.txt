@@ -1,0 +1,18 @@
+# Core ML
+diffusers>=0.31.0
+transformers>=4.44.0
+accelerate>=0.34.0
+safetensors>=0.4.0
+peft>=0.13.0
+
+# Image / video I/O
+opencv-python>=4.10.0
+numpy>=1.26.0
+pillow>=10.0.0
+
+# Virtual camera output (bypasses OBS at runtime — see README for the
+# one-time UnityCapture driver install this still requires on Windows)
+pyvirtualcam>=0.11.0
+
+# NOTE: torch is intentionally NOT pinned here — install it separately
+# first, matching your hardware (CPU-only vs CUDA). See README.md.

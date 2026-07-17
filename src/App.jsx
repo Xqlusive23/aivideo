@@ -1,5 +1,41 @@
 import React, { useState, useRef, useEffect } from "react";
+import { Link } from "react-router-dom";
 import { createDecartClient, models } from "@decartai/sdk";
+import AccessGate from "./AccessGate.jsx";
+import { WHATSAPP_NUMBER, WHATSAPP_DEFAULT_MESSAGE } from "./siteConfig.js";
+import { theme } from "./theme.js";
+
+const { colors: c, gradients: g, fonts: f, radius: r, shadow: s } = theme;
+const fd = f.display;
+
+function formatStatusDisplay(raw) {
+  const exact = {
+    "SYSTEM STANDBY": "Ready",
+    "DEVICE READY // AWAITING DISPATCH": "Camera ready",
+    "PAYLOAD READY FOR TRANSMISSION": "Reference loaded",
+    "PROVISIONING MEDIA INPUTS...": "Starting camera…",
+    "HANDSHAKING WITH DECART WEBRTC CLUSTER...": "Connecting…",
+    "COMPUTE LINK ONLINE // REALTIME TRANSFORMATION TERMINAL": "Live",
+    "PIPELINE DISCONNECTED": "Stopped",
+    "PIPELINE TERMINATED": "Stopped",
+    "INSTALLING DRIVERS — APPROVE UAC": "Installing drivers…",
+    "CHECKOUT CANCELLED": "Checkout cancelled",
+    "REDIRECTING TO CHECKOUT...": "Opening checkout…",
+  };
+  if (exact[raw]) return exact[raw];
+  if (raw.startsWith("OUT OF CREDITS")) return "Out of credits";
+  if (raw.startsWith("HARDWARE ERROR")) return raw.replace(/^HARDWARE ERROR:\s*/i, "Camera error · ");
+  if (raw.startsWith("DRIVER SETUP FAILED")) return "Driver setup failed";
+  if (raw.startsWith("PAYMENT")) return raw.toLowerCase().replace(/^\w/, (ch) => ch.toUpperCase());
+  if (raw === raw.toUpperCase() && /[A-Z]/.test(raw)) {
+    return raw
+      .toLowerCase()
+      .replace(/\s*\/\/\s*/g, " · ")
+      .replace(/\s*—\s*/g, " · ")
+      .replace(/^\w/, (ch) => ch.toUpperCase());
+  }
+  return raw;
+}
 
 // Reads from a .env file (Vite: VITE_DECART_API_KEY=your_key_here).
 // NEVER hardcode a real key in source — it ends up in your bundle and git history.
@@ -31,10 +67,7 @@ const TOP_UP_OPTIONS = [
 ];
 
 // --- WhatsApp contact (shown on the access-token gate) ---------------------
-// TODO: replace with your real number, international format, digits only —
-// no "+", no leading "0". e.g. a Nigerian 080xxxxxxxx number becomes 23480xxxxxxxx.
-const WHATSAPP_NUMBER = "13306717093";
-const WHATSAPP_DEFAULT_MESSAGE = "Hi, I need help getting access to InspireTech.";
+// Configured in src/siteConfig.js
 
 // --- Voice changer -----------------------------------------------------------
 // Converts your actual mic audio into a different voice (same words, same
@@ -85,6 +118,12 @@ export default function App() {
   const [rtcLoadError, setRtcLoadError] = useState("");
   const [rtcVoicesLoading, setRtcVoicesLoading] = useState(true);
 
+  const [videoDevices, setVideoDevices] = useState([]);
+  const [selectedVideoDeviceId, setSelectedVideoDeviceId] = useState("");
+  const [cameraActive, setCameraActive] = useState(false);
+  const selectedVideoDeviceIdRef = useRef("");
+  const selectedVideoDeviceLabelRef = useRef("");
+
   const MODEL_ID_MAP = {
     "lucy-realtime-v2.5": "lucy-2.5", // current flagship — released after this app was first built
     "lucy-realtime-v2.1": "lucy-2.1",
@@ -100,8 +139,12 @@ export default function App() {
       return "";
     }
   });
-  const [tokenInput, setTokenInput] = useState("");
   const [tokenError, setTokenError] = useState("");
+  const [gateLoading, setGateLoading] = useState(false);
+  const [gateSetupMessage, setGateSetupMessage] = useState("");
+
+  const isCompanionApp = () =>
+    typeof window !== "undefined" && Boolean(window.inspiretechCompanion?.isDesktop);
 
   const authHeaders = () => ({ "X-Access-Token": accessToken });
 
@@ -134,6 +177,10 @@ export default function App() {
 
   const localVideoRef = useRef(null);
   const outputVideoRef = useRef(null);
+  const companionCanvasRef = useRef(null);
+  const companionCaptureIntervalRef = useRef(null);
+  const companionAudioRef = useRef(null);
+  const desktopCaptureFrameRef = useRef(null); // requestAnimationFrame id, only used inside the Electron shell
   const fileInputRef = useRef(null);
   const localStreamRef = useRef(null);
   const realtimeClientRef = useRef(null);
@@ -158,6 +205,85 @@ export default function App() {
   const rtcWorkletNodeRef = useRef(null);
   const rtcMicSourceRef = useRef(null);
 
+  const buildVideoConstraints = (deviceId, { strictDevice = false, relaxed = false } = {}) => {
+    const constraints = {
+      frameRate: { ideal: 24 },
+      width: { ideal: relaxed ? 1280 : 1920 },
+      height: { ideal: relaxed ? 720 : 1080 },
+    };
+    if (deviceId) {
+      constraints.deviceId = strictDevice ? { exact: deviceId } : { ideal: deviceId };
+    }
+    return constraints;
+  };
+
+  const refreshVideoDevices = async () => {
+    if (!navigator.mediaDevices?.enumerateDevices) return;
+    try {
+      const previousId = selectedVideoDeviceIdRef.current;
+      const previousLabel = selectedVideoDeviceLabelRef.current;
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const videoInputs = devices.filter((device) => device.kind === "videoinput");
+      setVideoDevices(videoInputs);
+
+      // Chrome/Electron may rotate deviceIds after permission — keep selection by label.
+      if (previousLabel) {
+        const remapped = videoInputs.find((device) => device.label && device.label === previousLabel);
+        if (remapped && remapped.deviceId !== previousId) {
+          selectedVideoDeviceIdRef.current = remapped.deviceId;
+          setSelectedVideoDeviceId(remapped.deviceId);
+        }
+      }
+    } catch (err) {
+      console.warn("Could not enumerate video devices:", err);
+    }
+  };
+
+  const openCameraStream = async (deviceId) => {
+    const audio = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
+    if (!deviceId) {
+      return navigator.mediaDevices.getUserMedia({
+        audio,
+        video: buildVideoConstraints(""),
+      });
+    }
+
+    try {
+      return await navigator.mediaDevices.getUserMedia({
+        audio,
+        video: buildVideoConstraints(deviceId, { strictDevice: true }),
+      });
+    } catch (err) {
+      if (err?.name !== "OverconstrainedError" && err?.name !== "NotFoundError") {
+        throw err;
+      }
+      // Same device, looser resolution — still keep deviceId exact so we don't fall back to DroidCam.
+      return navigator.mediaDevices.getUserMedia({
+        audio,
+        video: buildVideoConstraints(deviceId, { strictDevice: true, relaxed: true }),
+      });
+    }
+  };
+
+  useEffect(() => {
+    refreshVideoDevices();
+    const mediaDevices = navigator.mediaDevices;
+    if (!mediaDevices?.addEventListener) return undefined;
+    mediaDevices.addEventListener("devicechange", refreshVideoDevices);
+    return () => mediaDevices.removeEventListener("devicechange", refreshVideoDevices);
+  }, []);
+
+  const stopLocalVideoStream = () => {
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach((track) => track.stop());
+      localStreamRef.current = null;
+    }
+    if (localVideoRef.current) {
+      localVideoRef.current.srcObject = null;
+    }
+    setCameraActive(false);
+  };
+
   // --- Fetch the real balance on load, and handle returning from Paystack Checkout ---
   useEffect(() => {
     if (!accessToken) return;
@@ -180,6 +306,41 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accessToken]);
 
+  // Desktop app: if the user already has a saved token but drivers were never
+  // installed (e.g. migrated from web), install them on load.
+  useEffect(() => {
+    if (!accessToken || !isCompanionApp()) return;
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const companion = window.inspiretechCompanion;
+        if (!companion?.getSetupStatus || !companion?.installDrivers) return;
+
+        const status = await companion.getSetupStatus();
+        const needs =
+          !status.cameraInstalled || (status.vbCableBundled && !status.audioInstalled);
+        if (!needs || cancelled) {
+          if (!status.setupComplete && companion.completeSetup) {
+            await companion.completeSetup();
+          }
+          return;
+        }
+
+        setStatus("INSTALLING DRIVERS — APPROVE UAC");
+        await companion.installDrivers();
+        if (companion.completeSetup) await companion.completeSetup();
+        if (!cancelled) setStatus("SYSTEM STANDBY");
+      } catch (err) {
+        if (!cancelled) setStatus(`DRIVER SETUP FAILED: ${err.message}`);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [accessToken]);
+
   // Idle revocation check: if an admin revokes access while someone is just
   // sitting on the page (not actively mid-transformation, so the heartbeat
   // below isn't running), this is what catches it and logs them out without
@@ -192,11 +353,63 @@ export default function App() {
     return () => clearInterval(interval);
   }, [accessToken]);
 
+  // --- Electron desktop shell integration (no-op in the normal web app) ---
+  // window.inspireTechDesktop only exists when this page is running inside
+  // inspiretech-desktop's Electron wrapper (see preload.js there). In a
+  // regular browser tab this whole effect does nothing — the check at the
+  // top bails out immediately, so this can't affect normal web usage.
   useEffect(() => {
-    if (showAddCredits && creditSectionRef.current) {
-      creditSectionRef.current.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    if (!window.inspireTechDesktop?.isElectron) return;
+
+    const TARGET_FPS = 24;
+    const frameIntervalMs = 1000 / TARGET_FPS;
+    let lastFrameTime = 0;
+    let canvas = null;
+    let ctx = null;
+
+    const drawFrame = (now) => {
+      if (!outputVideoRef.current || !ctx) return;
+      if (now - lastFrameTime >= frameIntervalMs) {
+        lastFrameTime = now;
+        ctx.drawImage(outputVideoRef.current, 0, 0, canvas.width, canvas.height);
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        window.inspireTechDesktop.sendFrame(imageData.data.buffer);
+      }
+      desktopCaptureFrameRef.current = requestAnimationFrame(drawFrame);
+    };
+
+    const startCapture = async () => {
+      const video = outputVideoRef.current;
+      if (!video) return;
+      const width = video.videoWidth || 1280;
+      const height = video.videoHeight || 720;
+
+      await window.inspireTechDesktop.startVirtualCam(width, height, TARGET_FPS);
+
+      canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      ctx = canvas.getContext("2d", { willReadFrequently: true });
+
+      desktopCaptureFrameRef.current = requestAnimationFrame(drawFrame);
+    };
+
+    const stopCapture = () => {
+      if (desktopCaptureFrameRef.current) {
+        cancelAnimationFrame(desktopCaptureFrameRef.current);
+        desktopCaptureFrameRef.current = null;
+      }
+      window.inspireTechDesktop.stopVirtualCam();
+    };
+
+    if (isRunning) {
+      startCapture();
+    } else {
+      stopCapture();
     }
-  }, [showAddCredits]);
+
+    return () => stopCapture();
+  }, [isRunning]);
 
   // Keep the button label in sync if the user closes the PiP window
   // directly (its own native close control) rather than clicking our button.
@@ -274,37 +487,84 @@ export default function App() {
   useEffect(() => {
     if (!accessToken || voiceEngine !== "realtime") return;
     if (!VOICE_RT_URL) {
-      setRtcLoadError("VITE_VOICE_RT_URL is not set in the frontend's .env — point it at your voice-rt-server deployment.");
+      setRtcLoadError("VITE_VOICE_RT_URL is not set in your project .env — add your RunPod voice-rt-server URL and restart npm run dev.");
       setRtcVoicesLoading(false);
       return;
     }
     setRtcVoicesLoading(true);
+    setRtcLoadError("");
     (async () => {
       try {
-        const ticketRes = await ledgerFetchTicket();
-        if (!ticketRes) return; // handleTokenRejected or an error already surfaced
-        const res = await fetch(`${VOICE_RT_URL}/voices?ticket=${encodeURIComponent(ticketRes.ticket)}`);
+        const res = await fetch(`${LEDGER_URL}/api/voice/rtc-voices`, { headers: authHeaders() });
         const data = await res.json().catch(() => ({}));
-        if (res.ok && Array.isArray(data.voices)) {
+        if (res.status === 401 || res.status === 403) {
+          if (res.status === 401) handleTokenRejected("Your access token was rejected. Please re-enter it.");
+          else handleTokenRejected("Your access has been revoked. If you think this is a mistake, message us on WhatsApp below.");
+          return;
+        }
+        if (!res.ok) {
+          setRtcLoadError(data.error || `Could not load real-time voices (ledger responded ${res.status})`);
+          return;
+        }
+        if (Array.isArray(data.voices)) {
           setRtcVoices(data.voices);
           if (data.voices.length === 0) {
-            setRtcLoadError("No voice models found on voice-rt-server — upload some to its /models volume.");
+            setRtcLoadError("voice-rt-server is reachable but has no voice models — upload .pth files to the pod's /models volume.");
           } else {
             setRtcLoadError("");
             if (!rtcSelectedVoiceId) setRtcSelectedVoiceId(data.voices[0].voice_id);
           }
         } else {
-          setRtcLoadError(data.error || `Could not reach voice-rt-server (status ${res.status})`);
+          setRtcLoadError("Unexpected response from voice-rt-server voice list.");
         }
       } catch (err) {
         console.error("Could not load real-time voice list:", err);
-        setRtcLoadError("Could not reach voice-rt-server — is it deployed and running?");
+        setRtcLoadError(`Could not reach ledger backend at ${LEDGER_URL} — is it running? (cd ledger-backend && npm start)`);
       } finally {
         setRtcVoicesLoading(false);
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accessToken, voiceEngine]);
+
+  // --- Desktop companion app bridge (optional) --------------------------
+  // Completely inert in a normal browser tab — window.inspiretechCompanion
+  // only exists when this app is loaded inside the InspireTech Companion
+  // Electron app (see /companion-app), which is what feeds these frames
+  // into a real system virtual camera via Unity Capture. Nothing here
+  // affects regular web use at all.
+  const COMPANION_CAPTURE_FPS = 20; // must match virtualcam_feeder.py's --fps
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.inspiretechCompanion) return;
+    if (!isRunning) {
+      if (companionCaptureIntervalRef.current) {
+        clearInterval(companionCaptureIntervalRef.current);
+        companionCaptureIntervalRef.current = null;
+      }
+      return;
+    }
+
+    const canvas = companionCanvasRef.current || document.createElement("canvas");
+    companionCanvasRef.current = canvas;
+    canvas.width = 1280;
+    canvas.height = 720;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+
+    companionCaptureIntervalRef.current = setInterval(() => {
+      const video = outputVideoRef.current;
+      if (!video || !video.videoWidth) return;
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      window.inspiretechCompanion.sendFrame(imageData.data.buffer);
+    }, 1000 / COMPANION_CAPTURE_FPS);
+
+    return () => {
+      if (companionCaptureIntervalRef.current) {
+        clearInterval(companionCaptureIntervalRef.current);
+        companionCaptureIntervalRef.current = null;
+      }
+    };
+  }, [isRunning]);
 
   // Single place that handles "the server no longer accepts this token" —
   // covers both an invalid token (401) and a revoked one (403). Always safe
@@ -313,6 +573,87 @@ export default function App() {
     stopTransformation();
     clearAccessToken();
     setTokenError(message);
+  };
+
+  const validateAccessToken = async (token) => {
+    try {
+      const res = await fetch(`${LEDGER_URL}/api/credits`, {
+        headers: { "X-Access-Token": token },
+      });
+      if (res.status === 401) {
+        return { ok: false, error: "That access token was rejected. Please re-enter it." };
+      }
+      if (res.status === 403) {
+        return {
+          ok: false,
+          error: "Your access has been revoked. If you think this is a mistake, message us on WhatsApp below.",
+        };
+      }
+      if (!res.ok) {
+        return {
+          ok: false,
+          error: `Can't reach the ledger backend at ${LEDGER_URL}. Is it running? (cd ledger-backend && npm start)`,
+        };
+      }
+      const data = await res.json();
+      return { ok: true, credits: data.credits };
+    } catch (err) {
+      return {
+        ok: false,
+        error: `Can't reach the ledger backend at ${LEDGER_URL}. Is it running?`,
+      };
+    }
+  };
+
+  const runCompanionDriverSetup = async () => {
+    const companion = window.inspiretechCompanion;
+    if (!companion?.getSetupStatus || !companion?.installDrivers) return;
+
+    const status = await companion.getSetupStatus();
+    const needsCamera = !status.cameraInstalled;
+    const needsAudio = status.vbCableBundled && !status.audioInstalled;
+
+    if (!needsCamera && !needsAudio) {
+      if (!status.setupComplete && companion.completeSetup) {
+        await companion.completeSetup();
+      }
+      return;
+    }
+
+    setGateSetupMessage(
+      "Installing InspireTech Camera and VB-Audio drivers — approve the Windows UAC prompts when they appear…"
+    );
+    await companion.installDrivers();
+    if (companion.completeSetup) {
+      await companion.completeSetup();
+    }
+  };
+
+  const handleGateAuthenticated = async (token) => {
+    setTokenError("");
+    setGateSetupMessage("");
+    setGateLoading(true);
+    try {
+      const validation = await validateAccessToken(token);
+      if (!validation.ok) {
+        setTokenError(validation.error);
+        return;
+      }
+
+      if (isCompanionApp()) {
+        await runCompanionDriverSetup();
+      }
+
+      saveAccessToken(token);
+      setCredits(validation.credits);
+      setCreditsLoaded(true);
+      setLedgerUnreachable(false);
+    } catch (err) {
+      setTokenError(String(err.message || err));
+    } finally {
+      setGateLoading(false);
+      setGateSetupMessage("");
+    }
   };
 
   // Shared helper: ask ledger-backend for a short-lived ticket to connect
@@ -632,7 +973,15 @@ export default function App() {
 
     socket.onerror = (err) => {
       console.error("voice-rt-server WebSocket error:", err);
-      setStatus("REAL-TIME VOICE CONNECTION ERROR");
+      setStatus(`Real-time voice failed — check ${VOICE_RT_URL} is running and RTC_TICKET_SECRET matches on RunPod`);
+    };
+
+    socket.onclose = (event) => {
+      if (event.code === 4001) {
+        setStatus("Real-time voice ticket rejected — RTC_TICKET_SECRET may not match between ledger and RunPod");
+      } else if (event.code === 4004) {
+        setStatus("Real-time voice model not found on server");
+      }
     };
 
     const micSource = audioCtx.createMediaStreamSource(new MediaStream([micTrack]));
@@ -688,7 +1037,69 @@ export default function App() {
   // voiceEngine state variable) so every stop path — button click, timeout,
   // error, revocation — reliably cleans up the right one regardless of
   // whether voiceEngine changed after the session started.
+  const COMPANION_AUDIO_FRAME_SAMPLES = 960; // 20ms frames for VB-CABLE feeder
+
+  const stopCompanionAudioExport = () => {
+    if (typeof window !== "undefined" && window.inspiretechCompanion?.stopAudio) {
+      window.inspiretechCompanion.stopAudio();
+    }
+    const state = companionAudioRef.current;
+    if (!state) return;
+    try {
+      state.source?.disconnect();
+    } catch {
+      // already disconnected
+    }
+    try {
+      state.worklet?.disconnect();
+    } catch {
+      // already disconnected
+    }
+    state.ctx?.close?.().catch(() => {});
+    companionAudioRef.current = null;
+  };
+
+  const startCompanionAudioExport = async (audioStream) => {
+    if (typeof window === "undefined" || !window.inspiretechCompanion?.startAudio) return;
+    const audioTrack = audioStream?.getAudioTracks?.()[0];
+    if (!audioTrack) return;
+
+    stopCompanionAudioExport();
+
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    const ctx = new AudioCtx();
+    try {
+      await ctx.audioWorklet.addModule("/pcm-capture-worklet.js");
+    } catch (err) {
+      console.error("Companion audio worklet failed to load:", err);
+      ctx.close().catch(() => {});
+      return;
+    }
+
+    window.inspiretechCompanion.startAudio(ctx.sampleRate);
+
+    const source = ctx.createMediaStreamSource(new MediaStream([audioTrack]));
+    const worklet = new AudioWorkletNode(ctx, "pcm-capture-processor", {
+      processorOptions: {
+        targetSampleRate: ctx.sampleRate,
+        frameSamples: COMPANION_AUDIO_FRAME_SAMPLES,
+      },
+    });
+    worklet.port.onmessage = (event) => {
+      window.inspiretechCompanion.sendAudio(event.data);
+    };
+
+    const silentGain = ctx.createGain();
+    silentGain.gain.value = 0;
+    source.connect(worklet);
+    worklet.connect(silentGain);
+    silentGain.connect(ctx.destination);
+
+    companionAudioRef.current = { ctx, source, worklet };
+  };
+
   const stopActiveVoicePipeline = () => {
+    stopCompanionAudioExport();
     if (rtcSocketRef.current || rtcWorkletNodeRef.current) {
       stopRealtimeVoiceCapture();
     } else {
@@ -775,34 +1186,46 @@ export default function App() {
 
   const formatNaira = (creditAmount) => `₦${Math.round(creditAmount * NAIRA_PER_CREDIT).toLocaleString()}`;
 
-  const startCamera = async () => {
+  const startCamera = async (deviceId) => {
+    const requestedId = deviceId !== undefined ? deviceId : selectedVideoDeviceIdRef.current;
     try {
       setStatus("PROVISIONING MEDIA INPUTS...");
-      const model = models.realtime(getModelId());
+      stopLocalVideoStream();
 
-      const stream = await navigator.mediaDevices.getUserMedia({
-        // Explicit rather than relying on browser defaults — these actively
-        // reduce steady background noise (fan/AC hum, hiss) at the source,
-        // before it ever reaches the voice-activity gate below.
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-        // `ideal` (not a bare number) — a bare number can be treated as a
-        // hard requirement, which some external cameras satisfy by digitally
-        // cropping/zooming rather than reporting their natural wider field
-        // of view. `ideal` lets the camera pick its closest natural mode instead.
-        video: {
-          // Not using model.fps here on purpose — it can return a non-finite
-          // value (e.g. Infinity) for some models, which `|| 24` doesn't
-          // catch (only falsy values like 0/undefined/NaN trigger that
-          // fallback — Infinity is truthy and sails right through), and the
-          // browser then rejects the constraint outright.
-          frameRate: { ideal: 24 },
-          width: { ideal: 1920 },
-          height: { ideal: 1080 },
-        },
-      });
+      if (requestedId) {
+        selectedVideoDeviceIdRef.current = requestedId;
+        setSelectedVideoDeviceId(requestedId);
+      }
+
+      const stream = await openCameraStream(requestedId);
+      const videoTrack = stream.getVideoTracks()[0];
+      const activeDeviceId = videoTrack?.getSettings?.()?.deviceId;
+      const activeLabel = videoTrack?.label;
+      const requestedLabel =
+        selectedVideoDeviceLabelRef.current ||
+        videoDevices.find((device) => device.deviceId === requestedId)?.label ||
+        "the selected camera";
+
+      if (requestedId && activeDeviceId && activeDeviceId !== requestedId) {
+        stream.getTracks().forEach((track) => track.stop());
+        setStatus(
+          `HARDWARE ERROR: Could not open ${requestedLabel} — browser used a different camera. Close DroidCam/other apps using it and try again.`
+        );
+        return;
+      }
 
       localStreamRef.current = stream;
       if (localVideoRef.current) localVideoRef.current.srcObject = stream;
+
+      if (activeDeviceId) {
+        selectedVideoDeviceIdRef.current = activeDeviceId;
+        setSelectedVideoDeviceId(activeDeviceId);
+      }
+      if (activeLabel) {
+        selectedVideoDeviceLabelRef.current = activeLabel;
+      }
+      await refreshVideoDevices();
+      setCameraActive(true);
       setStatus("DEVICE READY // AWAITING DISPATCH");
       startMetricsDemux();
     } catch (err) {
@@ -814,6 +1237,16 @@ export default function App() {
       //   OverconstrainedError -> the requested resolution/framerate isn't supported by any mode
       const reason = err?.name ? `${err.name}${err.message ? ` — ${err.message}` : ""}` : (err?.message || "unknown error");
       setStatus(`HARDWARE ERROR: ${reason}`);
+    }
+  };
+
+  const handleVideoDeviceChange = async (deviceId) => {
+    selectedVideoDeviceIdRef.current = deviceId;
+    const picked = videoDevices.find((device) => device.deviceId === deviceId);
+    selectedVideoDeviceLabelRef.current = picked?.label || "";
+    setSelectedVideoDeviceId(deviceId);
+    if (cameraActive && !isRunning) {
+      await startCamera(deviceId);
     }
   };
 
@@ -889,10 +1322,11 @@ export default function App() {
     // never the original audio. Which pipeline actually runs depends on
     // voiceEngine — the two are mutually exclusive per session.
     let streamForDecart = localStreamRef.current;
+    let convertedAudioStream = null;
     if (voiceChangerEnabled) {
       const hasValidVoice = voiceEngine === "realtime" ? !!rtcSelectedVoiceId : !!selectedVoiceId;
       if (hasValidVoice) {
-        const convertedAudioStream =
+        convertedAudioStream =
           voiceEngine === "realtime"
             ? await startRealtimeVoiceCapture(localStreamRef.current)
             : startVoiceChangerCapture(localStreamRef.current);
@@ -905,6 +1339,9 @@ export default function App() {
         }
       }
     }
+
+    const companionAudioStream = convertedAudioStream || localStreamRef.current;
+    await startCompanionAudioExport(companionAudioStream);
 
     try {
       const client = createDecartClient({ apiKey: MY_DECART_KEY });
@@ -1024,186 +1461,78 @@ export default function App() {
   const creditPercent = Math.min(100, (credits / 1000) * 100); // 1,000 credits ≈ the smallest top-up tier now
   const isLowCredit = credits <= LOW_CREDIT_THRESHOLD;
 
-  // No access token yet — show a simple entry gate instead of the app.
-  // Admin generates tokens via the /admin.html page on the ledger backend.
+  // No access token yet — show sign-in gate (landing page lives at /).
   if (!accessToken) {
     return (
-      <div style={styles.gateContainer} className="itc-app">
-        <style>{`
-          @import url('https://fonts.googleapis.com/css2?family=Inter:wght@600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
-          html, body, #root { margin: 0; padding: 0; width: 100%; height: 100%; }
-          *, *::before, *::after { box-sizing: border-box; }
-          .itc-whatsapp-link { color: #34d399; text-decoration: none; transition: opacity 0.15s ease; }
-          .itc-whatsapp-link:hover { opacity: 0.8; text-decoration: underline; }
-          @media (max-width: 480px) {
-            .itc-gate-card { padding: 24px 20px !important; }
-          }
-        `}</style>
-        <div style={styles.gateCard} className="itc-gate-card">
-          <div style={styles.gateBrand}>🛸 InspireTech</div>
-          <h1 style={styles.gateTitle}>Enter your access token</h1>
-          <p style={styles.gateSubtitle}>
-            You should have received this from whoever gave you access. Paste it below to continue.
-          </p>
-          <input
-            type="text"
-            value={tokenInput}
-            onChange={(e) => setTokenInput(e.target.value)}
-            placeholder="e.g. 3f2a9c1e-4b6d-4a8e-9c2f-1d7e5a6b8c90"
-            style={styles.gateInput}
-            className="itc-input"
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && tokenInput.trim()) {
-                setTokenError("");
-                saveAccessToken(tokenInput.trim());
-              }
-            }}
-          />
-          {tokenError && <div style={styles.gateError}>{tokenError}</div>}
-          <button
-            style={styles.gateButton}
-            className="itc-btn itc-btn-primary"
-            disabled={!tokenInput.trim()}
-            onClick={() => {
-              setTokenError("");
-              saveAccessToken(tokenInput.trim());
-            }}
-          >
-            Continue
-          </button>
-          <a
-            href={`https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(WHATSAPP_DEFAULT_MESSAGE)}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            style={styles.gateWhatsapp}
-            className="itc-whatsapp-link"
-          >
-            💬 Need help or don't have a token? Message us on WhatsApp
-          </a>
-        </div>
-      </div>
+      <AccessGate
+        companionMode={isCompanionApp()}
+        onAuthenticated={handleGateAuthenticated}
+        tokenError={tokenError}
+        loading={gateLoading}
+        setupMessage={gateSetupMessage}
+      />
     );
   }
 
   return (
     <div style={styles.appContainer} className="itc-app">
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
-        html, body, #root { margin: 0; padding: 0; width: 100%; height: 100%; }
-        *, *::before, *::after { box-sizing: border-box; }
-        :focus-visible { outline: 2px solid #5b8def; outline-offset: 2px; border-radius: 4px; }
-        .itc-btn { position: relative; transition: transform 0.18s cubic-bezier(0.4,0,0.2,1), box-shadow 0.18s cubic-bezier(0.4,0,0.2,1), filter 0.18s cubic-bezier(0.4,0,0.2,1), border-color 0.18s cubic-bezier(0.4,0,0.2,1), background-color 0.18s cubic-bezier(0.4,0,0.2,1); }
-        .itc-btn:hover:not(:disabled) { transform: translateY(-1px); filter: brightness(1.08); }
-        .itc-btn:active:not(:disabled) { transform: translateY(0); filter: brightness(0.94); }
-        .itc-btn:disabled { cursor: not-allowed; }
-        .itc-btn-primary:hover:not(:disabled) { box-shadow: 0 10px 24px -8px rgba(91,141,239,0.55), 0 0 0 1px rgba(91,141,239,0.35); }
-        .itc-btn-secondary:hover:not(:disabled) { border-color: #3a4356 !important; background-color: #1a2030 !important; color: #e6e9ef !important; box-shadow: 0 8px 18px -8px rgba(0,0,0,0.55); }
-        .itc-btn-start:hover:not(:disabled) { box-shadow: 0 10px 26px -8px rgba(34,197,94,0.5); }
-        .itc-btn-stop:hover:not(:disabled) { box-shadow: 0 10px 26px -8px rgba(240,87,106,0.5); }
-        .itc-btn-topup:hover:not(:disabled) { box-shadow: 0 10px 24px -8px rgba(91,141,239,0.55); border-color: #5b8def !important; }
-        .itc-select { transition: border-color 0.18s ease, box-shadow 0.18s ease; cursor: pointer; }
-        .itc-select:hover, .itc-select:focus { border-color: #5b8def !important; box-shadow: 0 0 0 3px rgba(91,141,239,0.14); outline: none; }
-        .itc-range { cursor: pointer; transition: filter 0.18s ease; }
-        .itc-range:hover { filter: brightness(1.15); }
-        .itc-range:disabled { cursor: not-allowed; opacity: 0.45; filter: none; }
-        .itc-checkbox { cursor: pointer; transition: transform 0.15s cubic-bezier(0.4,0,0.2,1); }
-        .itc-checkbox:hover { transform: scale(1.12); }
-        .itc-checkbox:disabled { cursor: not-allowed; opacity: 0.45; transform: none; }
-        .itc-select:disabled { cursor: not-allowed; opacity: 0.45; }
-        .itc-card { transition: border-color 0.2s ease, box-shadow 0.2s ease; }
-        .itc-card:hover { border-color: #2a3348; box-shadow: 0 10px 28px -18px rgba(0,0,0,0.8); }
-        @keyframes radarPing { 0% { transform: scale(0.55); opacity: 0.85; } 70% { transform: scale(1.6); opacity: 0; } 100% { transform: scale(1.6); opacity: 0; } }
-        @keyframes creditPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
-
-        ::-webkit-scrollbar { width: 8px; height: 8px; }
-        ::-webkit-scrollbar-track { background: #05070c; }
-        ::-webkit-scrollbar-thumb { background: #1e2537; border-radius: 4px; }
-        ::-webkit-scrollbar-thumb:hover { background: #2c3550; }
-
-        /* ============================================================
-           RESPONSIVE / MOBILE LAYOUT
-           ============================================================ */
-        @media (max-width: 900px) {
-          html, body, #root { height: auto; min-height: 100%; }
-          .itc-app { height: auto !important; min-height: 100dvh !important; overflow: visible !important; }
-          .itc-main-workspace { flex-direction: column !important; overflow: visible !important; }
-          .itc-sidebar { width: 100% !important; max-height: none !important; border-right: none !important; border-bottom: 1px solid #1a2030 !important; overflow-y: visible !important; }
-          .itc-output-canvas { overflow: visible !important; }
-          .itc-canvas-control-bar { flex-direction: column !important; align-items: stretch !important; gap: 12px !important; }
-          .itc-action-row { width: 100% !important; }
-          .itc-action-row .itc-btn { flex: 1 1 0 !important; padding: 14px 12px !important; font-size: 13px !important; }
-          .itc-canvas-viewport { padding: 12px !important; }
-
-          /* Output monitor: on mobile this becomes a fixed half-screen-height
-             box instead of scaling by the desktop 860:520 aspect ratio, which
-             would otherwise leave it quite short on a narrow phone. */
-          .itc-fixed-output { width: 100% !important; max-width: 100% !important; aspect-ratio: unset !important; height: 50vh !important; height: 50dvh !important; }
-
-          /* Local camera preview: bigger on mobile so it's actually usable
-             for framing yourself, instead of the small desktop sidebar thumbnail. */
-          .itc-local-video-wrapper { aspect-ratio: unset !important; height: 42vh !important; height: 42dvh !important; }
-
-          .itc-credit-grid { grid-template-columns: repeat(2, 1fr) !important; }
-          .itc-status-ribbon { width: 100% !important; }
-          .itc-top-header { padding: 10px 14px !important; }
-        }
-
-        @media (max-width: 480px) {
-          .itc-canvas-title { font-size: 12px !important; }
-          .itc-canvas-subtitle { font-size: 10px !important; }
-          .itc-status-pill, .itc-status-pill-last { font-size: 10px !important; padding: 4px 8px !important; }
-          .itc-section-card { padding: 12px !important; }
-          .itc-action-row { flex-direction: column !important; }
-          .itc-range { width: 100% !important; }
-          .itc-param-slider-group { width: 60% !important; }
-          .itc-checkbox { width: 20px !important; height: 20px !important; }
-          .itc-btn, select.itc-select { min-height: 44px !important; }
-          .itc-local-video-wrapper { height: 38vh !important; height: 38dvh !important; }
-          .itc-fixed-output { height: 46vh !important; height: 46dvh !important; }
-        }
-      `}</style>
-
-      <header style={styles.topHeader} className="itc-top-header">
-        <div style={styles.brandingGroup}>
-          <span style={styles.brandIcon}>🛸</span>
-          <div style={styles.logoText}>
-            InspireTech<span style={styles.logoVersion}>v2.8</span>
+      <header className="itc-top-header">
+        <div className="itc-header-brand">
+          <span className="itc-header-logo-mark">🛸</span>
+          <div>
+            <div className="itc-header-logo-text">
+              InspireTech
+              <span className="itc-header-version">v2.8</span>
+            </div>
           </div>
-          <button
-            style={styles.switchTokenLink}
-            onClick={() => {
-              if (isRunning) stopTransformation();
-              clearAccessToken();
-            }}
-          >
-            switch token
-          </button>
+          <div className="itc-header-actions">
+            <button
+              type="button"
+              className="itc-header-link"
+              onClick={() => {
+                if (isRunning) stopTransformation();
+                clearAccessToken();
+              }}
+            >
+              Switch token
+            </button>
+            {!isCompanionApp() && (
+              <Link to="/" className="itc-header-link">
+                Home
+              </Link>
+            )}
+          </div>
         </div>
 
-        <div style={styles.systemStatusRibbon} className="itc-status-ribbon">
-          <div style={styles.statusPill} className="itc-status-pill">
-            <span style={styles.metaLabel}>ENGINE_STATUS:</span>
-            <span style={{...styles.metaValue, color: isRunning ? "#22c55e" : "#f5a524"}}>{status}</span>
+        <div className="itc-status-ribbon">
+          <div className="itc-status-chip">
+            <span className="itc-status-chip-label">Status</span>
+            <span className={`itc-status-chip-value${isRunning ? " is-live" : ""}`} style={!isRunning ? { color: c.amber } : undefined}>
+              {formatStatusDisplay(status)}
+            </span>
           </div>
-          <div style={styles.statusPill} className="itc-status-pill">
-            <span style={styles.metaLabel}>FPS:</span>
-            <span style={styles.metaValue}>{fps || "--"}</span>
+          <div className="itc-status-chip">
+            <span className="itc-status-chip-label">FPS</span>
+            <span className="itc-status-chip-value itc-mono">{fps || "—"}</span>
           </div>
-          <div style={styles.statusPill} className="itc-status-pill">
-            <span style={styles.metaLabel}>LATENCY:</span>
-            <span style={styles.metaValue}>{latency}</span>
+          <div className="itc-status-chip">
+            <span className="itc-status-chip-label">Latency</span>
+            <span className="itc-status-chip-value itc-mono">{latency}</span>
           </div>
-          <div style={styles.statusPill} className="itc-status-pill">
-            <span style={styles.metaLabel}>SESSION_TIME:</span>
-            <span style={styles.metaValue}>
+          <div className="itc-status-chip">
+            <span className="itc-status-chip-label">Session</span>
+            <span className="itc-status-chip-value itc-mono">
               {isRunning ? formatTime(elapsedSeconds) : "00:00"}
             </span>
           </div>
-          <div style={styles.statusPillLast} className="itc-status-pill-last">
-            <span style={styles.metaLabel}>CREDITS:</span>
-            <span style={{...styles.metaValue, color: isLowCredit ? "#f0576a" : "#5b8def", animation: isLowCredit && isRunning ? "creditPulse 1s infinite" : "none"}}>
-              {creditsLoaded ? `${credits} ` : "…"}
-              {creditsLoaded && <span style={styles.creditsDollar}>({formatNaira(credits)})</span>}
+          <div className="itc-status-chip">
+            <span className="itc-status-chip-label">Credits</span>
+            <span
+              className={`itc-status-chip-value itc-mono${isLowCredit ? " is-danger" : ""}`}
+              style={{ animation: isLowCredit && isRunning ? "creditPulse 1s infinite" : "none" }}
+            >
+              {creditsLoaded ? credits : "…"}
+              {creditsLoaded && <span style={styles.creditsDollar}> ({formatNaira(credits)})</span>}
             </span>
           </div>
         </div>
@@ -1213,12 +1542,43 @@ export default function App() {
         <aside style={styles.controlSidebar} className="itc-sidebar">
 
           <div style={styles.sectionCard} className="itc-card itc-section-card">
-            <div style={styles.cardHeaderStrip}>
-              <span style={styles.cardHeaderIcon}>⚙️</span> I/O PERIPHERAL SELECTION
+            <div className="itc-studio-card-title">
+              <span>⚙️</span> Camera & inputs
             </div>
+            <div style={styles.voiceSelectGroup}>
+              <label className="itc-studio-label" style={styles.paramLabel}>Video input</label>
+              <select
+                value={selectedVideoDeviceId}
+                onChange={(e) => handleVideoDeviceChange(e.target.value)}
+                disabled={isRunning}
+                style={styles.voiceSelect}
+                className="itc-select"
+              >
+                <option value="">
+                  {videoDevices.length === 0 ? "Default camera (allow access to list devices)" : "Default camera"}
+                </option>
+                {videoDevices.map((device, index) => (
+                  <option key={device.deviceId || `camera-${index}`} value={device.deviceId}>
+                    {device.label || `Camera ${index + 1}`}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div style={styles.paramsLockedNote}>
+              {isRunning
+                ? "Camera locked while live — stop transformation to switch"
+                : cameraActive
+                ? "Change the dropdown to switch cameras instantly."
+                : "Pick a camera, then click Start Hardware Camera. Device names appear after camera permission is granted."}
+            </div>
+            {typeof window !== "undefined" && window.inspiretechCompanion && (
+              <div style={styles.compatNote}>
+                <strong>Calling app setup:</strong> Camera → <strong>InspireTech Camera</strong>. Microphone → <strong>CABLE Output (VB-Audio Virtual Cable)</strong>. Voice-changed audio routes there while live. WhatsApp Desktop cannot see InspireTech Camera — use Telegram/Discord or WhatsApp Web.
+              </div>
+            )}
             <div style={styles.buttonStack}>
-              <button style={styles.primaryButton} className="itc-btn itc-btn-primary" onClick={startCamera}>
-                Start Hardware Camera
+              <button style={styles.primaryButton} className="itc-btn itc-btn-primary" onClick={() => startCamera()} disabled={isRunning}>
+                {cameraActive ? "Restart Hardware Camera" : "Start Hardware Camera"}
               </button>
               <button style={styles.secondaryButton} className="itc-btn itc-btn-secondary" onClick={() => fileInputRef.current?.click()}>
                 Upload Reference Image
@@ -1229,8 +1589,8 @@ export default function App() {
 
           {/* --- Real credit meter card --- */}
           <div style={styles.sectionCard} className="itc-card itc-section-card">
-            <div style={styles.cardHeaderStrip}>
-              <span style={styles.cardHeaderIcon}>💳</span> CREDIT BALANCE
+            <div className="itc-studio-card-title">
+              <span>💳</span> Credit balance
             </div>
             {ledgerUnreachable ? (
               <div style={styles.ledgerErrorNote}>
@@ -1243,7 +1603,7 @@ export default function App() {
                   <span style={styles.creditBalanceSub}>credits · {creditsLoaded ? formatNaira(credits) : "—"}</span>
                 </div>
                 <div style={styles.creditBarTrack}>
-                  <div style={{...styles.creditBarFill, width: `${creditPercent}%`, backgroundColor: isLowCredit ? "#f0576a" : "#5b8def"}} />
+                  <div style={{...styles.creditBarFill, width: `${creditPercent}%`, backgroundColor: isLowCredit ? c.rose : c.primary}} />
                 </div>
                 <div style={styles.creditMeta}>
                   <span>~{DISPLAY_CREDITS_PER_SECOND} credits/sec while live (billed server-side)</span>
@@ -1261,24 +1621,24 @@ export default function App() {
           </div>
 
           <div style={styles.sectionCard} className="itc-card itc-section-card">
-            <div style={styles.cardHeaderStrip}>
-              <span style={styles.cardHeaderIcon}>🖼️</span> REFERENCE IMAGE
+            <div className="itc-studio-card-title">
+              <span>🖼️</span> Reference image
             </div>
             <div style={styles.imageBox}>
               {imagePreview ? (
                 <img src={imagePreview} alt="Target Reference" style={styles.fittedImage} />
               ) : (
-                <div style={styles.emptyBoxPlaceholder}>NO REFERENCE IMAGE UPLOADED</div>
+                <div style={styles.emptyBoxPlaceholder}>No reference image yet</div>
               )}
             </div>
           </div>
 
           <div style={styles.sectionCard} className="itc-card itc-section-card">
-            <div style={styles.cardHeaderStrip}>
-              <span style={styles.cardHeaderIcon}>🎙️</span> VOICE CHANGER
+            <div className="itc-studio-card-title">
+              <span>🎙️</span> Voice changer
             </div>
             <div style={styles.parameterRow}>
-              <label style={styles.paramLabel}>ENABLE VOICE CHANGER</label>
+              <label className="itc-studio-label" style={styles.paramLabel}>Enable voice changer</label>
               <input
                 type="checkbox"
                 checked={voiceChangerEnabled}
@@ -1291,7 +1651,7 @@ export default function App() {
             {voiceChangerEnabled && (
               <>
                 <div style={styles.voiceSelectGroup}>
-                  <label style={styles.paramLabel}>ENGINE</label>
+                  <label className="itc-studio-label" style={styles.paramLabel}>Engine</label>
                   <select
                     value={voiceEngine}
                     onChange={(e) => setVoiceEngine(e.target.value)}
@@ -1306,7 +1666,7 @@ export default function App() {
 
                 {voiceEngine === "elevenlabs" ? (
                   <div style={styles.voiceSelectGroup}>
-                    <label style={styles.paramLabel}>TARGET VOICE</label>
+                    <label className="itc-studio-label" style={styles.paramLabel}>Target voice</label>
                     <select
                       value={selectedVoiceId}
                       onChange={(e) => setSelectedVoiceId(e.target.value)}
@@ -1324,7 +1684,7 @@ export default function App() {
                   </div>
                 ) : (
                   <div style={styles.voiceSelectGroup}>
-                    <label style={styles.paramLabel}>TARGET VOICE</label>
+                    <label className="itc-studio-label" style={styles.paramLabel}>Target voice</label>
                     <select
                       value={rtcSelectedVoiceId}
                       onChange={(e) => setRtcSelectedVoiceId(e.target.value)}
@@ -1354,22 +1714,22 @@ export default function App() {
                 ? "Locked while live — changes apply on next deploy"
                 : voiceEngine === "elevenlabs"
                 ? `Converts your voice in ~${VOICE_CHUNK_MS / 1000}s rolling clips — short delay per phrase, not instant.`
-                : "Continuous conversion via voice-rt-server — requires that service to be deployed and running."}
+                : "Continuous conversion via voice-rt-server. Requires a running RunPod pod, matching RTC_TICKET_SECRET, and RVC models in /models."}
             </div>
           </div>
 
           <div style={styles.sectionCard} className="itc-card itc-section-card">
-            <div style={styles.cardHeaderStrip}>
-              <span style={styles.cardHeaderIcon}>👁️</span> LOCAL CAPTURE INTERCEPT
+            <div className="itc-studio-card-title">
+              <span>👁️</span> Local preview
             </div>
             <div style={styles.sidebarVideoWrapper} className="itc-local-video-wrapper">
-              <video ref={localVideoRef} autoPlay playsInline muted style={styles.mirroredVideo} />
+              <video ref={localVideoRef} autoPlay playsInline muted style={styles.localPreviewVideo} className="itc-local-video" />
             </div>
           </div>
 
-          <div ref={creditSectionRef} style={{...styles.sectionCard, ...(showAddCredits ? styles.sectionCardAlert : {}), flex: 1}} className="itc-card itc-section-card">
-            <div style={styles.cardHeaderStrip}>
-              <span style={styles.cardHeaderIcon}>💳</span> BUY MORE CREDITS
+          <div ref={creditSectionRef} style={{...styles.sectionCard, ...(showAddCredits ? styles.sectionCardAlert : {})}} className="itc-card itc-section-card">
+            <div className="itc-studio-card-title">
+              <span>💳</span> Buy more credits
             </div>
             <p style={styles.modalSubtitle}>You can purchase more Credits to start generating</p>
             <div style={styles.creditCardGrid} className="itc-credit-grid">
@@ -1398,8 +1758,8 @@ export default function App() {
         <main style={styles.outputCanvas} className="itc-output-canvas">
           <div style={styles.canvasControlBar} className="itc-canvas-control-bar">
             <div style={styles.canvasTitleGroup}>
-              <h2 style={styles.canvasTitle} className="itc-canvas-title">OUTPUT MONITOR</h2>
-              <span style={styles.canvasSubtitle} className="itc-canvas-subtitle">Matrix Field Resolution: 1920x1080 (Lucy 2.5), scaled to fit viewport</span>
+              <h2 className="itc-canvas-title">Output monitor</h2>
+              <span className="itc-canvas-subtitle" style={styles.canvasSubtitle}>1920×1080 Lucy 2.5 output, scaled to fit your screen</span>
             </div>
             <div style={styles.actionRow} className="itc-action-row">
               <button
@@ -1408,7 +1768,7 @@ export default function App() {
                 onClick={startTransformation}
                 disabled={isRunning || !selectedFile || credits <= 0 || ledgerUnreachable}
               >
-                ⚡ START TRANSFORMATION
+                Start transformation
               </button>
               <button
                 style={{...styles.actionButton, ...styles.stopButton, opacity: !isRunning ? 0.5 : 1}}
@@ -1416,7 +1776,7 @@ export default function App() {
                 onClick={stopTransformation}
                 disabled={!isRunning}
               >
-                🛑 STOP TRANSFORMATION
+                Stop transformation
               </button>
               <button
                 style={{...styles.actionButton, ...styles.popOutButton, opacity: !pipSupported ? 0.5 : 1}}
@@ -1425,22 +1785,22 @@ export default function App() {
                 disabled={!pipSupported}
                 title={pipSupported ? "Pop the output video into its own floating window — capture that window in OBS/your calling app" : "Picture-in-Picture isn't supported in this browser — try Chrome or Edge"}
               >
-                {isPoppedOut ? "↩ Return to App" : "🗗 Pop Out for OBS"}
+                {isPoppedOut ? "Return to app" : "Pop out for OBS"}
               </button>
             </div>
           </div>
 
           <div style={styles.canvasViewportContainer} className="itc-canvas-viewport">
-            <div style={styles.outputColumn}>
+            <div style={styles.outputColumn} className="itc-output-column">
               {isRunning && (
                 <div style={styles.timerBadgeRow}>
                   <div style={styles.timerBadgeOutside}>{formatTime(elapsedSeconds)}</div>
-                  <div style={{...styles.timerBadgeOutside, color: isLowCredit ? "#f0576a" : "#5b8def"}}>
+                  <div style={{...styles.timerBadgeOutside, color: isLowCredit ? c.rose : c.primary}}>
                     {credits} credits left
                   </div>
                 </div>
               )}
-              <div style={styles.fixedOutputContainer} className="itc-fixed-output">
+              <div style={styles.fixedOutputContainer} className={`itc-fixed-output${isRunning ? " itc-live" : ""}`}>
                 <video ref={outputVideoRef} autoPlay playsInline style={styles.mirroredVideo} />
                 {!isRunning && (
                   <div style={styles.canvasOverlay}>
@@ -1449,10 +1809,10 @@ export default function App() {
                       <div style={styles.overlayPingDot} />
                     </div>
                     <div style={styles.overlayText}>
-                      {credits <= 0 && creditsLoaded ? "OUT OF CREDITS" : "PIPELINE DISPATCH DISCONNECTED"}
+                      {credits <= 0 && creditsLoaded ? "Out of credits" : "Not connected"}
                     </div>
                     <div style={styles.overlaySubtext}>
-                      {credits <= 0 && creditsLoaded ? "Add credits from the sidebar to redeploy." : "Awaiting initial backend WebRTC link execution sequence..."}
+                      {credits <= 0 && creditsLoaded ? "Add credits from the sidebar to continue." : "Upload a reference image, start your camera, then hit Start transformation."}
                     </div>
                   </div>
                 )}
@@ -1466,91 +1826,92 @@ export default function App() {
 }
 
 const styles = {
-  gateContainer: { backgroundColor: "#090b11", height: "100%", width: "100%", minHeight: "100vh", color: "#dde1e8", fontFamily: '"JetBrains Mono", Consolas, "Courier New", Monaco, monospace', display: "flex", alignItems: "center", justifyContent: "center", padding: "20px", boxSizing: "border-box" },
-  gateCard: { backgroundColor: "#0d111c", border: "1px solid #1a2030", borderRadius: "12px", padding: "32px", maxWidth: "420px", width: "100%", boxShadow: "0 30px 60px -20px rgba(0,0,0,0.8)" },
-  gateBrand: { fontSize: "14px", fontWeight: "800", fontFamily: '"Inter", system-ui, sans-serif', color: "#5b8def", marginBottom: "18px" },
-  gateTitle: { fontSize: "18px", fontWeight: "800", fontFamily: '"Inter", system-ui, sans-serif', color: "#f4f6fa", margin: "0 0 8px" },
-  gateSubtitle: { fontSize: "12px", color: "#6b7385", margin: "0 0 20px", lineHeight: "1.5" },
-  gateInput: { width: "100%", backgroundColor: "#05070c", color: "#e6e9ef", border: "1px solid #262e42", borderRadius: "6px", padding: "10px 12px", fontFamily: "inherit", fontSize: "12px", marginBottom: "8px" },
-  gateError: { fontSize: "11px", color: "#f0576a", marginBottom: "12px" },
-  gateButton: { width: "100%", backgroundColor: "#3f6fdb", backgroundImage: "linear-gradient(135deg, #6d97f2 0%, #3a63c7 100%)", color: "#fff", border: "1px solid rgba(109,151,242,0.4)", padding: "10px 14px", borderRadius: "6px", fontSize: "12px", fontWeight: "700", cursor: "pointer", fontFamily: "inherit", marginTop: "8px" },
+  gateContainer: { backgroundColor: c.bg, height: "100%", width: "100%", minHeight: "100vh", color: c.textSoft, fontFamily: f.sans, display: "flex", alignItems: "center", justifyContent: "center", padding: "20px", boxSizing: "border-box" },
+  gateCard: { backgroundColor: c.surface, border: `1px solid ${c.border}`, borderRadius: r.lg, padding: "32px", maxWidth: "420px", width: "100%", boxShadow: s.lg },
+  gateBrand: { fontSize: "14px", fontWeight: "800", fontFamily: f.sans, color: c.primary, marginBottom: "18px" },
+  gateTitle: { fontSize: "18px", fontWeight: "800", fontFamily: f.sans, color: c.text, margin: "0 0 8px" },
+  gateSubtitle: { fontSize: "12px", color: c.textMuted, margin: "0 0 20px", lineHeight: "1.5" },
+  gateInput: { width: "100%", backgroundColor: c.bg, color: c.textSoft, border: `1px solid ${c.border}`, borderRadius: r.sm, padding: "10px 12px", fontFamily: "inherit", fontSize: "12px", marginBottom: "8px" },
+  gateError: { fontSize: "11px", color: c.rose, marginBottom: "12px" },
+  gateButton: { width: "100%", backgroundImage: g.primary, color: "#fff", border: "1px solid rgba(129,140,248,0.4)", padding: "10px 14px", borderRadius: r.sm, fontSize: "12px", fontWeight: "700", cursor: "pointer", fontFamily: "inherit", marginTop: "8px" },
   gateWhatsapp: { display: "block", textAlign: "center", fontSize: "11px", marginTop: "18px", fontWeight: "600" },
-  appContainer: { backgroundColor: "#090b11", height: "100%", width: "100%", color: "#dde1e8", fontFamily: '"JetBrains Mono", Consolas, "Courier New", Monaco, monospace', display: "flex", flexDirection: "column", overflow: "hidden", margin: 0, padding: 0, boxSizing: "border-box" },
-  topHeader: { display: "flex", flexWrap: "wrap", rowGap: "8px", justifyContent: "space-between", alignItems: "center", padding: "8px 24px", minHeight: "56px", borderBottom: "1px solid #1a2030", backgroundColor: "#0d101a", backgroundImage: "linear-gradient(180deg, #0f1220 0%, #0d101a 100%)", flexShrink: 0, boxShadow: "0 1px 0 rgba(91,141,239,0.06)" },
+  appContainer: { backgroundColor: c.bg, height: "100dvh", maxHeight: "100dvh", width: "100%", color: c.textSoft, fontFamily: f.sans, display: "flex", flexDirection: "column", overflow: "hidden", margin: 0, padding: 0, boxSizing: "border-box" },
+  topHeader: { display: "flex", flexWrap: "wrap", rowGap: "8px", justifyContent: "space-between", alignItems: "center", padding: "6px 16px", minHeight: "48px", borderBottom: `1px solid ${c.border}`, backgroundImage: g.header, flexShrink: 0, boxShadow: "0 1px 0 rgba(129,140,248,0.08)" },
   brandingGroup: { display: "flex", alignItems: "center", gap: "12px", flexShrink: 0 },
-  brandIcon: { fontSize: "20px", color: "#5b8def", filter: "drop-shadow(0 0 6px rgba(91,141,239,0.4))" },
-  logoText: { fontSize: "17px", fontWeight: "800", fontFamily: '"Inter", system-ui, sans-serif', letterSpacing: "-0.01em", color: "#f4f6fa", display: "flex", alignItems: "baseline", gap: "8px" },
-  logoVersion: { fontSize: "10px", fontWeight: "700", fontFamily: '"JetBrains Mono", monospace', color: "#7c8698", backgroundColor: "#161b28", border: "1px solid #232a3c", borderRadius: "4px", padding: "2px 6px", letterSpacing: "0.03em" },
-  switchTokenLink: { background: "transparent", border: "none", color: "#5c6478", fontSize: "10px", fontFamily: "inherit", cursor: "pointer", textDecoration: "underline", padding: 0, marginLeft: "4px" },
-  systemStatusRibbon: { display: "flex", flexWrap: "wrap", gap: "0px", backgroundColor: "#05070c", padding: "4px", borderRadius: "8px", border: "1px solid #1a2030" },
-  statusPill: { backgroundColor: "transparent", padding: "4px 12px", display: "flex", alignItems: "center", gap: "8px", fontSize: "11px", borderRight: "1px solid #1a2030" },
+  brandIcon: { fontSize: "20px", color: c.primary, filter: "drop-shadow(0 0 8px rgba(129,140,248,0.45))" },
+  logoText: { fontSize: "17px", fontWeight: "800", fontFamily: f.sans, letterSpacing: "-0.01em", color: c.text, display: "flex", alignItems: "baseline", gap: "8px" },
+  logoVersion: { fontSize: "10px", fontWeight: "700", fontFamily: f.mono, color: c.textDim, backgroundColor: c.bgElevated, border: `1px solid ${c.border}`, borderRadius: "4px", padding: "2px 6px", letterSpacing: "0.03em" },
+  switchTokenLink: { background: "transparent", border: "none", color: c.textDim, fontSize: "10px", fontFamily: "inherit", cursor: "pointer", textDecoration: "underline", padding: 0, marginLeft: "4px" },
+  homeLink: { color: c.textDim, fontSize: "10px", fontFamily: "inherit", textDecoration: "underline", marginLeft: "8px" },
+  systemStatusRibbon: { display: "flex", flexWrap: "wrap", gap: "0px", backgroundColor: c.bg, padding: "4px", borderRadius: r.sm, border: `1px solid ${c.border}` },
+  statusPill: { backgroundColor: "transparent", padding: "4px 12px", display: "flex", alignItems: "center", gap: "8px", fontSize: "11px", borderRight: `1px solid ${c.border}` },
   statusPillLast: { backgroundColor: "transparent", padding: "4px 12px", display: "flex", alignItems: "center", gap: "8px", fontSize: "11px" },
-  metaLabel: { color: "#5c6478", fontWeight: "600" },
-  metaValue: { color: "#5b8def", fontWeight: "700", transition: "color 0.25s ease" },
-  creditsDollar: { color: "#5c6478", fontWeight: "600", fontSize: "10px" },
-  mainWorkspace: { display: "flex", flex: 1, width: "100%", overflow: "hidden", boxSizing: "border-box" },
-  controlSidebar: { width: "300px", borderRight: "1px solid #1a2030", backgroundColor: "#0a0d15", display: "flex", flexDirection: "column", gap: "1px", overflowY: "auto", padding: "12px", boxSizing: "border-box" },
-  sectionCard: { backgroundColor: "#0d111c", border: "1px solid #1a2030", borderRadius: "8px", padding: "14px", marginBottom: "12px", display: "flex", flexDirection: "column", boxShadow: "0 1px 0 rgba(255,255,255,0.02) inset, 0 6px 16px -14px rgba(0,0,0,0.8)" },
-  cardHeaderStrip: { fontSize: "11px", fontWeight: "700", color: "#8b93a7", letterSpacing: "0.08em", display: "flex", alignItems: "center", gap: "6px", marginBottom: "12px", borderBottom: "1px solid #1a2030", paddingBottom: "6px" },
-  cardHeaderIcon: { fontSize: "12px" },
+  metaLabel: { color: c.textDim, fontWeight: "600" },
+  metaValue: { color: c.primary, fontWeight: "700", transition: "color 0.3s cubic-bezier(0.4,0,0.2,1)" },
+  creditsDollar: { color: c.textDim, fontWeight: "500", fontSize: "0.6875rem" },
+  mainWorkspace: { display: "flex", flex: 1, width: "100%", minHeight: 0, overflow: "hidden", boxSizing: "border-box" },
+  controlSidebar: { width: "260px", flexShrink: 0, borderRight: `1px solid ${c.border}`, backgroundColor: c.bgElevated, display: "flex", flexDirection: "column", gap: "1px", overflowY: "auto", padding: "8px", boxSizing: "border-box" },
+  sectionCard: { backgroundColor: c.surface, border: `1px solid ${c.border}`, borderRadius: r.md, padding: "12px", marginBottom: "8px", display: "flex", flexDirection: "column", boxShadow: "0 1px 0 rgba(255,255,255,0.03) inset, 0 6px 16px -14px rgba(0,0,0,0.8)" },
   buttonStack: { display: "flex", flexDirection: "column", gap: "8px" },
-  primaryButton: { backgroundColor: "#3f6fdb", backgroundImage: "linear-gradient(135deg, #6d97f2 0%, #3a63c7 100%)", color: "#fff", border: "1px solid rgba(109,151,242,0.4)", padding: "10px 14px", borderRadius: "6px", fontSize: "12px", fontWeight: "600", cursor: "pointer", fontFamily: "inherit", textAlign: "left", boxShadow: "0 4px 12px -6px rgba(63,111,219,0.55)" },
-  secondaryButton: { backgroundColor: "#141a28", color: "#9aa2b6", border: "1px solid #262e42", padding: "10px 14px", borderRadius: "6px", fontSize: "12px", fontWeight: "600", cursor: "pointer", fontFamily: "inherit", textAlign: "left" },
-  imageBox: { height: "auto", backgroundColor: "#05070c", borderRadius: "6px", border: "1px dashed #262e42", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", minHeight: "80px" },
-  emptyBoxPlaceholder: { fontSize: "10px", color: "#454e63", letterSpacing: "0.05em" },
-  sidebarVideoWrapper: { aspectRatio: "3/4", backgroundColor: "#05070c", borderRadius: "6px", overflow: "hidden", border: "1px solid #1a2030" },
-  parameterRow: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px", fontSize: "11px" },
-  paramLabel: { color: "#6b7385", fontWeight: "600" },
+  primaryButton: { backgroundImage: g.primary, color: "#fff", border: "1px solid rgba(129,140,248,0.4)", padding: "10px 14px", borderRadius: r.sm, fontSize: "0.8125rem", fontWeight: "600", cursor: "pointer", fontFamily: "inherit", textAlign: "left", boxShadow: "0 4px 14px -6px rgba(99,102,241,0.55)" },
+  secondaryButton: { backgroundColor: c.bgElevated, color: c.textMuted, border: `1px solid ${c.border}`, padding: "10px 14px", borderRadius: r.sm, fontSize: "0.8125rem", fontWeight: "600", cursor: "pointer", fontFamily: "inherit", textAlign: "left" },
+  imageBox: { height: "auto", backgroundColor: c.bg, borderRadius: r.sm, border: `1px dashed ${c.border}`, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", minHeight: "64px", maxHeight: "100px" },
+  emptyBoxPlaceholder: { fontSize: "0.75rem", color: c.textDim },
+  sidebarVideoWrapper: { position: "relative", width: "100%", aspectRatio: "16/9", backgroundColor: c.bg, borderRadius: r.sm, overflow: "hidden", border: `1px solid ${c.border}` },
+  localPreviewVideo: { position: "absolute", inset: 0, display: "block", width: "100%", height: "100%", objectFit: "contain", objectPosition: "center", transform: "scaleX(-1)", backgroundColor: c.bg },
+  parameterRow: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px", fontSize: "0.8125rem" },
+  paramLabel: { color: c.textMuted, fontWeight: "500", fontSize: "0.75rem" },
   paramSliderGroup: { display: "flex", alignItems: "center", gap: "8px" },
-  paramSlider: { width: "100px", accentColor: "#5b8def" },
-  paramValue: { color: "#5b8def", fontWeight: "700", fontSize: "11px", minWidth: "32px", textAlign: "right" },
-  paramCheckbox: { width: "14px", height: "14px", accentColor: "#5b8def" },
-  paramSelect: { backgroundColor: "#05070c", color: "#e6e9ef", border: "1px solid #262e42", borderRadius: "5px", padding: "4px 8px", fontFamily: "inherit", fontSize: "11px" },
+  paramSlider: { width: "100px", accentColor: c.primary },
+  paramValue: { color: c.primary, fontWeight: "700", fontSize: "11px", minWidth: "32px", textAlign: "right" },
+  paramCheckbox: { width: "14px", height: "14px", accentColor: c.primary },
+  paramSelect: { backgroundColor: c.bg, color: c.textSoft, border: `1px solid ${c.border}`, borderRadius: "5px", padding: "4px 8px", fontFamily: "inherit", fontSize: "11px" },
   voiceSelectGroup: { display: "flex", flexDirection: "column", gap: "6px", marginBottom: "10px" },
-  voiceSelect: { width: "100%", maxWidth: "100%", boxSizing: "border-box", backgroundColor: "#05070c", color: "#e6e9ef", border: "1px solid #262e42", borderRadius: "5px", padding: "6px 8px", fontFamily: "inherit", fontSize: "11px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
-  paramsLockedNote: { fontSize: "10px", color: "#5c6478", fontStyle: "italic", marginTop: "4px", paddingTop: "8px", borderTop: "1px solid #1a2030" },
+  voiceSelect: { width: "100%", maxWidth: "100%", boxSizing: "border-box", backgroundColor: c.bg, color: c.textSoft, border: `1px solid ${c.border}`, borderRadius: "5px", padding: "6px 8px", fontFamily: "inherit", fontSize: "11px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+  paramsLockedNote: { fontSize: "10px", color: c.textDim, fontStyle: "italic", marginTop: "4px", paddingTop: "8px", borderTop: `1px solid ${c.border}` },
+  compatNote: { fontSize: "10px", color: c.sky, lineHeight: 1.45, marginTop: "10px", padding: "10px", backgroundColor: "rgba(99,102,241,0.08)", border: `1px solid rgba(129,140,248,0.25)`, borderRadius: r.sm },
   creditBalanceRow: { display: "flex", alignItems: "baseline", gap: "8px", marginBottom: "8px" },
-  creditBalanceNumber: { fontSize: "22px", fontWeight: "800", fontFamily: '"Inter", system-ui, sans-serif', color: "#f4f6fa" },
-  creditBalanceSub: { fontSize: "10px", color: "#5c6478" },
-  creditBarTrack: { width: "100%", height: "6px", borderRadius: "3px", backgroundColor: "#161b28", overflow: "hidden", marginBottom: "8px" },
-  creditBarFill: { height: "100%", borderRadius: "3px", transition: "width 0.6s linear, background-color 0.3s ease" },
-  creditMeta: { display: "flex", flexDirection: "column", gap: "2px", fontSize: "10px", color: "#5c6478", marginBottom: "10px" },
-  ledgerErrorNote: { fontSize: "10px", color: "#f0576a", lineHeight: "1.5", marginBottom: "10px" },
-  topUpButton: { backgroundColor: "#141a28", color: "#9aa2b6", border: "1px dashed #3a4356", padding: "8px 12px", borderRadius: "6px", fontSize: "11px", fontWeight: "600", cursor: "pointer", fontFamily: "inherit" },
-  modalSubtitle: { fontSize: "11px", color: "#6b7385", margin: "0 0 14px" },
+  creditBalanceNumber: { fontSize: "22px", fontWeight: "800", fontFamily: f.sans, color: c.text },
+  creditBalanceSub: { fontSize: "10px", color: c.textDim },
+  creditBarTrack: { width: "100%", height: "6px", borderRadius: "3px", backgroundColor: c.bgElevated, overflow: "hidden", marginBottom: "8px" },
+  creditBarFill: { height: "100%", borderRadius: "3px", transition: "width 0.5s cubic-bezier(0.4,0,0.2,1), background-color 0.3s cubic-bezier(0.4,0,0.2,1)" },
+  creditMeta: { display: "flex", flexDirection: "column", gap: "2px", fontSize: "10px", color: c.textDim, marginBottom: "10px" },
+  ledgerErrorNote: { fontSize: "10px", color: c.rose, lineHeight: "1.5", marginBottom: "10px" },
+  topUpButton: { backgroundColor: c.bgElevated, color: c.textMuted, border: `1px dashed ${c.borderLight}`, padding: "8px 12px", borderRadius: r.sm, fontSize: "11px", fontWeight: "600", cursor: "pointer", fontFamily: "inherit" },
+  modalSubtitle: { fontSize: "11px", color: c.textMuted, margin: "0 0 14px" },
   creditCardGrid: { display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "10px" },
-  creditCard: { position: "relative", backgroundColor: "#05070c", border: "1px solid #1a2030", borderRadius: "10px", padding: "14px 8px", display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center", gap: "4px" },
-  creditCardPopular: { border: "1px solid #e6e9ef", boxShadow: "0 0 0 1px rgba(230,233,239,0.15)" },
-  popularBadge: { position: "absolute", top: "-9px", left: "50%", transform: "translateX(-50%)", backgroundColor: "#3f6fdb", color: "#fff", fontSize: "8px", fontWeight: "700", padding: "2px 8px", borderRadius: "999px", letterSpacing: "0.04em", whiteSpace: "nowrap" },
-  creditCardIcon: { width: "28px", height: "28px", borderRadius: "50%", backgroundColor: "#1c2333", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "11px", color: "#7c8698", marginBottom: "4px" },
-  creditCardIconPopular: { backgroundColor: "#3f6fdb", color: "#fff" },
-  creditCardAmount: { fontSize: "14px", fontWeight: "800", fontFamily: '"Inter", system-ui, sans-serif', color: "#f4f6fa" },
-  creditCardLabel: { fontSize: "9px", color: "#6b7385", marginBottom: "6px" },
-  creditCardBuyBtn: { width: "100%", backgroundColor: "transparent", color: "#e6e9ef", border: "1px solid #2a3348", padding: "6px 6px", borderRadius: "999px", fontSize: "10px", fontWeight: "600", cursor: "pointer", fontFamily: "inherit" },
-  creditCardBuyBtnPopular: { backgroundColor: "#f4f6fa", color: "#090b11", border: "1px solid #f4f6fa" },
-  modalNote: { fontSize: "9px", color: "#454e63", fontStyle: "italic", marginTop: "12px", textAlign: "center" },
-  sectionCardAlert: { border: "1px solid #f0576a", boxShadow: "0 0 0 3px rgba(240,87,106,0.15)" },
-  outputCanvas: { flex: 1, display: "flex", flexDirection: "column", backgroundColor: "#050710", overflow: "hidden" },
-  canvasControlBar: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "16px 24px", borderBottom: "1px solid #1a2030", backgroundColor: "#0d101a", flexShrink: 0 },
-  canvasTitleGroup: { display: "flex", flexDirection: "column", gap: "2px" },
-  canvasTitle: { fontSize: "14px", fontWeight: "700", color: "#f4f6fa", margin: 0, letterSpacing: "0.05em" },
-  canvasSubtitle: { fontSize: "11px", color: "#5c6478" },
-  actionRow: { display: "flex", gap: "10px" },
-  actionButton: { border: "1px solid transparent", padding: "10px 20px", borderRadius: "6px", fontSize: "12px", fontWeight: "700", cursor: "pointer", fontFamily: "inherit", letterSpacing: "0.02em" },
-  startButton: { backgroundColor: "#22c55e", backgroundImage: "linear-gradient(135deg, #4ade80 0%, #16a34a 100%)", color: "#fff", boxShadow: "0 4px 14px -6px rgba(34,197,94,0.5)" },
-  stopButton: { backgroundColor: "#f0576a", backgroundImage: "linear-gradient(135deg, #fb7185 0%, #dc3a52 100%)", color: "#fff", boxShadow: "0 4px 14px -6px rgba(240,87,106,0.5)" },
-  popOutButton: { backgroundColor: "#141a28", color: "#9aa2b6", border: "1px solid #262e42" },
-  canvasViewportContainer: { flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: "20px", overflow: "hidden" },
-  outputColumn: { display: "flex", flexDirection: "column", alignItems: "center", gap: "10px", width: "100%" },
-  timerBadgeRow: { display: "flex", gap: "10px" },
-  timerBadgeOutside: { backgroundColor: "#0d111c", border: "1px solid #1a2030", borderRadius: "6px", padding: "6px 16px", fontSize: "13px", fontWeight: "700", color: "#5b8def", letterSpacing: "0.08em" },
-  fixedOutputContainer: { width: "960px", maxWidth: "100%", aspectRatio: "16/9", backgroundColor: "#000", borderRadius: "8px", border: "1px solid #1a2030", position: "relative", overflow: "hidden", boxShadow: "0 30px 60px -20px rgba(0,0,0,0.8), 0 0 0 1px rgba(91,141,239,0.05)" },
+  creditCard: { position: "relative", backgroundColor: c.bg, border: `1px solid ${c.border}`, borderRadius: "10px", padding: "14px 8px", display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center", gap: "4px" },
+  creditCardPopular: { border: `1px solid ${c.primary}`, boxShadow: "0 0 0 1px rgba(129,140,248,0.2)" },
+  popularBadge: { position: "absolute", top: "-9px", left: "50%", transform: "translateX(-50%)", backgroundImage: g.primary, color: "#fff", fontSize: "8px", fontWeight: "700", padding: "2px 8px", borderRadius: r.full, letterSpacing: "0.04em", whiteSpace: "nowrap" },
+  creditCardIcon: { width: "28px", height: "28px", borderRadius: "50%", backgroundColor: c.surface, display: "flex", alignItems: "center", justifyContent: "center", fontSize: "11px", color: c.textDim, marginBottom: "4px" },
+  creditCardIconPopular: { backgroundImage: g.primary, color: "#fff" },
+  creditCardAmount: { fontSize: "14px", fontWeight: "800", fontFamily: f.sans, color: c.text },
+  creditCardLabel: { fontSize: "9px", color: c.textMuted, marginBottom: "6px" },
+  creditCardBuyBtn: { width: "100%", backgroundColor: "transparent", color: c.textSoft, border: `1px solid ${c.border}`, padding: "6px 6px", borderRadius: r.full, fontSize: "10px", fontWeight: "600", cursor: "pointer", fontFamily: "inherit" },
+  creditCardBuyBtnPopular: { backgroundColor: c.text, color: c.bg, border: `1px solid ${c.text}` },
+  modalNote: { fontSize: "9px", color: c.textDim, fontStyle: "italic", marginTop: "12px", textAlign: "center" },
+  sectionCardAlert: { border: `1px solid ${c.rose}`, boxShadow: "0 0 0 3px rgba(251,113,133,0.15)" },
+  outputCanvas: { flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column", backgroundColor: c.bg, overflow: "hidden" },
+  canvasControlBar: { display: "flex", flexWrap: "wrap", justifyContent: "space-between", alignItems: "center", gap: "10px", padding: "12px 18px", borderBottom: `1px solid ${c.border}`, backgroundColor: c.bgElevated, flexShrink: 0 },
+  canvasTitleGroup: { display: "flex", flexDirection: "column", gap: "2px", flex: "1 1 200px" },
+  canvasTitle: { fontSize: "1rem", fontWeight: "700", fontFamily: fd, color: c.text, margin: 0, letterSpacing: "-0.02em" },
+  canvasSubtitle: { fontSize: "0.75rem", color: c.textDim, lineHeight: 1.5 },
+  actionRow: { display: "flex", flexWrap: "wrap", gap: "8px", flex: "1 1 280px", justifyContent: "flex-end" },
+  actionButton: { border: "1px solid transparent", padding: "9px 16px", borderRadius: r.sm, fontSize: "0.8125rem", fontWeight: "600", cursor: "pointer", fontFamily: "inherit", letterSpacing: "-0.01em" },
+  startButton: { backgroundImage: g.live, color: "#fff", boxShadow: "0 4px 14px -6px rgba(52,211,153,0.5)" },
+  stopButton: { backgroundImage: g.stop, color: "#fff", boxShadow: "0 4px 14px -6px rgba(251,113,133,0.5)" },
+  popOutButton: { backgroundColor: c.bgElevated, color: c.textMuted, border: `1px solid ${c.border}` },
+  canvasViewportContainer: { flex: 1, minHeight: 0, display: "flex", alignItems: "center", justifyContent: "center", padding: "12px 16px", overflow: "hidden" },
+  outputColumn: { display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "8px", width: "100%", maxWidth: "100%", maxHeight: "100%", minHeight: 0 },
+  timerBadgeRow: { display: "flex", gap: "8px", flexWrap: "wrap", justifyContent: "center" },
+  timerBadgeOutside: { backgroundColor: c.surface, border: `1px solid ${c.border}`, borderRadius: r.sm, padding: "4px 12px", fontSize: "11px", fontWeight: "700", color: c.primary, letterSpacing: "0.08em" },
+  fixedOutputContainer: { backgroundColor: "#000", borderRadius: r.md, border: `1px solid ${c.border}`, position: "relative", overflow: "hidden", boxShadow: `0 24px 48px -20px rgba(0,0,0,0.8), 0 0 0 1px rgba(129,140,248,0.08)` },
   mirroredVideo: { width: "100%", height: "100%", objectFit: "cover", transform: "scaleX(-1)" },
   fittedImage: { width: "100%", height: "100%", objectFit: "contain" },
-  canvasOverlay: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", backgroundColor: "rgba(5, 7, 12, 0.94)" },
+  canvasOverlay: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", backgroundColor: "rgba(11, 16, 32, 0.94)" },
   overlayPingWrap: { position: "relative", width: "24px", height: "24px", marginBottom: "16px", display: "flex", alignItems: "center", justifyContent: "center" },
-  overlayRadarPing: { position: "absolute", width: "24px", height: "24px", borderRadius: "50%", border: "2px solid #f0576a", animation: "radarPing 1.8s cubic-bezier(0.2,0.6,0.4,1) infinite" },
-  overlayPingDot: { position: "absolute", width: "7px", height: "7px", borderRadius: "50%", backgroundColor: "#f0576a", boxShadow: "0 0 8px 1px rgba(240,87,106,0.7)" },
-  overlayText: { fontSize: "13px", fontWeight: "700", color: "#6b7385", letterSpacing: "0.05em", marginBottom: "4px" },
-  overlaySubtext: { fontSize: "11px", color: "#3a4256" },
+  overlayRadarPing: { position: "absolute", width: "24px", height: "24px", borderRadius: "50%", border: `2px solid ${c.rose}`, animation: "radarPing 1.8s cubic-bezier(0.2,0.6,0.4,1) infinite" },
+  overlayPingDot: { position: "absolute", width: "7px", height: "7px", borderRadius: "50%", backgroundColor: c.rose, boxShadow: "0 0 8px 1px rgba(251,113,133,0.7)" },
+  overlayText: { fontSize: "0.9375rem", fontWeight: "600", fontFamily: fd, color: c.textMuted, marginBottom: "4px" },
+  overlaySubtext: { fontSize: "0.8125rem", color: c.textDim, lineHeight: 1.55, textAlign: "center", maxWidth: "320px", padding: "0 16px" },
 };

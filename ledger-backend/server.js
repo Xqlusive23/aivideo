@@ -51,8 +51,12 @@ if (!ELEVENLABS_API_KEY) {
 // voice-rt-server pod's own environment variables.
 const RTC_TICKET_SECRET = process.env.RTC_TICKET_SECRET || "";
 const RTC_TICKET_TTL_SECONDS = 60; // short-lived on purpose — just long enough to connect
+const VOICE_RT_URL = (process.env.VOICE_RT_URL || "").replace(/\/$/, "");
 if (!RTC_TICKET_SECRET) {
   console.warn("\n⚠️  RTC_TICKET_SECRET is not set — the real-time voice server integration will fail until you add it to .env\n");
+}
+if (!VOICE_RT_URL) {
+  console.warn("\n⚠️  VOICE_RT_URL is not set — add your RunPod voice-rt-server URL to ledger-backend/.env\n");
 }
 
 function mintRtcTicket(token) {
@@ -423,7 +427,45 @@ app.post("/api/voice/rtc-ticket", requireToken, (req, res) => {
   const credits = getBalance(req.token);
   if (credits <= 0) return res.status(402).json({ error: "Out of credits", credits });
   const ticket = mintRtcTicket(req.token);
-  res.json({ ticket, expiresInSeconds: RTC_TICKET_TTL_SECONDS });
+  res.json({ ticket, expiresInSeconds: RTC_TICKET_TTL_SECONDS, voiceRtUrl: VOICE_RT_URL || null });
+});
+
+// Proxies voice-rt-server's /voices through ledger-backend so the browser
+// doesn't hit RunPod directly (avoids CORS) and gets clearer errors when
+// the pod is stopped or the URL is stale.
+app.get("/api/voice/rtc-voices", requireToken, async (req, res) => {
+  if (!RTC_TICKET_SECRET) {
+    return res.status(500).json({ error: "RTC_TICKET_SECRET is not set in ledger-backend/.env" });
+  }
+  if (!VOICE_RT_URL) {
+    return res.status(500).json({
+      error: "VOICE_RT_URL is not set in ledger-backend/.env — copy your RunPod URL there (same value as VITE_VOICE_RT_URL).",
+    });
+  }
+  const credits = getBalance(req.token);
+  if (credits <= 0) return res.status(402).json({ error: "Out of credits", credits });
+
+  const ticket = mintRtcTicket(req.token);
+  try {
+    const rtRes = await fetch(`${VOICE_RT_URL}/voices?ticket=${encodeURIComponent(ticket)}`);
+    const data = await rtRes.json().catch(() => ({}));
+
+    if (!rtRes.ok) {
+      const message =
+        rtRes.status === 404
+          ? `voice-rt-server returned 404 at ${VOICE_RT_URL} — the RunPod pod is probably stopped or the URL changed. Start the pod and update VOICE_RT_URL / VITE_VOICE_RT_URL.`
+          : data.error || `voice-rt-server responded ${rtRes.status}`;
+      return res.status(502).json({ error: message, voiceRtUrl: VOICE_RT_URL, status: rtRes.status });
+    }
+
+    res.json({ ...data, voiceRtUrl: VOICE_RT_URL });
+  } catch (err) {
+    res.status(502).json({
+      error: `Cannot reach voice-rt-server at ${VOICE_RT_URL}. Is the RunPod pod running?`,
+      detail: err.message,
+      voiceRtUrl: VOICE_RT_URL,
+    });
+  }
 });
 
 // --- Checkout (purchases) ----------------------------------------------------
