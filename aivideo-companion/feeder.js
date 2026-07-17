@@ -8,6 +8,12 @@ const FRAME_FPS = 20;
 let pythonFeeder = null;
 
 function startFeeder() {
+  if (pythonFeeder && !pythonFeeder.killed) {
+    return true;
+  }
+
+  stopFeeder();
+
   const feeder = getFeederCommand();
   if (!feeder) {
     console.error(
@@ -28,20 +34,23 @@ function startFeeder() {
     VIRTUAL_CAMERA_NAME,
   ];
 
-  pythonFeeder = spawn(feeder.command, args, {
+  const child = spawn(feeder.command, args, {
     stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true,
   });
+  pythonFeeder = child;
 
-  pythonFeeder.stdout.on("data", (data) => {
+  child.stdout.on("data", (data) => {
     console.log(`[virtualcam_feeder] ${data.toString().trim()}`);
   });
-  pythonFeeder.stderr.on("data", (data) => {
+  child.stderr.on("data", (data) => {
     console.error(`[virtualcam_feeder] ${data.toString().trim()}`);
   });
-  pythonFeeder.on("exit", (code) => {
+  child.on("exit", (code) => {
     console.log(`[virtualcam_feeder] exited with code ${code}`);
-    pythonFeeder = null;
+    if (pythonFeeder === child) {
+      pythonFeeder = null;
+    }
   });
 
   return true;
