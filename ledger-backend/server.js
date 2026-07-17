@@ -211,7 +211,16 @@ function creditFromPaystackTransaction(data) {
 }
 
 // --- Middleware -------------------------------------------------------------
-app.use(cors({ origin: FRONTEND_URL }));
+// Allow the deployed website and Electron desktop (file:// sends Origin: null).
+app.use(cors({
+  origin(origin, callback) {
+    if (!origin || origin === "null" || origin === FRONTEND_URL) {
+      callback(null, true);
+      return;
+    }
+    callback(null, false);
+  },
+}));
 
 // Paystack webhooks need the RAW body for signature verification, so this
 // route must be registered BEFORE the global express.json() middleware.

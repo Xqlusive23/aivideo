@@ -10,7 +10,7 @@
     "dev": "cross-env INSPIRETECH_DEV=1 electron .",
     "prepare:drivers": "node scripts/prepare-drivers.js",
     "clean": "node scripts/clean-dist.js",
-    "build:web": "npm run build --prefix ..",
+    "build:web": "npm run build --prefix .. -- --mode production",
     "build:feeder": "pyinstaller virtualcam-feeder.spec --distpath resources/feeder --workpath build/feeder --noconfirm",
     "build:audio-feeder": "pyinstaller audio-feeder.spec --distpath resources/feeder --workpath build/audio-feeder --noconfirm",
     "build:feeders": "npm run build:feeder && npm run build:audio-feeder",
