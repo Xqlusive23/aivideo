@@ -45,6 +45,15 @@ function ensureUnityCapture() {
   console.log("[prepare-drivers] Unity Capture ready at resources/drivers/unity-capture/");
 }
 
+function refreshUnityCaptureInstaller() {
+  const dllPath = path.join(UNITY_DEST, "UnityCaptureFilter64.dll");
+  const templateInstaller = path.join(ROOT, "scripts", "templates", "InstallInspireTech.bat");
+  if (fs.existsSync(dllPath) && fs.existsSync(templateInstaller)) {
+    fs.copyFileSync(templateInstaller, path.join(UNITY_DEST, "InstallInspireTech.bat"));
+    console.log("[prepare-drivers] Refreshed InstallInspireTech.bat");
+  }
+}
+
 function checkVbCable() {
   const vbDir = path.join(DRIVERS, "vb-cable");
   fs.mkdirSync(vbDir, { recursive: true });
@@ -67,4 +76,5 @@ function checkVbCable() {
 }
 
 ensureUnityCapture();
+refreshUnityCaptureInstaller();
 checkVbCable();

@@ -206,7 +206,7 @@
 
       installAllBtn.addEventListener("click", async () => {
         installAllBtn.disabled = true;
-        log("Launching installers. Approve the Windows UAC prompts…");
+        log("Launching installers. Approve the Windows UAC prompt(s). If VB-CABLE opens, click through its setup wizard, then reboot if prompted.");
         try {
           await window.inspiretechSetup.installAll();
           log("Drivers installed. In your calling app set Camera to InspireTech Camera and Microphone to CABLE Output (VB-Audio Virtual Cable).");

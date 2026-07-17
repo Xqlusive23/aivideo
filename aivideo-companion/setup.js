@@ -11,6 +11,7 @@ const {
 
 const SETUP_CHANNEL = "inspiretech:setup";
 const UAC_CANCELLED_EXIT_CODE = 1223;
+const VB_CABLE_SUCCESS_EXIT_CODES = [0, 3010, 1641];
 
 function readSetupState() {
   try {
@@ -102,18 +103,19 @@ async function waitForDetection(checkFn, attempts = 8, delayMs = 750) {
   return checkFn();
 }
 
-function runElevatedError(exitCode) {
+function runElevatedError(exitCode, stepLabel) {
   if (exitCode === UAC_CANCELLED_EXIT_CODE) {
     return new Error(
-      "Installation cancelled. Click Install again and approve the Windows UAC prompt."
+      `${stepLabel}: installation cancelled. Click Install again and approve the Windows UAC prompt.`
     );
   }
   return new Error(
-    `Installer failed (exit code ${exitCode}). Approve UAC and ensure you have administrator rights.`
+    `${stepLabel} failed (exit code ${exitCode}). Approve UAC, ensure you have administrator rights, and try again.`
   );
 }
 
-function runElevated(command, args = [], cwd) {
+function runElevated(command, args = [], cwd, options = {}) {
+  const { allowedExitCodes = [0] } = options;
   const escapePs = (value) => value.replace(/'/g, "''");
   const argList =
     args.length > 0
@@ -132,17 +134,19 @@ function runElevated(command, args = [], cwd) {
       ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
       { windowsHide: false },
       (error) => {
-        if (error) {
-          reject(runElevatedError(error.code || 1));
+        const exitCode = error?.code || 0;
+        if (error && !allowedExitCodes.includes(exitCode)) {
+          reject(error);
           return;
         }
-        resolve();
+        resolve(exitCode);
       }
     );
   });
 }
 
 async function installVirtualCamera() {
+  const stepLabel = "InspireTech Camera (Unity Capture)";
   const installDir = getUnityCaptureInstallDir();
   if (!installDir) {
     throw new Error(
@@ -155,18 +159,23 @@ async function installVirtualCamera() {
     throw new Error(`Missing installer script: ${installerBat}`);
   }
 
-  await runElevated("cmd.exe", ["/c", installerBat], installDir);
+  try {
+    await runElevated("cmd.exe", ["/c", installerBat], installDir);
+  } catch (error) {
+    throw runElevatedError(error.code || 1, stepLabel);
+  }
 
   const installed = await waitForDetection(isVirtualCameraInstalled);
   if (!installed) {
     throw new Error(
-      `${VIRTUAL_CAMERA_NAME} was not detected after install. Approve the UAC prompt and try again.`
+      `${stepLabel} was not detected after install. Reboot Windows and try again, or run the installer as Administrator from:\n${installDir}`
     );
   }
   return true;
 }
 
 async function installVirtualAudio() {
+  const stepLabel = "VB-Audio Virtual Cable";
   const installer = getVbCableInstaller();
   if (!installer) {
     throw new Error(
@@ -174,12 +183,24 @@ async function installVirtualAudio() {
     );
   }
 
-  await runElevated(installer, ["-h", "-i", "-H"], path.dirname(installer));
+  const cwd = path.dirname(installer);
+  const runOptions = { allowedExitCodes: VB_CABLE_SUCCESS_EXIT_CODES };
 
-  const installed = await waitForDetection(isVirtualAudioInstalled);
+  try {
+    await runElevated(installer, ["-i", "-h"], cwd, runOptions);
+  } catch {
+    // Silent flags are unreliable on fresh PCs — fall back to the official installer UI.
+    try {
+      await runElevated(installer, [], cwd, runOptions);
+    } catch (error) {
+      throw runElevatedError(error.code || 1, stepLabel);
+    }
+  }
+
+  const installed = await waitForDetection(isVirtualAudioInstalled, 12, 1000);
   if (!installed) {
     throw new Error(
-      "VB-Audio Virtual Cable was not detected after install. Reboot Windows and try again."
+      `${stepLabel} was not detected after install. Complete the installer if it is still open, reboot Windows, then try again.`
     );
   }
   return true;
