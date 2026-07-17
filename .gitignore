@@ -40,3 +40,6 @@ aivideo-companion/resources/drivers/vb-cable/*.exe
 *.njsproj
 *.sln
 *.sw?
+
+.vercel
+.env*
