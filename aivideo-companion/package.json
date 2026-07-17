@@ -17,7 +17,8 @@
     "predist": "npm run prepare:drivers && npm run clean",
     "dist": "npm run build:web && npm run build:feeders && electron-builder --win",
     "dist:dir": "npm run build:web && npm run build:feeders && electron-builder --win --dir",
-    "dist:fresh": "npm run build:web && npm run build:feeders && electron-builder --win -c.directories.output=release-new"
+    "dist:fresh": "node scripts/clean-dist.js release-new && npm run build:web && npm run build:feeders && electron-builder --win --config.directories.output=release-new",
+    "dist:prod": "node scripts/clean-dist.js release-prod && npm run build:web && npm run build:feeders && electron-builder --win --config.directories.output=release-prod"
   },
   "dependencies": {},
   "devDependencies": {

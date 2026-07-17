@@ -39,7 +39,7 @@ function formatStatusDisplay(raw) {
 }
 
 // From project root .env — VITE_DECART_API_KEY=your_key_here (never commit .env or hardcode keys here).
-const MY_DECART_KEY = (import.meta.env?.VITE_DECART_API_KEY || "dct_real_RtFqAzIrkBXWJyPzdxWdzLjvhyclrpBOQrENhTXvgQKZYnrOKXSwMgpaeabUuXNf").trim();
+const MY_DECART_KEY = (import.meta.env?.VITE_DECART_API_KEY || "").trim();
 
 // How long a live transformation session is allowed to run before auto-stopping.
 // This is just a UX cap, unrelated to billing.
