@@ -100,12 +100,15 @@ def main():
             if header is None:
                 break
             (length,) = struct.unpack(">I", header)
-            if length == 0 or length % 2 != 0:
-                print(f"⚠️  Invalid PCM chunk length {length}, skipping.", flush=True)
+            if length == 0:
+                print("⚠️  Invalid PCM chunk length 0, skipping.", flush=True)
                 continue
             payload = read_exact(stdin, length)
             if payload is None:
                 break
+            if length % 2 != 0:
+                print(f"⚠️  Invalid PCM chunk length {length}, discarding payload.", flush=True)
+                continue
             samples = np.frombuffer(payload, dtype=np.int16).astype(np.float32) / 32768.0
             ring.push(samples)
 

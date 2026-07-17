@@ -37,9 +37,8 @@ function formatStatusDisplay(raw) {
   return raw;
 }
 
-// Reads from a .env file (Vite: VITE_DECART_API_KEY=your_key_here).
-// NEVER hardcode a real key in source — it ends up in your bundle and git history.
-const MY_DECART_KEY = import.meta.env?.VITE_DECART_API_KEY || "dct_real_RtFqAzIrkBXWJyPzdxWdzLjvhyclrpBOQrENhTXvgQKZYnrOKXSwMgpaeabUuXNf";
+// From project root .env — VITE_DECART_API_KEY=your_key_here (never commit .env or hardcode keys here).
+const MY_DECART_KEY = (import.meta.env?.VITE_DECART_API_KEY || "").trim();
 
 // How long a live transformation session is allowed to run before auto-stopping.
 // This is just a UX cap, unrelated to billing.
@@ -1273,6 +1272,11 @@ export default function App() {
     }
     if (ledgerUnreachable) {
       setStatus("LEDGER BACKEND UNREACHABLE — CHECK IT'S RUNNING");
+      startInProgressRef.current = false;
+      return;
+    }
+    if (!MY_DECART_KEY) {
+      setStatus("VITE_DECART_API_KEY is not set — add it to your project .env and restart npm run dev");
       startInProgressRef.current = false;
       return;
     }
