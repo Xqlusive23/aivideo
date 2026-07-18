@@ -49,7 +49,7 @@ export default function AccessGate({
         </h1>
         <p className="itc-access-subtitle">
           {companionMode
-            ? "Enter your access token. We'll install the InspireTech Camera driver (UAC required). VB-CABLE is optional."
+            ? "Enter your access token. We'll install the InspireTech Camera driver (UAC required). If install fails, click Continue again — we clean up automatically. VB-CABLE is optional."
             : "Paste the access token you received from us. Tokens are issued manually after you request access."}
         </p>
         <input

@@ -27,6 +27,32 @@ function writeSetupState(state) {
   fs.writeFileSync(getSetupStatePath(), JSON.stringify(state, null, 2), "utf8");
 }
 
+function resetSetupStateForInstall(skipVirtualAudio) {
+  const state = readSetupState();
+  const next = {
+    ...state,
+    setupComplete: false,
+    skipVirtualAudio: Boolean(
+      skipVirtualAudio !== undefined ? skipVirtualAudio : state.skipVirtualAudio
+    ),
+    lastInstallAttemptAt: new Date().toISOString(),
+  };
+  delete next.lastInstallError;
+  writeSetupState(next);
+  return next;
+}
+
+function cleanupInstallTempFiles() {
+  const tempDir = app.getPath("temp");
+  for (const name of ["inspiretech-register-camera.ps1", "inspiretech-unregister-camera.ps1"]) {
+    try {
+      fs.unlinkSync(path.join(tempDir, name));
+    } catch {
+      // ignore missing or locked temp files
+    }
+  }
+}
+
 function runPowerShell(script) {
   return new Promise((resolve, reject) => {
     execFile(
@@ -159,6 +185,8 @@ async function installVirtualCamera() {
     throw new Error(`Missing driver file: ${dll64}`);
   }
 
+  cleanupInstallTempFiles();
+
   const ps1Path = path.join(app.getPath("temp"), "inspiretech-register-camera.ps1");
   const ps1Content = `
 $ErrorActionPreference = 'Stop'
@@ -166,12 +194,23 @@ Set-Location -LiteralPath '${installDir.replace(/'/g, "''")}'
 Get-ChildItem -Filter 'UnityCaptureFilter*.dll' | Unblock-File -ErrorAction SilentlyContinue
 $nameArg = '/i:UnityCaptureName=InspireTech Camera'
 $dll64 = Join-Path $PWD 'UnityCaptureFilter64.dll'
-$p64 = Start-Process -FilePath "$env:SystemRoot\\System32\\regsvr32.exe" -ArgumentList @('/s', $dll64, $nameArg) -Wait -PassThru -WindowStyle Hidden
-if ($p64.ExitCode -ne 0) { exit $p64.ExitCode }
-$wow = Join-Path $env:SystemRoot 'SysWOW64\\regsvr32.exe'
 $dll32 = Join-Path $PWD 'UnityCaptureFilter32.dll'
-if ((Test-Path $wow) -and (Test-Path $dll32)) {
-  Start-Process -FilePath $wow -ArgumentList @('/s', $dll32, $nameArg) -Wait -PassThru -WindowStyle Hidden | Out-Null
+$regsvr64 = Join-Path $env:SystemRoot 'System32\\regsvr32.exe'
+$regsvr32 = Join-Path $env:SystemRoot 'SysWOW64\\regsvr32.exe'
+
+function Unregister-Dll($regsvr, $dll) {
+  if (-not (Test-Path $regsvr) -or -not (Test-Path $dll)) { return }
+  Start-Process -FilePath $regsvr -ArgumentList @('/s', '/u', $dll) -Wait -PassThru -WindowStyle Hidden | Out-Null
+}
+
+# Clear any stale or partial registration before reinstalling.
+Unregister-Dll $regsvr64 $dll64
+Unregister-Dll $regsvr32 $dll32
+
+$p64 = Start-Process -FilePath $regsvr64 -ArgumentList @('/s', $dll64, $nameArg) -Wait -PassThru -WindowStyle Hidden
+if ($p64.ExitCode -ne 0) { exit $p64.ExitCode }
+if ((Test-Path $regsvr32) -and (Test-Path $dll32)) {
+  Start-Process -FilePath $regsvr32 -ArgumentList @('/s', $dll32, $nameArg) -Wait -PassThru -WindowStyle Hidden | Out-Null
 }
 exit 0
 `.trim();
@@ -315,23 +354,43 @@ function registerSetupIpc() {
   ipcMain.handle(`${SETUP_CHANNEL}:install-all`, async (_event, options = {}) => {
     const state = readSetupState();
     const skipAudio = Boolean(options.skipAudio ?? state.skipVirtualAudio);
-    writeSetupState({ ...state, skipVirtualAudio: skipAudio });
+    const forceReinstall = Boolean(options.forceReinstall);
+    resetSetupStateForInstall(skipAudio);
+    cleanupInstallTempFiles();
 
     const before = await getSetupStatus();
 
-    if (!before.cameraInstalled) {
-      await installVirtualCamera();
-    }
-    if (!skipAudio && before.vbCableBundled && !before.audioInstalled) {
-      await installVirtualAudio();
-    }
+    try {
+      if (!before.cameraInstalled || forceReinstall) {
+        await installVirtualCamera();
+      }
+      if (!skipAudio && before.vbCableBundled && !before.audioInstalled) {
+        await installVirtualAudio();
+      }
 
-    const after = await getSetupStatus();
-    const message = missingDriverMessage(after);
-    if (message) {
-      throw new Error(message);
+      const after = await getSetupStatus();
+      const message = missingDriverMessage(after);
+      if (message) {
+        throw new Error(message);
+      }
+      return after;
+    } catch (error) {
+      writeSetupState({
+        ...readSetupState(),
+        setupComplete: false,
+        lastInstallError: String(error.message || error),
+        lastInstallFailedAt: new Date().toISOString(),
+      });
+      throw error;
     }
-    return after;
+  });
+
+  ipcMain.handle(`${SETUP_CHANNEL}:reset-for-install`, async (_event, options = {}) => {
+    const state = readSetupState();
+    const skipAudio = Boolean(options.skipAudio ?? state.skipVirtualAudio);
+    resetSetupStateForInstall(skipAudio);
+    cleanupInstallTempFiles();
+    return getSetupStatus();
   });
 
   ipcMain.handle(`${SETUP_CHANNEL}:complete`, async () => {
@@ -371,6 +430,8 @@ module.exports = {
   getSetupStatus,
   readSetupState,
   writeSetupState,
+  resetSetupStateForInstall,
+  cleanupInstallTempFiles,
   isVirtualCameraInstalled,
   isVirtualAudioInstalled,
 };

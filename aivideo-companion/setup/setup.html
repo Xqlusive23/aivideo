@@ -223,7 +223,7 @@
         installAllBtn.disabled = true;
         log("Installing InspireTech Camera only. Approve the Windows UAC prompt…");
         try {
-          await window.inspiretechSetup.installAll({ skipAudio: true });
+          await window.inspiretechSetup.installAll({ skipAudio: true, forceReinstall: true });
           log("Camera driver installed. In your calling app, select InspireTech Camera as the webcam.");
           await refresh();
         } catch (error) {
@@ -238,7 +238,7 @@
         installAllBtn.disabled = true;
         log("Installing InspireTech Camera and VB-CABLE. Approve UAC prompt(s). Complete the VB-CABLE wizard if it opens, then reboot if prompted.");
         try {
-          await window.inspiretechSetup.installAll({ skipAudio: false });
+          await window.inspiretechSetup.installAll({ skipAudio: false, forceReinstall: true });
           log("Drivers installed. Camera → InspireTech Camera. Microphone → CABLE Output (VB-Audio Virtual Cable).");
           await refresh();
         } catch (error) {

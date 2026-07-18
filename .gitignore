@@ -20,6 +20,7 @@ ledger-backend/.env
 
 # Desktop app build artifacts
 aivideo-companion/release/
+aivideo-companion/release-*/
 aivideo-companion/release-new/
 aivideo-companion/release-prod/
 aivideo-companion/dist-electron/

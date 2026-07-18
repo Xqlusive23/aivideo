@@ -152,6 +152,8 @@ export default function App() {
   const [tokenError, setTokenError] = useState("");
   const [gateLoading, setGateLoading] = useState(false);
   const [gateSetupMessage, setGateSetupMessage] = useState("");
+  const [driverSetupFailed, setDriverSetupFailed] = useState(false);
+  const [driverSetupBusy, setDriverSetupBusy] = useState(false);
 
   const isCompanionApp = () =>
     typeof window !== "undefined" && Boolean(window.inspiretechCompanion?.isDesktop);
@@ -354,27 +356,16 @@ export default function App() {
 
     (async () => {
       try {
-        const companion = window.inspiretechCompanion;
-        if (!companion?.getSetupStatus || !companion?.installDrivers) return;
-
-        const status = await companion.getSetupStatus();
-        const skipAudio = Boolean(status.skipVirtualAudio);
-        const needs =
-          !status.cameraInstalled ||
-          (status.vbCableBundled && !skipAudio && !status.audioInstalled);
-        if (!needs || cancelled) {
-          if (!status.setupComplete && companion.completeSetup) {
-            await companion.completeSetup();
-          }
-          return;
+        await runCompanionDriverSetup({ forceReinstall: false, fromGate: false });
+        if (!cancelled) {
+          setDriverSetupFailed(false);
+          setStatus("SYSTEM STANDBY");
         }
-
-        setStatus("INSTALLING DRIVERS — APPROVE UAC");
-        await companion.installDrivers({ skipAudio });
-        if (companion.completeSetup) await companion.completeSetup();
-        if (!cancelled) setStatus("SYSTEM STANDBY");
       } catch (err) {
-        if (!cancelled) setStatus(`DRIVER SETUP FAILED: ${err.message}`);
+        if (!cancelled) {
+          setDriverSetupFailed(true);
+          setStatus(`DRIVER SETUP FAILED: ${err.message}`);
+        }
       }
     })();
 
@@ -647,7 +638,11 @@ export default function App() {
     }
   };
 
-  const runCompanionDriverSetup = async ({ skipVirtualMic = true } = {}) => {
+  const runCompanionDriverSetup = async ({
+    skipVirtualMic = true,
+    forceReinstall = true,
+    fromGate = true,
+  } = {}) => {
     const companion = window.inspiretechCompanion;
     if (!companion?.getSetupStatus || !companion?.installDrivers) return;
 
@@ -660,17 +655,43 @@ export default function App() {
       if (!status.setupComplete && companion.completeSetup) {
         await companion.completeSetup();
       }
+      setDriverSetupFailed(false);
       return;
     }
 
-    setGateSetupMessage(
-      needsAudio
-        ? "Installing InspireTech Camera and VB-Audio drivers — approve the Windows UAC prompts when they appear…"
-        : "Installing InspireTech Camera — approve the Windows UAC prompt when it appears…"
-    );
-    await companion.installDrivers({ skipAudio });
+    const installMessage = needsAudio
+      ? "Installing InspireTech Camera and VB-Audio drivers — approve the Windows UAC prompts when they appear…"
+      : "Installing InspireTech Camera — approve the Windows UAC prompt when it appears…";
+
+    if (fromGate) {
+      setGateSetupMessage(installMessage);
+    } else {
+      setStatus("INSTALLING DRIVERS — APPROVE UAC");
+    }
+
+    await companion.installDrivers({
+      skipAudio,
+      forceReinstall: forceReinstall || needsCamera,
+    });
     if (companion.completeSetup) {
       await companion.completeSetup();
+    }
+    setDriverSetupFailed(false);
+  };
+
+  const retryCompanionDriverSetup = async () => {
+    if (driverSetupBusy || !isCompanionApp()) return;
+    setDriverSetupBusy(true);
+    setTokenError("");
+    try {
+      setStatus("RETRYING DRIVER SETUP — APPROVE UAC");
+      await runCompanionDriverSetup({ forceReinstall: true, fromGate: false });
+      setStatus("SYSTEM STANDBY");
+    } catch (err) {
+      setDriverSetupFailed(true);
+      setStatus(`DRIVER SETUP FAILED: ${err.message}`);
+    } finally {
+      setDriverSetupBusy(false);
     }
   };
 
@@ -686,14 +707,16 @@ export default function App() {
       }
 
       if (isCompanionApp()) {
-        await runCompanionDriverSetup(options);
+        await runCompanionDriverSetup({ ...options, forceReinstall: true, fromGate: true });
       }
 
       saveAccessToken(token);
       setCredits(validation.credits);
       setCreditsLoaded(true);
       setLedgerUnreachable(false);
+      setDriverSetupFailed(false);
     } catch (err) {
+      setDriverSetupFailed(true);
       setTokenError(String(err.message || err));
     } finally {
       setGateLoading(false);
@@ -1562,6 +1585,16 @@ export default function App() {
             >
               Switch token
             </button>
+            {isCompanionApp() && driverSetupFailed && (
+              <button
+                type="button"
+                className="itc-header-link"
+                disabled={driverSetupBusy}
+                onClick={retryCompanionDriverSetup}
+              >
+                {driverSetupBusy ? "Retrying drivers…" : "Retry driver install"}
+              </button>
+            )}
             {!isCompanionApp() && (
               <Link to="/" className="itc-header-link">
                 Home
