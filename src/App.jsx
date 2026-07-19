@@ -5,6 +5,11 @@ import AccessGate from "./AccessGate.jsx";
 import { LogoLockup } from "./Logo.jsx";
 import { WHATSAPP_NUMBER, WHATSAPP_DEFAULT_MESSAGE } from "./siteConfig.js";
 import { theme } from "./theme.js";
+import {
+  LEDGER_URL,
+  checkAccessToken,
+  normalizeAccessToken,
+} from "./ledgerClient.js";
 
 const { colors: c, gradients: g, fonts: f, radius: r, shadow: s } = theme;
 const fd = f.display;
@@ -51,7 +56,6 @@ const MY_DECART_KEY = (import.meta.env?.VITE_DECART_API_KEY || "").trim();
 // --- Real credit ledger backend --------------------------------------------
 // See /ledger-backend. The browser NEVER decides the balance — it only ever
 // displays whatever this server last reported.
-const LEDGER_URL = import.meta.env?.VITE_LEDGER_BACKEND_URL || "http://localhost:3002";
 const NAIRA_PER_DOLLAR = 2000; // must match ledger-backend/server.js — keep these in sync
 const CREDITS_PER_DOLLAR = 100; // must also match ledger-backend/server.js's TIERS
 const NAIRA_PER_CREDIT = NAIRA_PER_DOLLAR / CREDITS_PER_DOLLAR; // = ₦20 per credit
@@ -817,41 +821,8 @@ export default function App() {
     return fallback;
   };
 
-  const validateAccessToken = async (token) => {
-    try {
-      const res = await fetch(`${LEDGER_URL}/api/access-check`, {
-        headers: {
-          "X-Access-Token": token,
-          "X-Client-Platform": getClientPlatform(),
-        },
-      });
-      if (res.status === 401) {
-        return { ok: false, error: "Your access token was deleted or is no longer valid. Please sign in again." };
-      }
-      if (res.status === 403) {
-        return {
-          ok: false,
-          error: await readRejectedMessage(
-            res,
-            "Your access has been revoked. If you think this is a mistake, message us on WhatsApp below."
-          ),
-        };
-      }
-      if (!res.ok) {
-        return {
-          ok: false,
-          error: `Can't reach the ledger backend at ${LEDGER_URL}. Is it running? (cd ledger-backend && npm start)`,
-        };
-      }
-      const data = await res.json();
-      return { ok: true, credits: data.credits };
-    } catch (err) {
-      return {
-        ok: false,
-        error: `Can't reach the ledger backend at ${LEDGER_URL}. Is it running?`,
-      };
-    }
-  };
+  const validateAccessToken = async (token) =>
+    checkAccessToken(token, { clientPlatform: getClientPlatform() });
 
   const runCompanionDriverSetup = async ({
     skipVirtualMic = true,
@@ -925,7 +896,7 @@ export default function App() {
         await runCompanionDriverSetup({ ...options, forceReinstall: true, fromGate: true });
       }
 
-      saveAccessToken(token);
+      saveAccessToken(validation.token || normalizeAccessToken(token));
       setCredits(validation.credits);
       setCreditsLoaded(true);
       setLedgerUnreachable(false);

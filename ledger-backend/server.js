@@ -166,8 +166,16 @@ try {
   process.exit(1);
 }
 
+function normalizeAccessToken(raw) {
+  return String(raw || "")
+    .trim()
+    .replace(/[\u200B-\u200D\uFEFF]/g, "");
+}
+
 function getUser(token) {
-  return db.prepare("SELECT * FROM users WHERE token = ?").get(token);
+  const normalized = normalizeAccessToken(token);
+  if (!normalized) return undefined;
+  return db.prepare("SELECT * FROM users WHERE token = ?").get(normalized);
 }
 
 function getBalance(token) {
@@ -304,7 +312,7 @@ function platformRevokeMessage(scope) {
 // Every user-facing route (except the webhook, verify, and admin routes)
 // requires a valid access token in the X-Access-Token header.
 function requireToken(req, res, next) {
-  const token = req.headers["x-access-token"];
+  const token = normalizeAccessToken(req.headers["x-access-token"]);
   if (!token) return res.status(401).json({ error: "Missing access token" });
   const user = getUser(token);
   if (!user) return res.status(401).json({ error: "Invalid access token" });

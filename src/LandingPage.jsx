@@ -1,8 +1,9 @@
-import React from "react";
+import React, { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import AccessGate from "./AccessGate";
 import { LogoLockup } from "./Logo.jsx";
 import { featureAccents } from "./theme";
+import { checkAccessToken } from "./ledgerClient.js";
 import {
   SITE_NAME,
   SITE_TAGLINE,
@@ -63,14 +64,28 @@ const STEPS = [
 
 export default function LandingPage() {
   const navigate = useNavigate();
+  const [gateLoading, setGateLoading] = useState(false);
+  const [gateError, setGateError] = useState("");
 
-  const handleAuthenticated = (token) => {
+  const handleAuthenticated = async (token) => {
+    setGateLoading(true);
+    setGateError("");
     try {
-      window.localStorage.setItem("inspiretech_access_token", token);
-    } catch {
-      // ignore
+      const validation = await checkAccessToken(token);
+      if (!validation.ok) {
+        setGateError(validation.error);
+        return;
+      }
+
+      try {
+        window.localStorage.setItem("inspiretech_access_token", validation.token);
+      } catch {
+        // ignore
+      }
+      navigate("/app");
+    } finally {
+      setGateLoading(false);
     }
-    navigate("/app");
   };
 
   const whatsappAccessUrl = `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(WHATSAPP_ACCESS_REQUEST_MESSAGE)}`;
@@ -193,7 +208,12 @@ export default function LandingPage() {
               Already received a token? Enter it on the right to open the studio instantly.
             </p>
           </div>
-          <AccessGate embedded onAuthenticated={handleAuthenticated} />
+          <AccessGate
+            embedded
+            onAuthenticated={handleAuthenticated}
+            tokenError={gateError}
+            loading={gateLoading}
+          />
         </div>
       </section>
 
