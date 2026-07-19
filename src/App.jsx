@@ -633,12 +633,28 @@ export default function App() {
   useEffect(() => {
     if (!accessToken) return undefined;
 
-    const pingPresence = () => {
-      fetch(`${LEDGER_URL}/api/presence`, {
-        method: "POST",
-        headers: { ...authHeaders(), "Content-Type": "application/json" },
-        body: JSON.stringify(buildPresencePayload()),
-      }).catch(() => {});
+    const pingPresence = async () => {
+      try {
+        const res = await fetch(`${LEDGER_URL}/api/presence`, {
+          method: "POST",
+          headers: { ...authHeaders(), "Content-Type": "application/json" },
+          body: JSON.stringify(buildPresencePayload()),
+        });
+        if (res.status === 401) {
+          handleTokenRejected("Your access token was deleted or is no longer valid. Please sign in again.");
+          return;
+        }
+        if (res.status === 403) {
+          handleTokenRejected(
+            await readRejectedMessage(
+              res,
+              "Your access has been revoked. If you think this is a mistake, message us on WhatsApp below."
+            )
+          );
+        }
+      } catch {
+        // ignore network errors
+      }
     };
 
     pingPresence();
@@ -799,7 +815,10 @@ export default function App() {
   const validateAccessToken = async (token) => {
     try {
       const res = await fetch(`${LEDGER_URL}/api/credits`, {
-        headers: { "X-Access-Token": token },
+        headers: {
+          "X-Access-Token": token,
+          "X-Client-Platform": getClientPlatform(),
+        },
       });
       if (res.status === 401) {
         return { ok: false, error: "Your access token was deleted or is no longer valid. Please sign in again." };

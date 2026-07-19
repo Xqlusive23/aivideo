@@ -268,11 +268,14 @@ function normalizePlatformScope(platform) {
 }
 
 function readClientPlatform(req) {
-  return (
-    req.headers["x-client-platform"] ||
-    req.body?.platform ||
-    null
-  );
+  const explicit = req.headers["x-client-platform"] || req.body?.platform || null;
+  if (explicit) return explicit;
+
+  const ua = req.headers["user-agent"] || "";
+  if (/iPhone|iPad|iPod|Android|Mobile/i.test(ua)) return "mobile";
+  if (/Electron/i.test(ua)) return "windows-app";
+  if (ua) return "desktop-web";
+  return null;
 }
 
 function isPlatformRevoked(user, scope) {

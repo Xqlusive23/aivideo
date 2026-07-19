@@ -540,27 +540,36 @@
     return `<span class="badge">${escapeHtml(platform || "Unknown")}</span>`;
   }
 
-  function platformRevokeButton(token, scope, currentlyRevoked, compact) {
+  function platformAccessButton(token, scope, currentlyRevoked) {
     const tokenJson = JSON.stringify(token);
-    const label = scope === "mobile"
-      ? (currentlyRevoked ? "Restore mobile" : "Revoke mobile")
-      : (currentlyRevoked ? "Restore desktop" : "Revoke desktop");
-    const cls = currentlyRevoked ? "success" : "danger";
-    const text = compact
-      ? label.replace("Restore ", "↩ ").replace("Revoke ", "✕ ")
-      : label;
-    return `<button type="button" class="${cls}" onclick="revokePlatformToken(${tokenJson}, '${scope}', ${currentlyRevoked ? "true" : "false"})">${text}</button>`;
+    if (currentlyRevoked) {
+      const label = scope === "mobile" ? "Restore mobile access" : "Restore desktop access";
+      return `<button type="button" class="success" onclick="revokePlatformToken(${tokenJson}, '${scope}', true)">${label}</button>`;
+    }
+    const label = scope === "mobile" ? "Revoke mobile" : "Revoke desktop";
+    return `<button type="button" class="danger" onclick="revokePlatformToken(${tokenJson}, '${scope}', false)">${label}</button>`;
   }
 
   function allRevokeButtons(user) {
     const tokenJson = JSON.stringify(user.token);
-    const allCls = user.revoked ? "success" : "danger";
-    const allLabel = user.revoked ? "Restore all" : "Revoke all";
-    return `
-      ${platformRevokeButton(user.token, "mobile", Boolean(user.revoked_mobile), false)}
-      ${platformRevokeButton(user.token, "desktop", Boolean(user.revoked_desktop), false)}
-      <button type="button" class="${allCls}" onclick="revokeToken(${tokenJson}, ${user.revoked ? "true" : "false"})">${allLabel}</button>
-    `;
+    if (user.revoked) {
+      return `<button type="button" class="success" onclick="revokeToken(${tokenJson}, true)">Restore all access</button>`;
+    }
+
+    const buttons = [];
+    buttons.push(platformAccessButton(user.token, "mobile", Boolean(user.revoked_mobile)));
+    buttons.push(platformAccessButton(user.token, "desktop", Boolean(user.revoked_desktop)));
+    buttons.push(`<button type="button" class="danger" onclick="revokeToken(${tokenJson}, false)">Revoke all</button>`);
+    return buttons.join("");
+  }
+
+  function activeDeviceActions(device, scope, scopeRevoked) {
+    const tokenJson = JSON.stringify(device.token);
+    if (device.revoked) {
+      return `<button type="button" class="success" onclick="revokeToken(${tokenJson}, true)">Restore all access</button>`;
+    }
+    if (!scope) return "";
+    return platformAccessButton(device.token, scope, Boolean(scopeRevoked));
   }
 
   async function createToken() {
@@ -770,7 +779,6 @@
       <div class="record-list">
         ${devices.map((device) => {
           const token = device.token;
-          const tokenJson = JSON.stringify(token);
           const liveSession = liveSessions.find((session) => session.token === token);
           const statusBadge = device.is_transforming || liveSession
             ? '<span class="badge transform">Transforming</span>'
@@ -780,11 +788,7 @@
           const rowMuted = device.revoked || scopeRevoked;
           const label = escapeHtml(device.label) || "No label";
           const revokeBadges = revokeStatusBadges(device);
-          const actionButtons = device.revoked
-            ? `<button type="button" class="success" onclick="revokeToken(${tokenJson}, true)">Restore all</button>`
-            : scope
-              ? platformRevokeButton(token, scope, Boolean(scopeRevoked), false)
-              : "";
+          const actionButtons = activeDeviceActions(device, scope, scopeRevoked);
 
           return `
             <article class="record${rowMuted ? " muted" : ""}">
