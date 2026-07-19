@@ -196,10 +196,13 @@ export default function App() {
     return "desktop-web";
   };
 
-  const authHeaders = () => ({
-    "X-Access-Token": accessToken,
-    "X-Client-Platform": getClientPlatform(),
-  });
+  const authHeaders = (tokenOverride) => {
+    const token = normalizeAccessToken(tokenOverride ?? accessToken);
+    return {
+      "X-Access-Token": token,
+      "X-Client-Platform": getClientPlatform(),
+    };
+  };
 
   const saveAccessToken = (token) => {
     setAccessToken(token);
@@ -671,7 +674,7 @@ export default function App() {
   useEffect(() => () => clearTheaterControlsTimer(), []);
 
   const reportPresence = async (tokenOverride) => {
-    const token = tokenOverride || accessToken;
+    const token = normalizeAccessToken(tokenOverride || accessToken);
     if (!token) return;
     try {
       const res = await fetch(`${LEDGER_URL}/api/presence`, {
@@ -938,11 +941,13 @@ export default function App() {
         return;
       }
 
+      const normalized = validation.token || normalizeAccessToken(token);
+
       if (isCompanionApp()) {
         await runCompanionDriverSetup({ ...options, forceReinstall: true, fromGate: true });
       }
 
-      saveAccessToken(validation.token || normalizeAccessToken(token));
+      saveAccessToken(normalized);
       gateJustAuthenticatedRef.current = true;
       accessCheckPausedRef.current = false;
       setSessionReady(true);
@@ -950,8 +955,8 @@ export default function App() {
       setCreditsLoaded(true);
       setLedgerUnreachable(false);
       setDriverSetupFailed(false);
-      await reportPresence(token);
-      refreshBalance();
+      await reportPresence(normalized);
+      refreshBalance(normalized);
     } catch (err) {
       setDriverSetupFailed(true);
       setTokenError(String(err.message || err));
@@ -988,10 +993,12 @@ export default function App() {
     }
   };
 
-  const refreshBalance = async () => {
+  const refreshBalance = async (tokenOverride) => {
     if (accessCheckPausedRef.current) return;
+    const token = normalizeAccessToken(tokenOverride ?? accessToken);
+    if (!token) return;
     try {
-      const res = await fetch(`${LEDGER_URL}/api/access-check`, { headers: authHeaders() });
+      const res = await fetch(`${LEDGER_URL}/api/access-check`, { headers: authHeaders(token) });
       if (res.status === 401) {
         handleTokenRejected("Your access token was deleted or is no longer valid. Please sign in again.");
         return;

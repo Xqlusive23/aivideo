@@ -26,6 +26,15 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const PORT = process.env.PORT || 3002;
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
+const ALLOWED_ORIGINS = new Set(
+  [
+    FRONTEND_URL,
+    "https://www.inspirestream.xyz",
+    "https://inspirestream.xyz",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+  ].filter(Boolean)
+);
 const CREDITS_PER_SECOND = Number(process.env.CREDITS_PER_SECOND || 2);
 const MAX_HEARTBEAT_GAP_SECONDS = 10; // caps deduction if a heartbeat is late/missed
 const PRESENCE_ACTIVE_SECONDS = 90; // admin "online now" window
@@ -238,7 +247,7 @@ function creditFromPaystackTransaction(data) {
 // Allow the deployed website and Electron desktop (file:// sends Origin: null).
 app.use(cors({
   origin(origin, callback) {
-    if (!origin || origin === "null" || origin === FRONTEND_URL) {
+    if (!origin || origin === "null" || ALLOWED_ORIGINS.has(origin)) {
       callback(null, true);
       return;
     }
