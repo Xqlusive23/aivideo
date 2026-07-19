@@ -1384,20 +1384,87 @@ body {
   }
 }
 
-.itc-app.itc-mobile-output-focus .itc-sidebar {
+.itc-mobile-theater-stop {
+  display: none;
+}
+
+.itc-app.itc-mobile-theater {
+  overflow: hidden !important;
+  height: 100dvh !important;
+  max-height: 100dvh !important;
+  padding-bottom: 0 !important;
+  position: fixed !important;
+  inset: 0 !important;
+  width: 100% !important;
+  z-index: 9998;
+}
+
+.itc-app.itc-mobile-theater.itc-app-mobile {
+  overflow: hidden !important;
+}
+
+.itc-app.itc-mobile-theater .itc-top-header,
+.itc-app.itc-mobile-theater .itc-sidebar,
+.itc-app.itc-mobile-theater .itc-mobile-action-dock,
+.itc-app.itc-mobile-theater .itc-canvas-control-bar,
+.itc-app.itc-mobile-theater .itc-desktop-action-row,
+.itc-app.itc-mobile-theater .itc-timer-badge-row,
+.itc-app.itc-mobile-theater .itc-canvas-overlay {
   display: none !important;
 }
 
-.itc-app.itc-mobile-output-focus .itc-fixed-output {
+.itc-app.itc-mobile-theater .itc-main-workspace,
+.itc-app.itc-mobile-theater .itc-output-canvas,
+.itc-app.itc-mobile-theater .itc-canvas-viewport,
+.itc-app.itc-mobile-theater .itc-output-column {
+  position: fixed !important;
+  inset: 0 !important;
   width: 100% !important;
-  max-width: 100% !important;
+  height: 100% !important;
+  max-width: none !important;
+  max-height: none !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  overflow: hidden !important;
+  flex: none !important;
 }
 
-.itc-mobile-output-exit {
+.itc-app.itc-mobile-theater .itc-fixed-output {
+  position: fixed !important;
+  inset: 0 !important;
+  width: 100vw !important;
+  height: 100dvh !important;
+  height: 100svh !important;
+  max-width: none !important;
+  max-height: none !important;
+  aspect-ratio: unset !important;
+  border: none !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  background: #000 !important;
+}
+
+.itc-app.itc-mobile-theater .itc-fixed-output video {
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: contain !important;
+  background: #000 !important;
+}
+
+.itc-app.itc-mobile-theater .itc-mobile-theater-stop {
+  display: flex !important;
+  align-items: center;
+  justify-content: center;
   position: fixed;
-  top: calc(env(safe-area-inset-top, 0px) + 72px);
-  right: 12px;
-  z-index: 130;
-  padding: 8px 12px !important;
-  font-size: 11px !important;
+  left: 16px;
+  right: 16px;
+  bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  z-index: 10001;
+  min-height: 52px;
+  padding: 14px 20px !important;
+  font-size: 15px !important;
+  font-weight: 700 !important;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+  pointer-events: auto;
+  touch-action: manipulation;
 }

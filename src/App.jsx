@@ -502,53 +502,54 @@ export default function App() {
     }
   }, [isMobileLayout, isRunning]);
 
-  const enterMobileOutputFocus = async () => {
-    setMobileOutputFocus(true);
+  const enterMobileTheater = () => {
+    if (!isRunning) {
+      setStatus("START TRANSFORMATION FIRST — THEN TAP FULL SCREEN");
+      return;
+    }
     const video = outputVideoRef.current;
-    if (!video) return;
-    try {
-      if (pipSupported && !document.pictureInPictureElement) {
-        await video.requestPictureInPicture();
-        return;
-      }
-    } catch {
-      // fall through to fullscreen overlay
+    if (!video?.srcObject) {
+      setStatus("WAITING FOR VIDEO — TRY AGAIN IN A MOMENT");
+      return;
     }
+    setMobileOutputFocus(true);
     try {
-      const container = video.closest(".itc-fixed-output") || video;
-      if (container.requestFullscreen) {
-        await container.requestFullscreen();
-      } else if (video.webkitEnterFullscreen) {
-        video.webkitEnterFullscreen();
-      }
-    } catch {
-      // CSS overlay still expands the output on mobile
-    }
-  };
-
-  const exitMobileOutputFocus = async () => {
-    setMobileOutputFocus(false);
-    try {
-      if (document.pictureInPictureElement) await document.exitPictureInPicture();
-      if (document.fullscreenElement) await document.exitFullscreen();
+      document.documentElement.style.overflow = "hidden";
+      document.body.style.overflow = "hidden";
     } catch {
       // ignore
     }
   };
 
-  // Pops the OUTPUT MONITOR video into its own floating, chrome-free window
-  // via the browser's native Picture-in-Picture — this is the one built-in
-  // way to move a live MediaStream into its own window without having to
-  // re-establish the WebRTC connection there, since a plain window.open()
-  // popup can't share a live stream with the tab that created it. In OBS,
-  // add a Window Capture source pointed at this floating PiP window and
-  // there's nothing to crop — it contains only the video.
+  const exitMobileTheater = async () => {
+    setMobileOutputFocus(false);
+    setIsPoppedOut(false);
+    try {
+      document.documentElement.style.overflow = "";
+      document.body.style.overflow = "";
+      if (document.pictureInPictureElement) await document.exitPictureInPicture();
+      if (document.fullscreenElement) await document.exitFullscreen();
+      if (outputVideoRef.current?.webkitDisplayingFullscreen) {
+        outputVideoRef.current.webkitExitFullscreen?.();
+      }
+    } catch {
+      // ignore
+    }
+  };
+
+  // Desktop PiP / mobile theater exit handler.
   const handlePopOutVideo = async () => {
     try {
+      if (isMobileLayout) {
+        if (mobileOutputFocus) {
+          await exitMobileTheater();
+        } else {
+          enterMobileTheater();
+        }
+        return;
+      }
       if (document.pictureInPictureElement || mobileOutputFocus) {
-        await exitMobileOutputFocus();
-      } else if (isMobileLayout) {
-        await enterMobileOutputFocus();
+        await exitMobileTheater();
       } else if (outputVideoRef.current) {
         await outputVideoRef.current.requestPictureInPicture();
       }
@@ -557,6 +558,13 @@ export default function App() {
       setStatus(`POP-OUT FAILED: ${err.message}`);
     }
   };
+
+  useEffect(() => {
+    if (!isRunning && mobileOutputFocus) {
+      exitMobileTheater();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isRunning]);
 
   // Load the voice list once, right after the token is accepted.
   useEffect(() => {
@@ -1662,7 +1670,7 @@ export default function App() {
     setStatus((prev) => (prev.startsWith("OUT OF CREDITS") ? prev : "PIPELINE DISCONNECTED"));
     setElapsedSeconds(0);
     if (mobileOutputFocus) {
-      exitMobileOutputFocus().catch(() => {});
+      exitMobileTheater().catch(() => {});
     }
     if (outputVideoRef.current) outputVideoRef.current.srcObject = null;
   };
@@ -1711,7 +1719,7 @@ export default function App() {
   return (
     <div
       style={styles.appContainer}
-      className={`itc-app${isMobileLayout ? " itc-app-mobile" : ""}${mobileOutputFocus ? " itc-mobile-output-focus" : ""}${isMobileLayout && !mobileControlsOpen ? " itc-mobile-sidebar-collapsed" : ""}`}
+      className={`itc-app${isMobileLayout ? " itc-app-mobile" : ""}${mobileOutputFocus ? " itc-mobile-theater" : ""}${isMobileLayout && !mobileControlsOpen ? " itc-mobile-sidebar-collapsed" : ""}`}
     >
       <header className="itc-top-header">
         <div className="itc-header-brand">
@@ -2078,20 +2086,10 @@ export default function App() {
             </div>
           </div>
 
-          {mobileOutputFocus && (
-            <button
-              type="button"
-              className="itc-mobile-output-exit itc-btn itc-btn-secondary"
-              onClick={() => exitMobileOutputFocus()}
-            >
-              Exit full screen
-            </button>
-          )}
-
           <div style={styles.canvasViewportContainer} className="itc-canvas-viewport">
             <div style={styles.outputColumn} className="itc-output-column">
               {isRunning && (
-                <div style={styles.timerBadgeRow}>
+                <div style={styles.timerBadgeRow} className="itc-timer-badge-row">
                   <div style={styles.timerBadgeOutside}>{formatTime(elapsedSeconds)}</div>
                   <div style={{...styles.timerBadgeOutside, color: isLowCredit ? c.rose : c.primary}}>
                     {credits} credits left
@@ -2099,7 +2097,7 @@ export default function App() {
                 </div>
               )}
               <div style={styles.fixedOutputContainer} className={`itc-fixed-output${isRunning ? " itc-live" : ""}`}>
-                <video ref={outputVideoRef} autoPlay playsInline style={styles.mirroredVideo} />
+                <video ref={outputVideoRef} autoPlay playsInline webkit-playsinline style={styles.mirroredVideo} />
                 {!isRunning && (
                   <div style={styles.canvasOverlay}>
                     <div style={styles.overlayPingWrap}>
@@ -2120,7 +2118,17 @@ export default function App() {
         </main>
       </div>
 
-      {isMobileLayout && (
+      {isMobileLayout && mobileOutputFocus && (
+        <button
+          type="button"
+          className="itc-btn itc-btn-stop itc-mobile-theater-stop"
+          onClick={stopTransformation}
+        >
+          Stop transformation
+        </button>
+      )}
+
+      {isMobileLayout && !mobileOutputFocus && (
         <div className="itc-mobile-action-dock">
           <button
             type="button"
@@ -2149,9 +2157,9 @@ export default function App() {
             type="button"
             className="itc-btn itc-btn-secondary"
             onClick={handlePopOutVideo}
-            disabled={!pipSupported && !isMobileLayout}
+            disabled={!isRunning}
           >
-            {isPoppedOut || mobileOutputFocus ? "Return" : "Full screen"}
+            Full screen
           </button>
         </div>
       )}
