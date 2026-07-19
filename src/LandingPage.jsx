@@ -66,6 +66,7 @@ export default function LandingPage() {
   const navigate = useNavigate();
   const [gateLoading, setGateLoading] = useState(false);
   const [gateError, setGateError] = useState("");
+  const [navOpen, setNavOpen] = useState(false);
 
   const handleAuthenticated = async (token) => {
     setGateLoading(true);
@@ -98,7 +99,19 @@ export default function LandingPage() {
             <LogoLockup size="md" />
             <span className="itc-landing-badge">v2.8</span>
           </div>
-          <nav className="itc-landing-nav-links">
+          <button
+            type="button"
+            className="itc-landing-nav-toggle"
+            aria-expanded={navOpen}
+            aria-label={navOpen ? "Close menu" : "Open menu"}
+            onClick={() => setNavOpen((open) => !open)}
+          >
+            {navOpen ? "✕" : "☰"}
+          </button>
+          <nav
+            className={`itc-landing-nav-links${navOpen ? " is-open" : ""}`}
+            onClick={() => setNavOpen(false)}
+          >
             <a href="#features" className="itc-landing-nav-link">Features</a>
             <a href="#access" className="itc-landing-nav-link">Get access</a>
             <a href="#download" className="itc-landing-nav-link">Download</a>
