@@ -187,6 +187,7 @@ export default function App() {
   const [showAddCredits, setShowAddCredits] = useState(false);
   const [isPoppedOut, setIsPoppedOut] = useState(false);
   const [mobileOutputFocus, setMobileOutputFocus] = useState(false);
+  const [mobileControlsOpen, setMobileControlsOpen] = useState(true);
   const [isMobileLayout, setIsMobileLayout] = useState(() =>
     typeof window !== "undefined"
       ? window.matchMedia(`(max-width: ${MOBILE_LAYOUT_MAX_WIDTH}px)`).matches
@@ -471,11 +472,20 @@ export default function App() {
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
     const mediaQuery = window.matchMedia(`(max-width: ${MOBILE_LAYOUT_MAX_WIDTH}px)`);
-    const syncLayout = (event) => setIsMobileLayout(event.matches);
+    const syncLayout = (event) => {
+      setIsMobileLayout(event.matches);
+      if (!event.matches) setMobileControlsOpen(true);
+    };
     syncLayout(mediaQuery);
     mediaQuery.addEventListener("change", syncLayout);
     return () => mediaQuery.removeEventListener("change", syncLayout);
   }, []);
+
+  useEffect(() => {
+    if (isMobileLayout && isRunning) {
+      setMobileControlsOpen(false);
+    }
+  }, [isMobileLayout, isRunning]);
 
   const enterMobileOutputFocus = async () => {
     setMobileOutputFocus(true);
@@ -1689,7 +1699,10 @@ export default function App() {
   }
 
   return (
-    <div style={styles.appContainer} className={`itc-app${mobileOutputFocus ? " itc-mobile-output-focus" : ""}`}>
+    <div
+      style={styles.appContainer}
+      className={`itc-app${isMobileLayout ? " itc-app-mobile" : ""}${mobileOutputFocus ? " itc-mobile-output-focus" : ""}${isMobileLayout && !mobileControlsOpen ? " itc-mobile-sidebar-collapsed" : ""}`}
+    >
       <header className="itc-top-header">
         <div className="itc-header-brand">
           <div className="itc-header-brand-id">
@@ -1805,7 +1818,7 @@ export default function App() {
               </select>
             </div>
             {typeof window !== "undefined" && window.inspiretechCompanion && (
-              <div style={styles.parameterRow}>
+              <div style={styles.parameterRow} className="itc-parameter-row">
                 <label className="itc-studio-label" style={styles.paramLabel}>
                   Route audio to VB-CABLE
                 </label>
@@ -1896,7 +1909,7 @@ export default function App() {
             <div className="itc-studio-card-title">
               <span>🎙️</span> Voice changer
             </div>
-            <div style={styles.parameterRow}>
+            <div style={styles.parameterRow} className="itc-parameter-row">
               <label className="itc-studio-label" style={styles.paramLabel}>Enable voice changer</label>
               <input
                 type="checkbox"
@@ -2016,11 +2029,21 @@ export default function App() {
 
         <main style={styles.outputCanvas} className="itc-output-canvas">
           <div style={styles.canvasControlBar} className="itc-canvas-control-bar">
-            <div style={styles.canvasTitleGroup}>
+            <div style={styles.canvasTitleGroup} className="itc-canvas-title-group">
               <h2 className="itc-canvas-title">Output monitor</h2>
               <span className="itc-canvas-subtitle" style={styles.canvasSubtitle}>1920×1080 Lucy 2.5 output, scaled to fit your screen</span>
             </div>
             <div style={styles.actionRow} className="itc-action-row">
+              {isMobileLayout && (
+                <button
+                  type="button"
+                  className="itc-btn itc-btn-secondary itc-mobile-controls-toggle"
+                  style={{...styles.actionButton, ...styles.popOutButton, width: "100%"}}
+                  onClick={() => setMobileControlsOpen((open) => !open)}
+                >
+                  {mobileControlsOpen ? "Hide controls" : "Show controls"}
+                </button>
+              )}
               <button
                 style={{...styles.actionButton, ...styles.startButton, opacity: (isRunning || !selectedFile || credits <= 0 || ledgerUnreachable) ? 0.5 : 1}}
                 className="itc-btn itc-btn-start"
@@ -2124,8 +2147,8 @@ const styles = {
   metaLabel: { color: c.textDim, fontWeight: "600" },
   metaValue: { color: c.primary, fontWeight: "700", transition: "color 0.3s cubic-bezier(0.4,0,0.2,1)" },
   creditsDollar: { color: c.textDim, fontWeight: "500", fontSize: "0.6875rem" },
-  mainWorkspace: { display: "flex", flex: 1, width: "100%", minHeight: 0, overflow: "hidden", boxSizing: "border-box" },
-  controlSidebar: { width: "260px", flexShrink: 0, borderRight: `1px solid ${c.border}`, backgroundColor: c.bgElevated, display: "flex", flexDirection: "column", gap: "1px", overflowY: "auto", padding: "8px", boxSizing: "border-box" },
+  mainWorkspace: { display: "flex", flex: 1, width: "100%", minWidth: 0, minHeight: 0, overflow: "hidden", boxSizing: "border-box" },
+  controlSidebar: { flex: "0 0 260px", width: "260px", maxWidth: "100%", borderRight: `1px solid ${c.border}`, backgroundColor: c.bgElevated, display: "flex", flexDirection: "column", gap: "1px", overflowY: "auto", padding: "8px", boxSizing: "border-box" },
   sectionCard: { backgroundColor: c.surface, border: `1px solid ${c.border}`, borderRadius: r.md, padding: "12px", marginBottom: "8px", display: "flex", flexDirection: "column", boxShadow: "0 1px 0 rgba(255,255,255,0.03) inset, 0 6px 16px -14px rgba(0,0,0,0.8)" },
   buttonStack: { display: "flex", flexDirection: "column", gap: "8px" },
   primaryButton: { backgroundImage: g.primary, color: "#fff", border: "1px solid rgba(129,140,248,0.4)", padding: "10px 14px", borderRadius: r.sm, fontSize: "0.8125rem", fontWeight: "600", cursor: "pointer", fontFamily: "inherit", textAlign: "left", boxShadow: "0 4px 14px -6px rgba(99,102,241,0.55)" },
