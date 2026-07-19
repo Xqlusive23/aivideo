@@ -77,7 +77,8 @@ const TOP_UP_OPTIONS = [
 // since ElevenLabs' Voice Changer converts complete clips, not a continuous
 // stream. Shorter chunks = snappier turnaround but slightly choppier/lower-
 // context conversion; longer chunks = smoother conversion but more delay.
-const VOICE_CHUNK_MS = 800;
+const VOICE_CHUNK_MS = 500;
+const MOBILE_LAYOUT_MAX_WIDTH = 900;
 
 // Real-time voice conversion server (voice-rt-server on RunPod) — a
 // continuous WebSocket alternative to the ElevenLabs chunk-based pipeline
@@ -185,6 +186,12 @@ export default function App() {
   const [sessionCreditsUsed, setSessionCreditsUsed] = useState(0);
   const [showAddCredits, setShowAddCredits] = useState(false);
   const [isPoppedOut, setIsPoppedOut] = useState(false);
+  const [mobileOutputFocus, setMobileOutputFocus] = useState(false);
+  const [isMobileLayout, setIsMobileLayout] = useState(() =>
+    typeof window !== "undefined"
+      ? window.matchMedia(`(max-width: ${MOBILE_LAYOUT_MAX_WIDTH}px)`).matches
+      : false
+  );
   const pipSupported = typeof document !== "undefined" && document.pictureInPictureEnabled;
 
   const localVideoRef = useRef(null);
@@ -212,6 +219,8 @@ export default function App() {
   const analyserRef = useRef(null);
   const voiceLevelIntervalRef = useRef(null);
   const chunkHadSpeechRef = useRef(false);
+  const speechSamplesInChunkRef = useRef(0);
+  const chunkSampleChecksRef = useRef(0);
   const noiseFloorRef = useRef(0.005); // adaptive ambient-noise estimate, updated continuously while quiet
   const rtcSocketRef = useRef(null);
   const rtcWorkletNodeRef = useRef(null);
@@ -459,6 +468,49 @@ export default function App() {
     };
   }, []);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const mediaQuery = window.matchMedia(`(max-width: ${MOBILE_LAYOUT_MAX_WIDTH}px)`);
+    const syncLayout = (event) => setIsMobileLayout(event.matches);
+    syncLayout(mediaQuery);
+    mediaQuery.addEventListener("change", syncLayout);
+    return () => mediaQuery.removeEventListener("change", syncLayout);
+  }, []);
+
+  const enterMobileOutputFocus = async () => {
+    setMobileOutputFocus(true);
+    const video = outputVideoRef.current;
+    if (!video) return;
+    try {
+      if (pipSupported && !document.pictureInPictureElement) {
+        await video.requestPictureInPicture();
+        return;
+      }
+    } catch {
+      // fall through to fullscreen overlay
+    }
+    try {
+      const container = video.closest(".itc-fixed-output") || video;
+      if (container.requestFullscreen) {
+        await container.requestFullscreen();
+      } else if (video.webkitEnterFullscreen) {
+        video.webkitEnterFullscreen();
+      }
+    } catch {
+      // CSS overlay still expands the output on mobile
+    }
+  };
+
+  const exitMobileOutputFocus = async () => {
+    setMobileOutputFocus(false);
+    try {
+      if (document.pictureInPictureElement) await document.exitPictureInPicture();
+      if (document.fullscreenElement) await document.exitFullscreen();
+    } catch {
+      // ignore
+    }
+  };
+
   // Pops the OUTPUT MONITOR video into its own floating, chrome-free window
   // via the browser's native Picture-in-Picture — this is the one built-in
   // way to move a live MediaStream into its own window without having to
@@ -468,8 +520,10 @@ export default function App() {
   // there's nothing to crop — it contains only the video.
   const handlePopOutVideo = async () => {
     try {
-      if (document.pictureInPictureElement) {
-        await document.exitPictureInPicture();
+      if (document.pictureInPictureElement || mobileOutputFocus) {
+        await exitMobileOutputFocus();
+      } else if (isMobileLayout) {
+        await enterMobileOutputFocus();
       } else if (outputVideoRef.current) {
         await outputVideoRef.current.requestPictureInPicture();
       }
@@ -821,15 +875,54 @@ export default function App() {
   // room's actual ambient noise floor continuously and gates on being
   // clearly louder than THAT, sustained for a moment (see startVoiceChangerCapture).
   //
-  // TUNING, if it's still off after this change:
-  //   - Still triggering on background noise? Raise VOICE_ACTIVITY_MULTIPLIER
-  //     (e.g. 4 or 5) so it demands a bigger jump above the ambient floor.
-  //   - Missing soft speech? Lower VOICE_ACTIVITY_MULTIPLIER (e.g. 2), or
-  //     lower VOICE_ACTIVITY_MIN_THRESHOLD if your room is extremely quiet.
-  const VOICE_ACTIVITY_MULTIPLIER = 3; // how many times louder than "quiet" counts as speech
-  const VOICE_ACTIVITY_MIN_THRESHOLD = 0.012; // absolute floor, for near-silent rooms
-  const VOICE_ACTIVITY_MIN_CONSECUTIVE = 2; // consecutive 100ms samples needed — filters clicks/taps
+  // Tuned for quiet rooms with steady fan hum and occasional distant voices.
+  // Fan = low-frequency constant noise (tracked as noise floor). Distant outside
+  // voices = quieter, less peaky, weaker speech-band energy than you at the mic.
+  const VOICE_ACTIVITY_MULTIPLIER = 5.5;
+  const VOICE_ACTIVITY_MIN_THRESHOLD = 0.022;
+  const VOICE_ACTIVITY_MIN_CONSECUTIVE = 4;
+  const VOICE_ACTIVITY_MIN_SPEECH_RATIO = 0.45;
+  const VOICE_NOISE_FLOOR_MAX = 0.028;
+  const VOICE_PEAK_MULTIPLIER = 1.55;
+  const VOICE_SPEECH_BAND_MIN = 0.38;
+  const VOICE_WARMUP_CHECKS = 12;
   const VOICE_LEVEL_CHECK_MS = 100;
+  const VOICE_SPEECH_BAND_HZ = { low: 280, high: 3500 };
+
+  const measureMicLevel = (analyser, timeDomainData, freqData, sampleRate) => {
+    analyser.getFloatTimeDomainData(timeDomainData);
+    let sumSquares = 0;
+    let peak = 0;
+    for (let i = 0; i < timeDomainData.length; i++) {
+      const sample = timeDomainData[i];
+      sumSquares += sample * sample;
+      const abs = Math.abs(sample);
+      if (abs > peak) peak = abs;
+    }
+    const rms = Math.sqrt(sumSquares / timeDomainData.length);
+
+    analyser.getFloatFrequencyData(freqData);
+    const binHz = sampleRate / analyser.fftSize;
+    let totalEnergy = 0;
+    let speechEnergy = 0;
+    for (let i = 0; i < freqData.length; i++) {
+      const linear = Math.pow(10, freqData[i] / 20);
+      const energy = linear * linear;
+      totalEnergy += energy;
+      const hz = i * binHz;
+      if (hz >= VOICE_SPEECH_BAND_HZ.low && hz <= VOICE_SPEECH_BAND_HZ.high) {
+        speechEnergy += energy;
+      }
+    }
+    const speechBandRatio = totalEnergy > 0 ? speechEnergy / totalEnergy : 0;
+
+    return { rms, peak, speechBandRatio };
+  };
+
+  const isLikelyLocalSpeech = (rms, peak, speechBandRatio, dynamicThreshold) =>
+    rms > dynamicThreshold &&
+    peak > dynamicThreshold * VOICE_PEAK_MULTIPLIER &&
+    speechBandRatio >= VOICE_SPEECH_BAND_MIN;
 
   const convertVoiceChunk = async (blob) => {
     if (!blob || blob.size < 500) return; // skip empty/near-empty clips outright
@@ -879,7 +972,7 @@ export default function App() {
     voiceDestinationRef.current = destination;
     voicePlaybackQueueTimeRef.current = audioCtx.currentTime;
     voiceChangerActiveRef.current = true;
-    noiseFloorRef.current = 0.005; // reset to a sane starting estimate each session
+    noiseFloorRef.current = 0.01; // fan rooms: start closer to typical steady hum
 
     // Continuous live level monitor — a separate tap on the mic track, runs
     // independently of the MediaRecorder below and never touches what gets
@@ -898,38 +991,58 @@ export default function App() {
     const levelSource = audioCtx.createMediaStreamSource(new MediaStream([micTrack]));
     levelSource.connect(analyser);
     const timeDomainData = new Float32Array(analyser.fftSize);
+    const freqData = new Float32Array(analyser.frequencyBinCount);
     analyserRef.current = analyser;
 
     chunkHadSpeechRef.current = false;
+    speechSamplesInChunkRef.current = 0;
+    chunkSampleChecksRef.current = 0;
     let consecutiveLoudSamples = 0;
+    let warmupChecks = 0;
 
     voiceLevelIntervalRef.current = setInterval(() => {
-      analyser.getFloatTimeDomainData(timeDomainData);
-      let sumSquares = 0;
-      for (let i = 0; i < timeDomainData.length; i++) sumSquares += timeDomainData[i] * timeDomainData[i];
-      const rms = Math.sqrt(sumSquares / timeDomainData.length);
+      const { rms, peak, speechBandRatio } = measureMicLevel(
+        analyser,
+        timeDomainData,
+        freqData,
+        audioCtx.sampleRate
+      );
 
-      // A real speech threshold: clearly above whatever "quiet" has recently
-      // measured as, with a small absolute floor so a near-silent room
-      // (noise floor ~0) doesn't end up with a near-zero threshold.
-      const dynamicThreshold = Math.max(noiseFloorRef.current * VOICE_ACTIVITY_MULTIPLIER, VOICE_ACTIVITY_MIN_THRESHOLD);
+      if (warmupChecks < VOICE_WARMUP_CHECKS) {
+        warmupChecks += 1;
+        noiseFloorRef.current = Math.min(
+          VOICE_NOISE_FLOOR_MAX,
+          noiseFloorRef.current * 0.9 + rms * 0.1
+        );
+        return;
+      }
 
-      if (rms > dynamicThreshold) {
+      const dynamicThreshold = Math.max(
+        noiseFloorRef.current * VOICE_ACTIVITY_MULTIPLIER,
+        VOICE_ACTIVITY_MIN_THRESHOLD
+      );
+      chunkSampleChecksRef.current += 1;
+
+      if (isLikelyLocalSpeech(rms, peak, speechBandRatio, dynamicThreshold)) {
         consecutiveLoudSamples += 1;
         if (consecutiveLoudSamples >= VOICE_ACTIVITY_MIN_CONSECUTIVE) {
           chunkHadSpeechRef.current = true;
+          speechSamplesInChunkRef.current += 1;
         }
       } else {
         consecutiveLoudSamples = 0;
-        // Only adapt the noise floor during quiet moments, so a burst of
-        // actual speech doesn't drag the "quiet" baseline upward with it.
-        noiseFloorRef.current = noiseFloorRef.current * 0.95 + rms * 0.05;
+        noiseFloorRef.current = Math.min(
+          VOICE_NOISE_FLOOR_MAX,
+          noiseFloorRef.current * 0.97 + rms * 0.03
+        );
       }
     }, VOICE_LEVEL_CHECK_MS);
 
     const recordCycle = () => {
       if (!voiceChangerActiveRef.current) return;
-      chunkHadSpeechRef.current = false; // reset the flag for this chunk's window
+      chunkHadSpeechRef.current = false;
+      speechSamplesInChunkRef.current = 0;
+      chunkSampleChecksRef.current = 0;
       const recorder = new MediaRecorder(new MediaStream([micTrack]), { mimeType: "audio/webm" });
       const chunks = [];
       recorder.ondataavailable = (e) => {
@@ -937,10 +1050,11 @@ export default function App() {
       };
       recorder.onstop = () => {
         const blob = new Blob(chunks, { type: "audio/webm" });
-        // Only send this clip on if the live monitor actually caught real
-        // speech energy at some point during it — true silence never
-        // reaches ElevenLabs at all.
-        if (chunkHadSpeechRef.current) {
+        const checks = Math.max(chunkSampleChecksRef.current, 1);
+        const speechRatio = speechSamplesInChunkRef.current / checks;
+        // Only send this clip if sustained speech dominated the window — not
+        // a single tap, keyboard click, or background burst.
+        if (chunkHadSpeechRef.current && speechRatio >= VOICE_ACTIVITY_MIN_SPEECH_RATIO) {
           convertVoiceChunk(blob).catch((err) => console.error("Voice chunk conversion failed:", err));
         }
         if (voiceChangerActiveRef.current) recordCycle(); // keep going
@@ -1447,6 +1561,11 @@ export default function App() {
             mirror: "auto", // Decart's current docs recommend this over a hardcoded false/true
             onRemoteStream: (remoteStream) => {
               if (outputVideoRef.current) outputVideoRef.current.srcObject = remoteStream;
+              if (isMobileLayout) {
+                enterMobileOutputFocus().catch((err) => {
+                  console.warn("Mobile output focus failed:", err);
+                });
+              }
             },
             onError: (err) => {
               console.error("Decart Session Error:", err);
@@ -1522,6 +1641,9 @@ export default function App() {
     setIsRunning(false);
     setStatus((prev) => (prev.startsWith("OUT OF CREDITS") ? prev : "PIPELINE DISCONNECTED"));
     setElapsedSeconds(0);
+    if (mobileOutputFocus) {
+      exitMobileOutputFocus().catch(() => {});
+    }
     if (outputVideoRef.current) outputVideoRef.current.srcObject = null;
   };
 
@@ -1567,7 +1689,7 @@ export default function App() {
   }
 
   return (
-    <div style={styles.appContainer} className="itc-app">
+    <div style={styles.appContainer} className={`itc-app${mobileOutputFocus ? " itc-mobile-output-focus" : ""}`}>
       <header className="itc-top-header">
         <div className="itc-header-brand">
           <div className="itc-header-brand-id">
@@ -1850,8 +1972,8 @@ export default function App() {
               {isRunning
                 ? "Locked while live — changes apply on next deploy"
                 : voiceEngine === "elevenlabs"
-                ? `Converts your voice in ~${VOICE_CHUNK_MS / 1000}s rolling clips — short delay per phrase, not instant.`
-                : "Continuous conversion via voice-rt-server. Requires a running RunPod pod, matching RTC_TICKET_SECRET, and RVC models in /models."}
+                ? `Converts your voice in ~${VOICE_CHUNK_MS / 1000}s clips — tuned for fan noise; speak clearly at the mic. Distant voices are ignored.`
+                : "Continuous conversion via voice-rt-server (RunPod). Needs a running GPU pod. ElevenLabs above works without RunPod."}
             </div>
           </div>
 
@@ -1916,16 +2038,32 @@ export default function App() {
                 Stop transformation
               </button>
               <button
-                style={{...styles.actionButton, ...styles.popOutButton, opacity: !pipSupported ? 0.5 : 1}}
+                style={{...styles.actionButton, ...styles.popOutButton, opacity: !pipSupported && !isMobileLayout ? 0.5 : 1}}
                 className="itc-btn itc-btn-secondary"
                 onClick={handlePopOutVideo}
-                disabled={!pipSupported}
-                title={pipSupported ? "Pop the output video into its own floating window — capture that window in OBS/your calling app" : "Picture-in-Picture isn't supported in this browser — try Chrome or Edge"}
+                disabled={!pipSupported && !isMobileLayout}
+                title={
+                  pipSupported
+                    ? "Pop the output video into its own floating window — capture that window in OBS/your calling app"
+                    : isMobileLayout
+                    ? "Expand output to full screen on mobile"
+                    : "Picture-in-Picture isn't supported in this browser — try Chrome or Edge"
+                }
               >
-                {isPoppedOut ? "Return to app" : "Pop out for OBS"}
+                {isPoppedOut || mobileOutputFocus ? "Return to app" : isMobileLayout ? "Full screen output" : "Pop out for OBS"}
               </button>
             </div>
           </div>
+
+          {mobileOutputFocus && (
+            <button
+              type="button"
+              className="itc-mobile-output-exit itc-btn itc-btn-secondary"
+              onClick={() => exitMobileOutputFocus()}
+            >
+              Exit full screen
+            </button>
+          )}
 
           <div style={styles.canvasViewportContainer} className="itc-canvas-viewport">
             <div style={styles.outputColumn} className="itc-output-column">

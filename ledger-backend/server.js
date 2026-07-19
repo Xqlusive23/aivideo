@@ -348,6 +348,33 @@ app.post("/api/admin/tokens/:token/restore", (req, res) => {
   res.json({ token, revoked: false });
 });
 
+// Permanently removes a token and all associated ledger rows. Unlike revoke,
+// this cannot be undone — use when a customer should no longer exist in the DB.
+app.delete("/api/admin/tokens/:token", (req, res) => {
+  if (!ADMIN_SECRET || req.headers["x-admin-secret"] !== ADMIN_SECRET) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  const { token } = req.params;
+  if (!getUser(token)) return res.status(404).json({ error: "Unknown token" });
+
+  const deleteUser = db.prepare("DELETE FROM users WHERE token = ?");
+  const deleteTransactions = db.prepare("DELETE FROM transactions WHERE token = ?");
+  const deleteSessions = db.prepare("DELETE FROM usage_sessions WHERE token = ?");
+
+  db.exec("BEGIN");
+  try {
+    deleteSessions.run(token);
+    deleteTransactions.run(token);
+    deleteUser.run(token);
+    db.exec("COMMIT");
+    res.json({ token, deleted: true });
+  } catch (err) {
+    db.exec("ROLLBACK");
+    console.error("Failed to delete token:", err);
+    res.status(500).json({ error: "Could not delete token" });
+  }
+});
+
 // --- Balance ----------------------------------------------------------------
 app.get("/api/credits", requireToken, (req, res) => {
   res.json({ credits: getBalance(req.token) });
