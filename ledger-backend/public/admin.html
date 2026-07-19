@@ -5,119 +5,406 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>InspireTech — Admin</title>
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
-  * { box-sizing: border-box; }
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+  *, *::before, *::after { box-sizing: border-box; }
+
   body {
-    margin: 0; padding: 32px 20px; min-height: 100vh;
-    background: #090b11; color: #dde1e8;
-    font-family: "JetBrains Mono", Consolas, monospace;
-    display: flex; justify-content: center;
+    margin: 0;
+    min-height: 100vh;
+    padding: 28px 20px 48px;
+    background:
+      radial-gradient(1200px 600px at 10% -10%, rgba(91, 141, 239, 0.12), transparent 55%),
+      radial-gradient(900px 500px at 100% 0%, rgba(52, 211, 153, 0.06), transparent 50%),
+      #090b11;
+    color: #dde1e8;
+    font-family: "Inter", system-ui, sans-serif;
   }
-  .wrap { width: 100%; max-width: 720px; }
-  .admin-brand {
+
+  .shell {
+    width: 100%;
+    max-width: 1080px;
+    margin: 0 auto;
+  }
+
+  .page-header {
     display: flex;
     align-items: center;
-    gap: 12px;
-    margin-bottom: 4px;
+    gap: 14px;
+    margin-bottom: 8px;
   }
-  .admin-brand img {
-    width: 40px;
-    height: 40px;
+
+  .page-header img {
+    width: 44px;
+    height: 44px;
     object-fit: contain;
   }
-  h1 {
-    font-family: "Inter", system-ui, sans-serif; font-size: 20px; font-weight: 800;
-    color: #f4f6fa; margin: 0 0 4px;
+
+  .page-header h1 {
+    margin: 0;
+    font-size: 22px;
+    font-weight: 800;
+    color: #f4f6fa;
+    letter-spacing: -0.02em;
   }
-  .subtitle { font-size: 12px; color: #6b7385; margin: 0 0 28px; }
+
+  .subtitle {
+    margin: 0 0 28px;
+    font-size: 13px;
+    line-height: 1.6;
+    color: #6b7385;
+    max-width: 720px;
+  }
+
   .card {
-    background: #0d111c; border: 1px solid #1a2030; border-radius: 10px;
-    padding: 20px; margin-bottom: 20px;
+    background: rgba(13, 17, 28, 0.92);
+    border: 1px solid #1a2030;
+    border-radius: 14px;
+    padding: 22px;
+    margin-bottom: 18px;
+    box-shadow: 0 18px 40px -28px rgba(0, 0, 0, 0.8);
   }
+
   .card h2 {
-    font-size: 11px; font-weight: 700; letter-spacing: 0.08em; color: #8b93a7;
-    margin: 0 0 14px; border-bottom: 1px solid #1a2030; padding-bottom: 8px;
+    margin: 0 0 16px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid #1a2030;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    color: #8b93a7;
+    text-transform: uppercase;
   }
-  label { font-size: 10px; color: #6b7385; font-weight: 700; letter-spacing: 0.05em; display: block; margin-bottom: 4px; }
-  input {
-    width: 100%; background: #05070c; color: #e6e9ef; border: 1px solid #262e42;
-    border-radius: 6px; padding: 10px 12px; font-family: inherit; font-size: 13px;
+
+  label {
+    display: block;
+    margin-bottom: 6px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    color: #6b7385;
+    text-transform: uppercase;
+  }
+
+  input[type="text"],
+  input[type="password"],
+  input[type="number"] {
+    width: 100%;
     margin-bottom: 14px;
+    padding: 11px 13px;
+    border: 1px solid #262e42;
+    border-radius: 8px;
+    background: #05070c;
+    color: #e6e9ef;
+    font: 500 13px/1.4 "Inter", system-ui, sans-serif;
   }
-  input:focus { outline: none; border-color: #5b8def; box-shadow: 0 0 0 3px rgba(91,141,239,0.14); }
+
+  input:focus {
+    outline: none;
+    border-color: #5b8def;
+    box-shadow: 0 0 0 3px rgba(91, 141, 239, 0.14);
+  }
+
   button {
-    background: #3f6fdb; background-image: linear-gradient(135deg, #6d97f2 0%, #3a63c7 100%);
-    color: #fff; border: 1px solid rgba(109,151,242,0.4); padding: 10px 16px;
-    border-radius: 6px; font-size: 12px; font-weight: 700; cursor: pointer;
-    font-family: inherit;
+    border: 1px solid rgba(109, 151, 242, 0.4);
+    border-radius: 8px;
+    padding: 10px 14px;
+    background: linear-gradient(135deg, #6d97f2 0%, #3a63c7 100%);
+    color: #fff;
+    font: 700 12px/1 "Inter", system-ui, sans-serif;
+    cursor: pointer;
   }
+
   button:hover { filter: brightness(1.08); }
   button:disabled { opacity: 0.5; cursor: not-allowed; }
+
   button.secondary {
-    background: #141a28; background-image: none; color: #9aa2b6; border: 1px solid #262e42;
+    background: #141a28;
+    background-image: none;
+    color: #9aa2b6;
+    border-color: #262e42;
   }
-  .row { display: flex; gap: 10px; align-items: flex-end; }
-  .row > div { flex: 1; }
-  .msg { font-size: 11px; margin-top: 10px; line-height: 1.5; }
-  .msg.error { color: #f0576a; }
-  .msg.ok { color: #34d399; }
-  table { width: 100%; border-collapse: collapse; font-size: 11px; }
-  th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid #1a2030; }
-  th { color: #6b7385; font-weight: 700; letter-spacing: 0.04em; font-size: 10px; }
-  td.token { font-family: inherit; color: #5b8def; word-break: break-all; }
-  td.credits { color: #f4f6fa; font-weight: 700; }
-  .copy-btn {
-    background: #141a28; color: #9aa2b6; border: 1px solid #262e42; padding: 3px 8px;
-    border-radius: 4px; font-size: 10px; cursor: pointer; font-family: inherit;
+
+  button.ghost {
+    background: #101624;
+    background-image: none;
+    color: #c7cede;
+    border-color: #2a3348;
   }
-  .copy-btn.danger {
+
+  button.danger {
+    background: #241018;
+    background-image: none;
     color: #f0576a;
     border-color: #4a2530;
   }
-  .table-scroll { overflow-x: auto; }
-  .empty { font-size: 11px; color: #454e63; font-style: italic; }
-  .badge {
-    display: inline-block;
-    font-size: 9px;
+
+  button.success {
+    background: #0f2419;
+    background-image: none;
+    color: #34d399;
+    border-color: #1f4d3a;
+  }
+
+  .row {
+    display: flex;
+    gap: 12px;
+    align-items: flex-end;
+    flex-wrap: wrap;
+  }
+
+  .row > div { flex: 1; min-width: 220px; }
+
+  .toolbar {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+  }
+
+  .toolbar label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0;
+    font-size: 12px;
+    color: #8b93a7;
+    text-transform: none;
+    letter-spacing: 0;
+    font-weight: 600;
+  }
+
+  .msg {
+    margin-top: 10px;
+    font-size: 12px;
+    line-height: 1.5;
+  }
+
+  .msg.error { color: #f0576a; }
+  .msg.ok { color: #34d399; }
+
+  .footnote {
+    margin-top: 6px;
+    font-size: 11px;
+    line-height: 1.5;
+    color: #5f677a;
+    font-style: italic;
+  }
+
+  .empty {
+    padding: 28px 16px;
+    border: 1px dashed #262e42;
+    border-radius: 12px;
+    text-align: center;
+    font-size: 12px;
+    color: #5f677a;
+    font-style: italic;
+  }
+
+  .record-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .record {
+    border: 1px solid #1d2435;
+    border-radius: 12px;
+    background: linear-gradient(180deg, rgba(16, 22, 36, 0.95), rgba(10, 14, 24, 0.95));
+    overflow: hidden;
+  }
+
+  .record.muted { opacity: 0.62; }
+
+  .record-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 14px 16px 10px;
+    border-bottom: 1px solid #171d2b;
+  }
+
+  .record-title {
+    font-size: 14px;
     font-weight: 700;
-    letter-spacing: 0.04em;
-    padding: 2px 6px;
+    color: #f4f6fa;
+    line-height: 1.4;
+  }
+
+  .record-subtitle {
+    margin-top: 4px;
+    font-size: 12px;
+    color: #7d869c;
+  }
+
+  .record-badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 8px;
+  }
+
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 8px;
     border-radius: 999px;
     border: 1px solid #262e42;
     background: #141a28;
     color: #9aa2b6;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
     white-space: nowrap;
   }
-  .badge.live { color: #34d399; border-color: #1f4d3a; }
-  .badge.transform { color: #fbbf24; border-color: #4a3a12; }
-  .badge.mobile { color: #93c5fd; border-color: #1e3a5f; }
-  .badge.desktop { color: #c4b5fd; border-color: #3b2f66; }
-  .badge.windows { color: #67e8f9; border-color: #155e75; }
-  .badge.revoked { color: #f0576a; border-color: #4a2530; }
-  .footnote { font-size: 10px; color: #454e63; font-style: italic; margin-top: 6px; }
+
+  .badge.live { color: #34d399; border-color: #1f4d3a; background: rgba(52, 211, 153, 0.08); }
+  .badge.transform { color: #fbbf24; border-color: #4a3a12; background: rgba(251, 191, 36, 0.08); }
+  .badge.mobile { color: #93c5fd; border-color: #1e3a5f; background: rgba(147, 197, 253, 0.08); }
+  .badge.desktop { color: #c4b5fd; border-color: #3b2f66; background: rgba(196, 181, 253, 0.08); }
+  .badge.windows { color: #67e8f9; border-color: #155e75; background: rgba(103, 232, 249, 0.08); }
+  .badge.revoked { color: #f0576a; border-color: #4a2530; background: rgba(240, 87, 106, 0.08); }
+
+  .token-panel {
+    padding: 12px 16px;
+    background: #070a12;
+    border-bottom: 1px solid #171d2b;
+  }
+
+  .token-label {
+    margin-bottom: 8px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #5f677a;
+  }
+
+  .token-row {
+    display: flex;
+    align-items: stretch;
+    gap: 10px;
+    min-width: 0;
+  }
+
+  .token-value-wrap {
+    flex: 1;
+    min-width: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    border: 1px solid #243049;
+    border-radius: 8px;
+    background: #05070c;
+    scrollbar-width: thin;
+    scrollbar-color: #334060 #0a0f18;
+  }
+
+  .token-value-wrap::-webkit-scrollbar { height: 8px; }
+  .token-value-wrap::-webkit-scrollbar-track { background: #0a0f18; }
+  .token-value-wrap::-webkit-scrollbar-thumb { background: #334060; border-radius: 999px; }
+
+  .token-value {
+    display: block;
+    padding: 11px 14px;
+    color: #8fb4ff;
+    font: 500 13px/1.4 "JetBrains Mono", Consolas, monospace;
+    white-space: nowrap;
+    user-select: all;
+    cursor: text;
+  }
+
+  .token-copy-btn {
+    flex: 0 0 auto;
+    align-self: stretch;
+    min-width: 84px;
+    padding-inline: 12px;
+  }
+
+  .record-meta {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 10px;
+    padding: 12px 16px;
+    border-bottom: 1px solid #171d2b;
+  }
+
+  .meta-item {
+    min-width: 0;
+  }
+
+  .meta-key {
+    margin-bottom: 4px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: #5f677a;
+  }
+
+  .meta-val {
+    font-size: 13px;
+    font-weight: 600;
+    color: #e6e9ef;
+    word-break: break-word;
+  }
+
+  .meta-val.credits {
+    color: #f4f6fa;
+    font-size: 15px;
+  }
+
+  .record-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 12px 16px 14px;
+  }
+
+  .record-actions button {
+    padding: 8px 12px;
+    font-size: 11px;
+  }
+
+  .created-token-box {
+    margin-top: 12px;
+    padding: 14px;
+    border: 1px solid #1f4d3a;
+    border-radius: 10px;
+    background: rgba(52, 211, 153, 0.06);
+  }
+
+  @media (max-width: 640px) {
+    body { padding: 18px 14px 36px; }
+    .card { padding: 16px; }
+    .record-top { flex-direction: column; }
+    .token-row { flex-direction: column; }
+    .token-copy-btn { min-height: 40px; }
+  }
 </style>
 </head>
 <body>
-<div class="wrap">
-  <div class="admin-brand">
+<div class="shell">
+  <div class="page-header">
     <img src="/logo.png" alt="INSPIRE_TECH" />
-    <h1 style="margin:0">InspireTech — Admin</h1>
+    <h1>InspireTech — Admin</h1>
   </div>
-  <p class="subtitle">Mint access tokens for customers and see everyone's balance. This page never leaves your own machine's/deployment's backend — it isn't part of the public app bundle.</p>
+  <p class="subtitle">Mint access tokens, monitor active sessions, and manage credits. This page runs on your ledger backend only — it is not part of the public app.</p>
 
   <div class="card">
-    <h2>ADMIN SECRET</h2>
-    <label>Enter the ADMIN_SECRET from your backend's .env</label>
-    <input type="password" id="adminSecret" placeholder="paste your ADMIN_SECRET here" />
-    <div class="footnote">Kept only in this browser tab's memory for convenience — never sent anywhere except your own backend, and never saved to disk.</div>
+    <h2>Admin Secret</h2>
+    <label for="adminSecret">Enter the ADMIN_SECRET from your backend .env</label>
+    <input type="password" id="adminSecret" placeholder="Paste your ADMIN_SECRET here" />
+    <div class="footnote">Stored only in this browser tab for convenience. Cleared when the tab closes.</div>
   </div>
 
   <div class="card">
-    <h2>CREATE A NEW TOKEN</h2>
+    <h2>Create a New Token</h2>
     <div class="row">
       <div>
-        <label>Label (name/note for this customer)</label>
-        <input type="text" id="newLabel" placeholder="e.g. jane@example.com or 'Instagram customer #4'" />
+        <label for="newLabel">Label (customer name or note)</label>
+        <input type="text" id="newLabel" placeholder="e.g. jane@example.com or Instagram customer #4" />
       </div>
       <button id="createBtn" style="margin-bottom:14px;">+ Create Token</button>
     </div>
@@ -125,30 +412,28 @@
   </div>
 
   <div class="card">
-    <h2>MIGRATE AN EXISTING USER (e.g. moving to a new deployment)</h2>
+    <h2>Migrate an Existing User</h2>
     <div class="footnote" style="margin-bottom:14px;">
-      Use this to recreate someone's exact token — and their prior balance — on THIS database.
-      Their saved token keeps working as-is once your frontend points here; they don't need a new one.
+      Recreate someone's exact token and balance on this database. Their saved token keeps working once the frontend points here.
     </div>
-    <label>Their existing token (copy it from the old server's admin page first)</label>
-    <input type="text" id="migrateToken" placeholder="the exact token value they already have" />
-    <label>Their balance at time of migration</label>
+    <label for="migrateToken">Existing token</label>
+    <input type="text" id="migrateToken" placeholder="Paste the full token value" />
+    <label for="migrateCredits">Balance at migration</label>
     <input type="number" id="migrateCredits" placeholder="e.g. 366" />
-    <label>Label (optional)</label>
+    <label for="migrateLabel">Label (optional)</label>
     <input type="text" id="migrateLabel" placeholder="e.g. jane@example.com" />
     <button id="migrateBtn">Recreate This Token Here</button>
     <div id="migrateMsg" class="msg"></div>
   </div>
 
   <div class="card">
-    <h2>ACTIVE NOW</h2>
+    <h2>Active Now</h2>
     <div class="footnote" style="margin-bottom:14px;">
-      Every device with the studio open in the last ~90 seconds. Revoke <strong>Mobile</strong> or <strong>Desktop</strong> separately —
-      desktop web and the Windows app share one desktop revoke. Use <strong>Revoke all</strong> to block every device at once.
+      Devices with the studio open in the last ~90 seconds. Revoke <strong>Mobile</strong> or <strong>Desktop</strong> separately — desktop web and the Windows app share one desktop revoke.
     </div>
-    <div class="row" style="margin-bottom:14px;">
+    <div class="toolbar">
       <button id="refreshActiveBtn" class="secondary">↻ Refresh Active</button>
-      <label style="margin:0;display:flex;align-items:center;gap:8px;font-size:10px;color:#6b7385;">
+      <label>
         <input type="checkbox" id="autoRefreshActive" checked />
         Auto-refresh every 10s
       </label>
@@ -158,8 +443,8 @@
   </div>
 
   <div class="card">
-    <h2>ALL TOKENS</h2>
-    <div class="row" style="margin-bottom:14px;">
+    <h2>All Tokens</h2>
+    <div class="toolbar">
       <button id="refreshBtn" class="secondary">↻ Refresh List</button>
     </div>
     <div id="usersMsg" class="msg"></div>
@@ -168,8 +453,6 @@
 </div>
 
 <script>
-  // Point this at wherever your ledger backend actually runs.
-  // Same page, so no CORS setup is needed for this admin tool itself.
   const BACKEND_URL = window.location.origin;
 
   const secretInput = document.getElementById("adminSecret");
@@ -189,8 +472,6 @@
   const migrateLabelInput = document.getElementById("migrateLabel");
   const migrateMsg = document.getElementById("migrateMsg");
 
-  // Convenience only — lets you refresh the page without retyping the secret
-  // every time. Cleared automatically when the tab/browser session ends.
   secretInput.value = sessionStorage.getItem("itc_admin_secret") || "";
   secretInput.addEventListener("input", () => {
     sessionStorage.setItem("itc_admin_secret", secretInput.value);
@@ -199,6 +480,87 @@
   function setMsg(el, text, kind) {
     el.textContent = text;
     el.className = "msg" + (kind ? " " + kind : "");
+  }
+
+  function escapeHtml(value) {
+    return String(value || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  function renderTokenPanel(token, copyLabel = "Copy") {
+    const tokenJson = JSON.stringify(token);
+    return `
+      <div class="token-panel">
+        <div class="token-label">Access Token</div>
+        <div class="token-row">
+          <div class="token-value-wrap" title="Select or scroll to view the full token">
+            <code class="token-value">${escapeHtml(token)}</code>
+          </div>
+          <button type="button" class="ghost token-copy-btn" onclick="copyToken(${tokenJson}, this)">${copyLabel}</button>
+        </div>
+      </div>
+    `;
+  }
+
+  async function copyToken(token, buttonEl) {
+    try {
+      await navigator.clipboard.writeText(token);
+      if (buttonEl) {
+        const original = buttonEl.textContent;
+        buttonEl.textContent = "Copied";
+        setTimeout(() => { buttonEl.textContent = original; }, 1200);
+      }
+    } catch {
+      alert("Could not copy token. Select it manually from the box.");
+    }
+  }
+  window.copyToken = copyToken;
+
+  function platformScope(platform) {
+    if (platform === "mobile") return "mobile";
+    if (platform === "desktop-web" || platform === "windows-app") return "desktop";
+    return null;
+  }
+
+  function revokeStatusBadges(user) {
+    const badges = [];
+    if (user.revoked) badges.push('<span class="badge revoked">All revoked</span>');
+    if (user.revoked_mobile) badges.push('<span class="badge revoked">Mobile revoked</span>');
+    if (user.revoked_desktop) badges.push('<span class="badge revoked">Desktop revoked</span>');
+    return badges.join("");
+  }
+
+  function platformLabel(platform) {
+    if (platform === "mobile") return '<span class="badge mobile">Mobile</span>';
+    if (platform === "windows-app") return '<span class="badge windows">Windows app</span>';
+    if (platform === "desktop-web") return '<span class="badge desktop">Desktop web</span>';
+    return `<span class="badge">${escapeHtml(platform || "Unknown")}</span>`;
+  }
+
+  function platformRevokeButton(token, scope, currentlyRevoked, compact) {
+    const tokenJson = JSON.stringify(token);
+    const label = scope === "mobile"
+      ? (currentlyRevoked ? "Restore mobile" : "Revoke mobile")
+      : (currentlyRevoked ? "Restore desktop" : "Revoke desktop");
+    const cls = currentlyRevoked ? "success" : "danger";
+    const text = compact
+      ? label.replace("Restore ", "↩ ").replace("Revoke ", "✕ ")
+      : label;
+    return `<button type="button" class="${cls}" onclick="revokePlatformToken(${tokenJson}, '${scope}', ${currentlyRevoked ? "true" : "false"})">${text}</button>`;
+  }
+
+  function allRevokeButtons(user) {
+    const tokenJson = JSON.stringify(user.token);
+    const allCls = user.revoked ? "success" : "danger";
+    const allLabel = user.revoked ? "Restore all" : "Revoke all";
+    return `
+      ${platformRevokeButton(user.token, "mobile", Boolean(user.revoked_mobile), false)}
+      ${platformRevokeButton(user.token, "desktop", Boolean(user.revoked_desktop), false)}
+      <button type="button" class="${allCls}" onclick="revokeToken(${tokenJson}, ${user.revoked ? "true" : "false"})">${allLabel}</button>
+    `;
   }
 
   async function createToken() {
@@ -218,10 +580,13 @@
         setMsg(createMsg, data.error || "Something went wrong.", "error");
         return;
       }
-      setMsg(createMsg, `Created! Token: ${data.token}`, "ok");
+      createMsg.innerHTML = `
+        <div class="msg ok">Token created successfully.</div>
+        <div class="created-token-box">${renderTokenPanel(data.token)}</div>
+      `;
       newLabelInput.value = "";
       loadUsers();
-    } catch (err) {
+    } catch {
       setMsg(createMsg, "Couldn't reach the backend at " + BACKEND_URL, "error");
     } finally {
       createBtn.disabled = false;
@@ -253,7 +618,7 @@
       migrateCreditsInput.value = "";
       migrateLabelInput.value = "";
       loadUsers();
-    } catch (err) {
+    } catch {
       setMsg(migrateMsg, "Couldn't reach the backend at " + BACKEND_URL, "error");
     } finally {
       migrateBtn.disabled = false;
@@ -280,7 +645,7 @@
         return;
       }
       loadUsers();
-    } catch (err) {
+    } catch {
       alert("Couldn't reach the backend at " + BACKEND_URL);
     }
   }
@@ -307,7 +672,7 @@
       }
       loadUsers();
       loadActiveUsers();
-    } catch (err) {
+    } catch {
       alert("Couldn't reach the backend at " + BACKEND_URL);
     }
   }
@@ -336,7 +701,7 @@
       }
       loadUsers();
       loadActiveUsers();
-    } catch (err) {
+    } catch {
       alert("Couldn't reach the backend at " + BACKEND_URL);
     }
   }
@@ -352,7 +717,7 @@
     )) {
       return;
     }
-    if (!confirm("Last chance — delete " + token.slice(0, 8) + "... forever?")) {
+    if (!confirm("Last chance — delete this token forever?")) {
       return;
     }
     try {
@@ -366,60 +731,12 @@
         return;
       }
       loadUsers();
-    } catch (err) {
+      loadActiveUsers();
+    } catch {
       alert("Couldn't reach the backend at " + BACKEND_URL);
     }
   }
   window.deleteToken = deleteToken;
-
-  function platformScope(platform) {
-    if (platform === "mobile") return "mobile";
-    if (platform === "desktop-web" || platform === "windows-app") return "desktop";
-    return null;
-  }
-
-  function revokeStatusBadges(user) {
-    const badges = [];
-    if (user.revoked) badges.push('<span class="badge revoked">ALL</span>');
-    if (user.revoked_mobile) badges.push('<span class="badge revoked">MOBILE</span>');
-    if (user.revoked_desktop) badges.push('<span class="badge revoked">DESKTOP</span>');
-    return badges.length ? ` ${badges.join(" ")}` : "";
-  }
-
-  function platformRevokeButton(token, scope, currentlyRevoked, compact) {
-    const tokenJson = JSON.stringify(token);
-    const label = scope === "mobile"
-      ? (currentlyRevoked ? "Restore mobile" : "Revoke mobile")
-      : (currentlyRevoked ? "Restore desktop" : "Revoke desktop");
-    const style = currentlyRevoked ? "" : "color:#f0576a;border-color:#4a2530;";
-    return `<button class="copy-btn" style="${style}" onclick="revokePlatformToken(${tokenJson}, '${scope}', ${currentlyRevoked ? "true" : "false"})">${compact ? label.replace("Restore ", "↩ ").replace("Revoke ", "✕ ") : label}</button>`;
-  }
-
-  function allRevokeButtons(user, compact) {
-    const tokenJson = JSON.stringify(user.token);
-    const allStyle = user.revoked ? "" : "color:#f0576a;border-color:#4a2530;";
-    const allLabel = user.revoked ? (compact ? "↩ All" : "Restore all") : (compact ? "✕ All" : "Revoke all");
-    return `
-      ${platformRevokeButton(user.token, "mobile", Boolean(user.revoked_mobile), compact)}
-      ${platformRevokeButton(user.token, "desktop", Boolean(user.revoked_desktop), compact)}
-      <button class="copy-btn" style="${allStyle}" onclick="revokeToken(${tokenJson}, ${user.revoked ? "true" : "false"})">${allLabel}</button>
-    `;
-  }
-
-  function platformLabel(platform) {
-    if (platform === "mobile") return '<span class="badge mobile">Mobile</span>';
-    if (platform === "windows-app") return '<span class="badge windows">Windows app</span>';
-    if (platform === "desktop-web") return '<span class="badge desktop">Desktop web</span>';
-    return `<span class="badge">${platform || "Unknown"}</span>`;
-  }
-
-  function escapeHtml(value) {
-    return String(value || "")
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
-  }
 
   async function loadActiveUsers() {
     const secret = secretInput.value.trim();
@@ -438,7 +755,7 @@
       }
       setMsg(activeMsg, "", "");
       renderActiveUsers(data.devices || [], data.liveSessions || [], data.activeWindowSeconds || 90);
-    } catch (err) {
+    } catch {
       setMsg(activeMsg, "Couldn't reach the backend at " + BACKEND_URL, "error");
     }
   }
@@ -449,42 +766,54 @@
       return;
     }
 
-    const rows = devices.map((device) => {
-      const token = device.token;
-      const tokenJson = JSON.stringify(token);
-      const liveSession = liveSessions.find((session) => session.token === token);
-      const statusBadge = device.is_transforming || liveSession
-        ? '<span class="badge transform">Transforming</span>'
-        : '<span class="badge live">Online</span>';
-      const scope = platformScope(device.platform);
-      const scopeRevoked = scope === "mobile" ? device.revoked_mobile : scope === "desktop" ? device.revoked_desktop : false;
-      const rowMuted = device.revoked || scopeRevoked;
-      return `
-        <tr${rowMuted ? ' style="opacity:0.55;"' : ""}>
-          <td>${escapeHtml(device.label) || "<span class='empty'>—</span>"}${revokeStatusBadges(device)}</td>
-          <td class="token">${escapeHtml(token.slice(0, 8))}…</td>
-          <td>${platformLabel(device.platform)}</td>
-          <td>${statusBadge}</td>
-          <td>${device.credits}</td>
-          <td>${new Date(device.last_seen_at).toLocaleString()}</td>
-          <td style="white-space:nowrap;">
-            <button class="copy-btn" onclick="navigator.clipboard.writeText(${tokenJson})">Copy token</button>
-            ${device.revoked
-              ? `<button class="copy-btn" onclick="revokeToken(${tokenJson}, true)">Restore all</button>`
-              : scope
-                ? platformRevokeButton(token, scope, Boolean(scopeRevoked), true)
-                : ""}
-          </td>
-        </tr>
-      `;
-    }).join("");
-
     activeTableWrap.innerHTML = `
-      <div class="table-scroll">
-      <table>
-        <thead><tr><th>Label</th><th>Token</th><th>Device</th><th>Status</th><th>Credits</th><th>Last seen</th><th></th></tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
+      <div class="record-list">
+        ${devices.map((device) => {
+          const token = device.token;
+          const tokenJson = JSON.stringify(token);
+          const liveSession = liveSessions.find((session) => session.token === token);
+          const statusBadge = device.is_transforming || liveSession
+            ? '<span class="badge transform">Transforming</span>'
+            : '<span class="badge live">Online</span>';
+          const scope = platformScope(device.platform);
+          const scopeRevoked = scope === "mobile" ? device.revoked_mobile : scope === "desktop" ? device.revoked_desktop : false;
+          const rowMuted = device.revoked || scopeRevoked;
+          const label = escapeHtml(device.label) || "No label";
+          const revokeBadges = revokeStatusBadges(device);
+          const actionButtons = device.revoked
+            ? `<button type="button" class="success" onclick="revokeToken(${tokenJson}, true)">Restore all</button>`
+            : scope
+              ? platformRevokeButton(token, scope, Boolean(scopeRevoked), false)
+              : "";
+
+          return `
+            <article class="record${rowMuted ? " muted" : ""}">
+              <div class="record-top">
+                <div>
+                  <div class="record-title">${label}</div>
+                  <div class="record-subtitle">${platformLabel(device.platform)} ${statusBadge}</div>
+                  ${revokeBadges ? `<div class="record-badges">${revokeBadges}</div>` : ""}
+                </div>
+              </div>
+              ${renderTokenPanel(token)}
+              <div class="record-meta">
+                <div class="meta-item">
+                  <div class="meta-key">Credits</div>
+                  <div class="meta-val credits">${device.credits}</div>
+                </div>
+                <div class="meta-item">
+                  <div class="meta-key">Last seen</div>
+                  <div class="meta-val">${new Date(device.last_seen_at).toLocaleString()}</div>
+                </div>
+                <div class="meta-item">
+                  <div class="meta-key">Device</div>
+                  <div class="meta-val">${escapeHtml(device.platform || "Unknown")}</div>
+                </div>
+              </div>
+              <div class="record-actions">${actionButtons}</div>
+            </article>
+          `;
+        }).join("")}
       </div>
     `;
   }
@@ -506,7 +835,7 @@
       }
       setMsg(usersMsg, "", "");
       renderUsers(data.users || []);
-    } catch (err) {
+    } catch {
       setMsg(usersMsg, "Couldn't reach the backend at " + BACKEND_URL, "error");
     }
   }
@@ -516,30 +845,43 @@
       usersTableWrap.innerHTML = '<div class="empty">No tokens created yet.</div>';
       return;
     }
-    const rows = users.map(u => {
-      const tokenJson = JSON.stringify(u.token);
-      const rowMuted = u.revoked || u.revoked_mobile || u.revoked_desktop;
-      return `
-      <tr${rowMuted ? ' style="opacity:0.55;"' : ''}>
-        <td class="token">${escapeHtml(u.token)}${revokeStatusBadges(u)}</td>
-        <td>${u.label || "<span class='empty'>—</span>"}</td>
-        <td class="credits">${u.credits}</td>
-        <td>${new Date(u.created_at).toLocaleString()}</td>
-        <td style="white-space:nowrap;">
-          <button class="copy-btn" onclick="navigator.clipboard.writeText(${tokenJson})">Copy</button>
-          <button class="copy-btn" onclick="adjustCredits(${tokenJson})">Adjust</button>
-          ${allRevokeButtons(u, false)}
-          <button class="copy-btn danger" onclick="deleteToken(${tokenJson})">Delete</button>
-        </td>
-      </tr>
-    `;
-    }).join("");
+
     usersTableWrap.innerHTML = `
-      <div class="table-scroll">
-      <table>
-        <thead><tr><th>Token</th><th>Label</th><th>Credits</th><th>Created</th><th></th></tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
+      <div class="record-list">
+        ${users.map((user) => {
+          const tokenJson = JSON.stringify(user.token);
+          const rowMuted = user.revoked || user.revoked_mobile || user.revoked_desktop;
+          const label = escapeHtml(user.label) || "No label";
+          const revokeBadges = revokeStatusBadges(user);
+
+          return `
+            <article class="record${rowMuted ? " muted" : ""}">
+              <div class="record-top">
+                <div>
+                  <div class="record-title">${label}</div>
+                  <div class="record-subtitle">Created ${new Date(user.created_at).toLocaleString()}</div>
+                  ${revokeBadges ? `<div class="record-badges">${revokeBadges}</div>` : ""}
+                </div>
+              </div>
+              ${renderTokenPanel(user.token)}
+              <div class="record-meta">
+                <div class="meta-item">
+                  <div class="meta-key">Credits</div>
+                  <div class="meta-val credits">${user.credits}</div>
+                </div>
+                <div class="meta-item">
+                  <div class="meta-key">Created</div>
+                  <div class="meta-val">${new Date(user.created_at).toLocaleString()}</div>
+                </div>
+              </div>
+              <div class="record-actions">
+                <button type="button" class="ghost" onclick="adjustCredits(${tokenJson})">Adjust credits</button>
+                ${allRevokeButtons(user)}
+                <button type="button" class="danger" onclick="deleteToken(${tokenJson})">Delete token</button>
+              </div>
+            </article>
+          `;
+        }).join("")}
       </div>
     `;
   }
@@ -562,7 +904,6 @@
   autoRefreshActive.addEventListener("change", syncActiveAutoRefresh);
   secretInput.addEventListener("input", syncActiveAutoRefresh);
 
-  // Auto-load the lists on page open if a secret is already remembered.
   if (secretInput.value) {
     loadUsers();
     loadActiveUsers();
