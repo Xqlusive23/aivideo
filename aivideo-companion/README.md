@@ -102,8 +102,20 @@ Open your calling app (Zoom, Telegram, Discord) and pick those devices before or
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `INSPIRETECH_DEV` | `1` in `npm run dev` | Load `http://localhost:5173` |
-| `INSPIRETECH_URL` | — | Override app URL |
+| `INSPIRETECH_URL` | — | Override app URL entirely |
+| `INSPIRETECH_APP_URL` | `https://www.inspirestream.xyz/#/app` | Live studio URL in packaged builds |
 | `INSPIRETECH_PYTHON` | `python` | Python for dev feeder |
+
+## Production updates (no reinstall for UI changes)
+
+Packaged builds open **https://www.inspirestream.xyz/#/app** instead of a frozen copy
+bundled inside the installer. When you deploy the website (Vercel) or ledger backend
+(Railway), desktop users get those changes the next time they open InspireTech — voice
+changer (ElevenLabs), credits, login fixes, etc. all use the same live APIs as the browser.
+
+You only need a **new installer** when the desktop shell changes (drivers, feeders,
+Electron, or this `paths.js` behavior). Bump `version` in `package.json`, run
+`npm run dist`, and publish a GitHub release.
 
 ## Code signing
 

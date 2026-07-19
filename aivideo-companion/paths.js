@@ -6,6 +6,11 @@ const VIRTUAL_CAMERA_NAME = "InspireTech Camera";
 const VIRTUAL_MIC_INPUT_HINT = "CABLE Input";
 const VIRTUAL_MIC_OUTPUT_NAME = "CABLE Output (VB-Audio Virtual Cable)";
 
+// Packaged builds load the live studio from here so UI/voice fixes deploy with the
+// website — no new installer for every frontend change. Override for staging/tests.
+const PRODUCTION_APP_URL =
+  process.env.INSPIRETECH_APP_URL || "https://www.inspirestream.xyz/#/app";
+
 function isDevMode() {
   return (
     process.env.INSPIRETECH_DEV === "1" ||
@@ -35,8 +40,7 @@ function getAppUrl() {
   if (isDevMode()) {
     return "http://localhost:5173/#/app";
   }
-  const indexPath = path.join(process.resourcesPath, "app", "index.html");
-  return `file://${indexPath.replace(/\\/g, "/")}#/app`;
+  return PRODUCTION_APP_URL;
 }
 
 function getFeederCommand() {

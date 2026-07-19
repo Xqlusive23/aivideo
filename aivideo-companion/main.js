@@ -1,6 +1,6 @@
 // main.js — Electron main process for the InspireTech desktop app.
 //
-// Production build loads the bundled Vite app from resources/app/.
+// Production build opens the live studio at inspirestream.xyz (see paths.js).
 // Dev mode (INSPIRETECH_DEV=1) loads http://localhost:5173 instead.
 //
 // On first authenticated launch, the web app installs virtual camera (Unity
