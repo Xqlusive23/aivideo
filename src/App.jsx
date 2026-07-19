@@ -384,16 +384,29 @@ export default function App() {
     };
   }, [accessToken]);
 
-  // Idle revocation check: if an admin revokes access while someone is just
-  // sitting on the page (not actively mid-transformation, so the heartbeat
-  // below isn't running), this is what catches it and logs them out without
-  // needing to wait for their next action.
+  // Idle access check: catches admin revoke/delete while the user is on the page.
   useEffect(() => {
-    if (!accessToken) return;
-    const interval = setInterval(() => {
+    if (!accessToken) return undefined;
+
+    const TOKEN_POLL_MS = 5000;
+    const checkAccess = () => {
       refreshBalance();
-    }, 25000);
-    return () => clearInterval(interval);
+    };
+
+    checkAccess();
+    const interval = setInterval(checkAccess, TOKEN_POLL_MS);
+
+    const onVisible = () => {
+      if (document.visibilityState === "visible") checkAccess();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", checkAccess);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", checkAccess);
+    };
   }, [accessToken]);
 
   // --- Electron desktop shell integration (no-op in the normal web app) ---
@@ -484,6 +497,8 @@ export default function App() {
   useEffect(() => {
     if (isMobileLayout && isRunning) {
       setMobileControlsOpen(false);
+    } else if (isMobileLayout && !isRunning) {
+      setMobileControlsOpen(true);
     }
   }, [isMobileLayout, isRunning]);
 
@@ -678,7 +693,7 @@ export default function App() {
         headers: { "X-Access-Token": token },
       });
       if (res.status === 401) {
-        return { ok: false, error: "That access token was rejected. Please re-enter it." };
+        return { ok: false, error: "Your access token was deleted or is no longer valid. Please sign in again." };
       }
       if (res.status === 403) {
         return {
@@ -819,7 +834,7 @@ export default function App() {
     try {
       const res = await fetch(`${LEDGER_URL}/api/credits`, { headers: authHeaders() });
       if (res.status === 401) {
-        handleTokenRejected("That access token was rejected by the server. Please re-enter it.");
+        handleTokenRejected("Your access token was deleted or is no longer valid. Please sign in again.");
         return;
       }
       if (res.status === 403) {
@@ -1336,7 +1351,7 @@ export default function App() {
           headers: authHeaders(),
         });
         if (res.status === 401) {
-          handleTokenRejected("Your session expired — please re-enter your access token.");
+          handleTokenRejected("Your access token was deleted or is no longer valid. Please sign in again.");
           return;
         }
         if (res.status === 403) {
@@ -1571,11 +1586,6 @@ export default function App() {
             mirror: "auto", // Decart's current docs recommend this over a hardcoded false/true
             onRemoteStream: (remoteStream) => {
               if (outputVideoRef.current) outputVideoRef.current.srcObject = remoteStream;
-              if (isMobileLayout) {
-                enterMobileOutputFocus().catch((err) => {
-                  console.warn("Mobile output focus failed:", err);
-                });
-              }
             },
             onError: (err) => {
               console.error("Decart Session Error:", err);
@@ -2033,17 +2043,7 @@ export default function App() {
               <h2 className="itc-canvas-title">Output monitor</h2>
               <span className="itc-canvas-subtitle" style={styles.canvasSubtitle}>1920×1080 Lucy 2.5 output, scaled to fit your screen</span>
             </div>
-            <div style={styles.actionRow} className="itc-action-row">
-              {isMobileLayout && (
-                <button
-                  type="button"
-                  className="itc-btn itc-btn-secondary itc-mobile-controls-toggle"
-                  style={{...styles.actionButton, ...styles.popOutButton, width: "100%"}}
-                  onClick={() => setMobileControlsOpen((open) => !open)}
-                >
-                  {mobileControlsOpen ? "Hide controls" : "Show controls"}
-                </button>
-              )}
+            <div style={styles.actionRow} className="itc-action-row itc-desktop-action-row">
               <button
                 style={{...styles.actionButton, ...styles.startButton, opacity: (isRunning || !selectedFile || credits <= 0 || ledgerUnreachable) ? 0.5 : 1}}
                 className="itc-btn itc-btn-start"
@@ -2119,6 +2119,42 @@ export default function App() {
           </div>
         </main>
       </div>
+
+      {isMobileLayout && (
+        <div className="itc-mobile-action-dock">
+          <button
+            type="button"
+            className="itc-btn itc-btn-secondary"
+            onClick={() => setMobileControlsOpen((open) => !open)}
+          >
+            {mobileControlsOpen ? "Hide setup" : "Show setup"}
+          </button>
+          <button
+            type="button"
+            className="itc-btn itc-btn-start"
+            onClick={startTransformation}
+            disabled={isRunning || !selectedFile || credits <= 0 || ledgerUnreachable}
+          >
+            Start
+          </button>
+          <button
+            type="button"
+            className="itc-btn itc-btn-stop"
+            onClick={stopTransformation}
+            disabled={!isRunning}
+          >
+            Stop
+          </button>
+          <button
+            type="button"
+            className="itc-btn itc-btn-secondary"
+            onClick={handlePopOutVideo}
+            disabled={!pipSupported && !isMobileLayout}
+          >
+            {isPoppedOut || mobileOutputFocus ? "Return" : "Full screen"}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
