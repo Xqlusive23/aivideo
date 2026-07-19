@@ -1,0 +1,9 @@
+node_modules
+.git
+aivideo-companion/release-*
+aivideo-companion/node_modules
+ledger-backend/ledger.db
+ledger-backend/ledger.db-*
+local-inference
+**/.venv
+**/__pycache__

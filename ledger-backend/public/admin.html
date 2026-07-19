@@ -202,48 +202,93 @@
     font-style: italic;
   }
 
-  .record-list {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-  }
-
-  .record {
-    border: 1px solid #1d2435;
-    border-radius: 12px;
-    background: linear-gradient(180deg, rgba(16, 22, 36, 0.95), rgba(10, 14, 24, 0.95));
-    overflow: hidden;
-  }
-
-  .record.muted { opacity: 0.62; }
-
-  .record-top {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    gap: 12px;
-    padding: 14px 16px 10px;
-    border-bottom: 1px solid #171d2b;
-  }
-
-  .record-title {
-    font-size: 14px;
-    font-weight: 700;
-    color: #f4f6fa;
-    line-height: 1.4;
-  }
-
-  .record-subtitle {
-    margin-top: 4px;
+  .flash {
+    margin-bottom: 12px;
+    padding: 10px 12px;
+    border-radius: 8px;
     font-size: 12px;
-    color: #7d869c;
+    font-weight: 600;
+    display: none;
   }
 
-  .record-badges {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    margin-top: 8px;
+  .flash.show { display: block; }
+  .flash.ok { color: #34d399; background: rgba(52, 211, 153, 0.08); border: 1px solid #1f4d3a; }
+  .flash.error { color: #f0576a; background: rgba(240, 87, 106, 0.08); border: 1px solid #4a2530; }
+
+  .table-wrap {
+    overflow-x: auto;
+    border: 1px solid #1a2030;
+    border-radius: 10px;
+  }
+
+  .data-table {
+    width: 100%;
+    min-width: 860px;
+    border-collapse: collapse;
+    font-size: 12px;
+  }
+
+  .data-table th,
+  .data-table td {
+    padding: 8px 10px;
+    border-bottom: 1px solid #171d2b;
+    vertical-align: middle;
+    text-align: left;
+  }
+
+  .data-table th {
+    background: #0a0f18;
+    color: #6b7385;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .data-table tr:last-child td { border-bottom: none; }
+  .data-table tr.muted { opacity: 0.58; }
+
+  .token-cell { min-width: 280px; max-width: 420px; }
+
+  .token-scroll {
+    overflow-x: auto;
+    overflow-y: hidden;
+    border: 1px solid #243049;
+    border-radius: 6px;
+    background: #05070c;
+    scrollbar-width: thin;
+  }
+
+  .token-scroll code {
+    display: block;
+    padding: 7px 10px;
+    color: #8fb4ff;
+    font: 500 11px/1.35 "JetBrains Mono", Consolas, monospace;
+    white-space: nowrap;
+    user-select: all;
+  }
+
+  .label-cell {
+    min-width: 120px;
+    max-width: 180px;
+    font-weight: 600;
+    color: #f4f6fa;
+  }
+
+  .actions-cell {
+    white-space: nowrap;
+  }
+
+  .actions-cell button,
+  .token-actions button {
+    padding: 5px 8px;
+    margin: 0 4px 4px 0;
+    font-size: 10px;
+    border-radius: 6px;
+  }
+
+  .token-actions {
+    margin-top: 6px;
   }
 
   .badge {
@@ -267,109 +312,9 @@
   .badge.windows { color: #67e8f9; border-color: #155e75; background: rgba(103, 232, 249, 0.08); }
   .badge.revoked { color: #f0576a; border-color: #4a2530; background: rgba(240, 87, 106, 0.08); }
 
-  .token-panel {
-    padding: 12px 16px;
-    background: #070a12;
-    border-bottom: 1px solid #171d2b;
-  }
-
-  .token-label {
-    margin-bottom: 8px;
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: #5f677a;
-  }
-
-  .token-row {
-    display: flex;
-    align-items: stretch;
-    gap: 10px;
-    min-width: 0;
-  }
-
-  .token-value-wrap {
-    flex: 1;
-    min-width: 0;
-    overflow-x: auto;
-    overflow-y: hidden;
-    border: 1px solid #243049;
-    border-radius: 8px;
-    background: #05070c;
-    scrollbar-width: thin;
-    scrollbar-color: #334060 #0a0f18;
-  }
-
-  .token-value-wrap::-webkit-scrollbar { height: 8px; }
-  .token-value-wrap::-webkit-scrollbar-track { background: #0a0f18; }
-  .token-value-wrap::-webkit-scrollbar-thumb { background: #334060; border-radius: 999px; }
-
-  .token-value {
-    display: block;
-    padding: 11px 14px;
-    color: #8fb4ff;
-    font: 500 13px/1.4 "JetBrains Mono", Consolas, monospace;
-    white-space: nowrap;
-    user-select: all;
-    cursor: text;
-  }
-
-  .token-copy-btn {
-    flex: 0 0 auto;
-    align-self: stretch;
-    min-width: 84px;
-    padding-inline: 12px;
-  }
-
-  .record-meta {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-    gap: 10px;
-    padding: 12px 16px;
-    border-bottom: 1px solid #171d2b;
-  }
-
-  .meta-item {
-    min-width: 0;
-  }
-
-  .meta-key {
-    margin-bottom: 4px;
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: #5f677a;
-  }
-
-  .meta-val {
-    font-size: 13px;
-    font-weight: 600;
-    color: #e6e9ef;
-    word-break: break-word;
-  }
-
-  .meta-val.credits {
-    color: #f4f6fa;
-    font-size: 15px;
-  }
-
-  .record-actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    padding: 12px 16px 14px;
-  }
-
-  .record-actions button {
-    padding: 8px 12px;
-    font-size: 11px;
-  }
-
   .created-token-box {
     margin-top: 12px;
-    padding: 14px;
+    padding: 10px;
     border: 1px solid #1f4d3a;
     border-radius: 10px;
     background: rgba(52, 211, 153, 0.06);
@@ -378,9 +323,6 @@
   @media (max-width: 640px) {
     body { padding: 18px 14px 36px; }
     .card { padding: 16px; }
-    .record-top { flex-direction: column; }
-    .token-row { flex-direction: column; }
-    .token-copy-btn { min-height: 40px; }
   }
 </style>
 </head>
@@ -435,9 +377,10 @@
       <button id="refreshActiveBtn" class="secondary">↻ Refresh Active</button>
       <label>
         <input type="checkbox" id="autoRefreshActive" checked />
-        Auto-refresh every 10s
+        Auto-refresh every 5s
       </label>
     </div>
+    <div id="activeFlash" class="flash"></div>
     <div id="activeMsg" class="msg"></div>
     <div id="activeTableWrap"></div>
   </div>
@@ -447,6 +390,7 @@
     <div class="toolbar">
       <button id="refreshBtn" class="secondary">↻ Refresh List</button>
     </div>
+    <div id="usersFlash" class="flash"></div>
     <div id="usersMsg" class="msg"></div>
     <div id="usersTableWrap"></div>
   </div>
@@ -490,34 +434,33 @@
       .replace(/"/g, "&quot;");
   }
 
-  function renderTokenPanel(token, copyLabel = "Copy") {
-    const tokenJson = JSON.stringify(token);
+  const activeFlash = document.getElementById("activeFlash");
+  const usersFlash = document.getElementById("usersFlash");
+
+  function flash(el, text, kind) {
+    if (!el) return;
+    el.textContent = text;
+    el.className = "flash show" + (kind ? " " + kind : "");
+    clearTimeout(el._flashTimer);
+    el._flashTimer = setTimeout(() => {
+      el.className = "flash";
+      el.textContent = "";
+    }, 3500);
+  }
+
+  function isRevokedFlag(value) {
+    return Number(value) === 1;
+  }
+
+  function renderTokenCell(token) {
+    const safeToken = escapeHtml(token);
     return `
-      <div class="token-panel">
-        <div class="token-label">Access Token</div>
-        <div class="token-row">
-          <div class="token-value-wrap" title="Select or scroll to view the full token">
-            <code class="token-value">${escapeHtml(token)}</code>
-          </div>
-          <button type="button" class="ghost token-copy-btn" onclick="copyToken(${tokenJson}, this)">${copyLabel}</button>
-        </div>
+      <div class="token-scroll" title="Full access token — scroll if needed"><code>${safeToken}</code></div>
+      <div class="token-actions">
+        <button type="button" class="ghost" data-admin-action="copy" data-token="${safeToken}">Copy</button>
       </div>
     `;
   }
-
-  async function copyToken(token, buttonEl) {
-    try {
-      await navigator.clipboard.writeText(token);
-      if (buttonEl) {
-        const original = buttonEl.textContent;
-        buttonEl.textContent = "Copied";
-        setTimeout(() => { buttonEl.textContent = original; }, 1200);
-      }
-    } catch {
-      alert("Could not copy token. Select it manually from the box.");
-    }
-  }
-  window.copyToken = copyToken;
 
   function platformScope(platform) {
     if (platform === "mobile") return "mobile";
@@ -527,50 +470,110 @@
 
   function revokeStatusBadges(user) {
     const badges = [];
-    if (user.revoked) badges.push('<span class="badge revoked">All revoked</span>');
-    if (user.revoked_mobile) badges.push('<span class="badge revoked">Mobile revoked</span>');
-    if (user.revoked_desktop) badges.push('<span class="badge revoked">Desktop revoked</span>');
-    return badges.join("");
+    if (isRevokedFlag(user.revoked)) badges.push('<span class="badge revoked">All</span>');
+    if (isRevokedFlag(user.revoked_mobile)) badges.push('<span class="badge revoked">Mobile</span>');
+    if (isRevokedFlag(user.revoked_desktop)) badges.push('<span class="badge revoked">Desktop</span>');
+    return badges.length ? `<div style="margin-top:4px;">${badges.join(" ")}</div>` : "";
   }
 
   function platformLabel(platform) {
     if (platform === "mobile") return '<span class="badge mobile">Mobile</span>';
-    if (platform === "windows-app") return '<span class="badge windows">Windows app</span>';
+    if (platform === "windows-app") return '<span class="badge windows">Windows</span>';
     if (platform === "desktop-web") return '<span class="badge desktop">Desktop web</span>';
-    return `<span class="badge">${escapeHtml(platform || "Unknown")}</span>`;
+    return `<span class="badge">${escapeHtml(platform || "?")}</span>`;
   }
 
   function platformAccessButton(token, scope, currentlyRevoked) {
-    const tokenJson = JSON.stringify(token);
+    const safeToken = escapeHtml(token);
     if (currentlyRevoked) {
-      const label = scope === "mobile" ? "Restore mobile access" : "Restore desktop access";
-      return `<button type="button" class="success" onclick="revokePlatformToken(${tokenJson}, '${scope}', true)">${label}</button>`;
+      return `<button type="button" class="success" data-admin-action="platform-access" data-token="${safeToken}" data-scope="${scope}" data-mode="restore">Restore ${scope}</button>`;
     }
-    const label = scope === "mobile" ? "Revoke mobile" : "Revoke desktop";
-    return `<button type="button" class="danger" onclick="revokePlatformToken(${tokenJson}, '${scope}', false)">${label}</button>`;
+    return `<button type="button" class="danger" data-admin-action="platform-access" data-token="${safeToken}" data-scope="${scope}" data-mode="revoke">Revoke ${scope}</button>`;
   }
 
   function allRevokeButtons(user) {
-    const tokenJson = JSON.stringify(user.token);
-    if (user.revoked) {
-      return `<button type="button" class="success" onclick="revokeToken(${tokenJson}, true)">Restore all access</button>`;
+    const safeToken = escapeHtml(user.token);
+    if (isRevokedFlag(user.revoked)) {
+      return `<button type="button" class="success" data-admin-action="platform-access" data-token="${safeToken}" data-scope="all" data-mode="restore">Restore all</button>`;
     }
-
-    const buttons = [];
-    buttons.push(platformAccessButton(user.token, "mobile", Boolean(user.revoked_mobile)));
-    buttons.push(platformAccessButton(user.token, "desktop", Boolean(user.revoked_desktop)));
-    buttons.push(`<button type="button" class="danger" onclick="revokeToken(${tokenJson}, false)">Revoke all</button>`);
-    return buttons.join("");
+    return [
+      platformAccessButton(user.token, "mobile", isRevokedFlag(user.revoked_mobile)),
+      platformAccessButton(user.token, "desktop", isRevokedFlag(user.revoked_desktop)),
+      `<button type="button" class="danger" data-admin-action="platform-access" data-token="${safeToken}" data-scope="all" data-mode="revoke">Revoke all</button>`,
+    ].join("");
   }
 
   function activeDeviceActions(device, scope, scopeRevoked) {
-    const tokenJson = JSON.stringify(device.token);
-    if (device.revoked) {
-      return `<button type="button" class="success" onclick="revokeToken(${tokenJson}, true)">Restore all access</button>`;
+    const safeToken = escapeHtml(device.token);
+    if (isRevokedFlag(device.revoked)) {
+      return `<button type="button" class="success" data-admin-action="platform-access" data-token="${safeToken}" data-scope="all" data-mode="restore">Restore all</button>`;
     }
     if (!scope) return "";
-    return platformAccessButton(device.token, scope, Boolean(scopeRevoked));
+    return platformAccessButton(device.token, scope, isRevokedFlag(scopeRevoked));
   }
+
+  async function setPlatformAccess(token, scope, mode, flashEl) {
+    const secret = secretInput.value.trim();
+    if (!secret) return flash(flashEl, "Enter ADMIN_SECRET first.", "error");
+
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/admin/tokens/${encodeURIComponent(token)}/platform-access`, {
+        method: "POST",
+        headers: { "X-Admin-Secret": secret, "Content-Type": "application/json" },
+        body: JSON.stringify({ scope, action: mode }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        flash(flashEl, data.error || `Request failed (${res.status}). Redeploy ledger backend if revoke endpoints are missing.`, "error");
+        return;
+      }
+      const label = scope === "all" ? "all devices" : scope === "mobile" ? "mobile" : "desktop";
+      flash(flashEl, `${mode === "revoke" ? "Revoked" : "Restored"} ${label}. User should logout within ~2 seconds.`, "ok");
+      loadUsers();
+      loadActiveUsers();
+    } catch {
+      flash(flashEl, "Couldn't reach the backend.", "error");
+    }
+  }
+
+  document.addEventListener("click", async (event) => {
+    const btn = event.target.closest("[data-admin-action]");
+    if (!btn) return;
+
+    const action = btn.dataset.adminAction;
+    const token = btn.dataset.token;
+    const inUsers = usersTableWrap.contains(btn);
+    const inActive = activeTableWrap.contains(btn);
+    if (!inUsers && !inActive && action !== "copy") return;
+
+    if (action === "copy") {
+      try {
+        await navigator.clipboard.writeText(token);
+        const original = btn.textContent;
+        btn.textContent = "Copied";
+        setTimeout(() => { btn.textContent = original; }, 1200);
+      } catch {
+        flash(inActive ? activeFlash : usersFlash, "Select the token manually to copy.", "error");
+      }
+      return;
+    }
+
+    if (action === "platform-access") {
+      btn.disabled = true;
+      await setPlatformAccess(token, btn.dataset.scope, btn.dataset.mode, inActive ? activeFlash : usersFlash);
+      btn.disabled = false;
+      return;
+    }
+
+    if (action === "adjust") {
+      adjustCredits(token);
+      return;
+    }
+
+    if (action === "delete") {
+      deleteToken(token);
+    }
+  });
 
   async function createToken() {
     const secret = secretInput.value.trim();
@@ -591,7 +594,7 @@
       }
       createMsg.innerHTML = `
         <div class="msg ok">Token created successfully.</div>
-        <div class="created-token-box">${renderTokenPanel(data.token)}</div>
+        <div class="created-token-box">${renderTokenCell(data.token)}</div>
       `;
       newLabelInput.value = "";
       loadUsers();
@@ -658,63 +661,6 @@
       alert("Couldn't reach the backend at " + BACKEND_URL);
     }
   }
-  window.adjustCredits = adjustCredits;
-
-  async function revokeToken(token, currentlyRevoked) {
-    const secret = secretInput.value.trim();
-    if (!secret) return alert("Enter your ADMIN_SECRET above first.");
-    const action = currentlyRevoked ? "restore" : "revoke";
-    if (!confirm(currentlyRevoked
-      ? "Restore access on ALL devices for this token?"
-      : "Revoke access on ALL devices for this token? Mobile and desktop will both be blocked.")) {
-      return;
-    }
-    try {
-      const res = await fetch(`${BACKEND_URL}/api/admin/tokens/${encodeURIComponent(token)}/${action}`, {
-        method: "POST",
-        headers: { "X-Admin-Secret": secret },
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        alert(data.error || "Something went wrong.");
-        return;
-      }
-      loadUsers();
-      loadActiveUsers();
-    } catch {
-      alert("Couldn't reach the backend at " + BACKEND_URL);
-    }
-  }
-  window.revokeToken = revokeToken;
-
-  async function revokePlatformToken(token, scope, currentlyRevoked) {
-    const secret = secretInput.value.trim();
-    if (!secret) return alert("Enter your ADMIN_SECRET above first.");
-    const scopeLabel = scope === "mobile" ? "mobile devices" : "desktop web and the Windows app";
-    const action = currentlyRevoked ? "restore" : "revoke";
-    const endpointScope = scope === "mobile" ? "mobile" : "desktop";
-    if (!confirm(currentlyRevoked
-      ? `Restore access on ${scopeLabel} for this token?`
-      : `Revoke access on ${scopeLabel} for this token? Other platforms keep working.`)) {
-      return;
-    }
-    try {
-      const res = await fetch(`${BACKEND_URL}/api/admin/tokens/${encodeURIComponent(token)}/${action}-${endpointScope}`, {
-        method: "POST",
-        headers: { "X-Admin-Secret": secret },
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        alert(data.error || "Something went wrong.");
-        return;
-      }
-      loadUsers();
-      loadActiveUsers();
-    } catch {
-      alert("Couldn't reach the backend at " + BACKEND_URL);
-    }
-  }
-  window.revokePlatformToken = revokePlatformToken;
 
   async function deleteToken(token) {
     const secret = secretInput.value.trim();
@@ -775,49 +721,46 @@
       return;
     }
 
-    activeTableWrap.innerHTML = `
-      <div class="record-list">
-        ${devices.map((device) => {
-          const token = device.token;
-          const liveSession = liveSessions.find((session) => session.token === token);
-          const statusBadge = device.is_transforming || liveSession
-            ? '<span class="badge transform">Transforming</span>'
-            : '<span class="badge live">Online</span>';
-          const scope = platformScope(device.platform);
-          const scopeRevoked = scope === "mobile" ? device.revoked_mobile : scope === "desktop" ? device.revoked_desktop : false;
-          const rowMuted = device.revoked || scopeRevoked;
-          const label = escapeHtml(device.label) || "No label";
-          const revokeBadges = revokeStatusBadges(device);
-          const actionButtons = activeDeviceActions(device, scope, scopeRevoked);
+    const rows = devices.map((device) => {
+      const token = device.token;
+      const liveSession = liveSessions.find((session) => session.token === token);
+      const statusBadge = device.is_transforming || liveSession
+        ? '<span class="badge transform">Live</span>'
+        : '<span class="badge live">Online</span>';
+      const scope = platformScope(device.platform);
+      const scopeRevoked = scope === "mobile" ? device.revoked_mobile : scope === "desktop" ? device.revoked_desktop : 0;
+      const rowMuted = isRevokedFlag(device.revoked) || isRevokedFlag(scopeRevoked);
+      const label = escapeHtml(device.label) || "—";
 
-          return `
-            <article class="record${rowMuted ? " muted" : ""}">
-              <div class="record-top">
-                <div>
-                  <div class="record-title">${label}</div>
-                  <div class="record-subtitle">${platformLabel(device.platform)} ${statusBadge}</div>
-                  ${revokeBadges ? `<div class="record-badges">${revokeBadges}</div>` : ""}
-                </div>
-              </div>
-              ${renderTokenPanel(token)}
-              <div class="record-meta">
-                <div class="meta-item">
-                  <div class="meta-key">Credits</div>
-                  <div class="meta-val credits">${device.credits}</div>
-                </div>
-                <div class="meta-item">
-                  <div class="meta-key">Last seen</div>
-                  <div class="meta-val">${new Date(device.last_seen_at).toLocaleString()}</div>
-                </div>
-                <div class="meta-item">
-                  <div class="meta-key">Device</div>
-                  <div class="meta-val">${escapeHtml(device.platform || "Unknown")}</div>
-                </div>
-              </div>
-              <div class="record-actions">${actionButtons}</div>
-            </article>
-          `;
-        }).join("")}
+      return `
+        <tr class="${rowMuted ? "muted" : ""}">
+          <td class="label-cell">${label}${revokeStatusBadges(device)}</td>
+          <td class="token-cell">${renderTokenCell(token)}</td>
+          <td>${platformLabel(device.platform)}</td>
+          <td>${statusBadge}</td>
+          <td>${device.credits}</td>
+          <td>${new Date(device.last_seen_at).toLocaleString()}</td>
+          <td class="actions-cell">${activeDeviceActions(device, scope, scopeRevoked)}</td>
+        </tr>
+      `;
+    }).join("");
+
+    activeTableWrap.innerHTML = `
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Label</th>
+              <th>Access token</th>
+              <th>Device</th>
+              <th>Status</th>
+              <th>Credits</th>
+              <th>Last seen</th>
+              <th>Access</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
       </div>
     `;
   }
@@ -850,42 +793,40 @@
       return;
     }
 
-    usersTableWrap.innerHTML = `
-      <div class="record-list">
-        ${users.map((user) => {
-          const tokenJson = JSON.stringify(user.token);
-          const rowMuted = user.revoked || user.revoked_mobile || user.revoked_desktop;
-          const label = escapeHtml(user.label) || "No label";
-          const revokeBadges = revokeStatusBadges(user);
+    const rows = users.map((user) => {
+      const safeToken = escapeHtml(user.token);
+      const rowMuted = isRevokedFlag(user.revoked) || isRevokedFlag(user.revoked_mobile) || isRevokedFlag(user.revoked_desktop);
+      const label = escapeHtml(user.label) || "—";
 
-          return `
-            <article class="record${rowMuted ? " muted" : ""}">
-              <div class="record-top">
-                <div>
-                  <div class="record-title">${label}</div>
-                  <div class="record-subtitle">Created ${new Date(user.created_at).toLocaleString()}</div>
-                  ${revokeBadges ? `<div class="record-badges">${revokeBadges}</div>` : ""}
-                </div>
-              </div>
-              ${renderTokenPanel(user.token)}
-              <div class="record-meta">
-                <div class="meta-item">
-                  <div class="meta-key">Credits</div>
-                  <div class="meta-val credits">${user.credits}</div>
-                </div>
-                <div class="meta-item">
-                  <div class="meta-key">Created</div>
-                  <div class="meta-val">${new Date(user.created_at).toLocaleString()}</div>
-                </div>
-              </div>
-              <div class="record-actions">
-                <button type="button" class="ghost" onclick="adjustCredits(${tokenJson})">Adjust credits</button>
-                ${allRevokeButtons(user)}
-                <button type="button" class="danger" onclick="deleteToken(${tokenJson})">Delete token</button>
-              </div>
-            </article>
-          `;
-        }).join("")}
+      return `
+        <tr class="${rowMuted ? "muted" : ""}">
+          <td class="label-cell">${label}${revokeStatusBadges(user)}</td>
+          <td class="token-cell">${renderTokenCell(user.token)}</td>
+          <td><strong>${user.credits}</strong></td>
+          <td>${new Date(user.created_at).toLocaleString()}</td>
+          <td class="actions-cell">
+            <button type="button" class="ghost" data-admin-action="adjust" data-token="${safeToken}">Adjust</button>
+            ${allRevokeButtons(user)}
+            <button type="button" class="danger" data-admin-action="delete" data-token="${safeToken}">Delete</button>
+          </td>
+        </tr>
+      `;
+    }).join("");
+
+    usersTableWrap.innerHTML = `
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Label</th>
+              <th>Access token</th>
+              <th>Credits</th>
+              <th>Created</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
       </div>
     `;
   }
@@ -902,7 +843,7 @@
       activeRefreshTimer = null;
     }
     if (autoRefreshActive.checked && secretInput.value.trim()) {
-      activeRefreshTimer = setInterval(loadActiveUsers, 10000);
+      activeRefreshTimer = setInterval(loadActiveUsers, 5000);
     }
   }
   autoRefreshActive.addEventListener("change", syncActiveAutoRefresh);

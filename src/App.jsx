@@ -183,13 +183,6 @@ export default function App() {
     return "desktop-web";
   };
 
-  const buildPresencePayload = () => ({
-    clientId: getClientId(),
-    platform: getClientPlatform(),
-    isTransforming: Boolean(isRunning),
-    sessionId: billingSessionIdRef.current,
-  });
-
   const authHeaders = () => ({
     "X-Access-Token": accessToken,
     "X-Client-Platform": getClientPlatform(),
@@ -424,7 +417,7 @@ export default function App() {
   useEffect(() => {
     if (!accessToken) return undefined;
 
-    const TOKEN_POLL_MS = 5000;
+    const TOKEN_POLL_MS = 2000;
     const checkAccess = () => {
       refreshBalance();
     };
@@ -629,47 +622,59 @@ export default function App() {
 
   useEffect(() => () => clearTheaterControlsTimer(), []);
 
+  const reportPresence = async (tokenOverride) => {
+    const token = tokenOverride || accessToken;
+    if (!token) return;
+    try {
+      const res = await fetch(`${LEDGER_URL}/api/presence`, {
+        method: "POST",
+        headers: {
+          "X-Access-Token": token,
+          "X-Client-Platform": getClientPlatform(),
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          clientId: getClientId(),
+          platform: getClientPlatform(),
+          isTransforming: Boolean(isRunning),
+          sessionId: billingSessionIdRef.current,
+        }),
+      });
+      if (res.status === 401) {
+        handleTokenRejected("Your access token was deleted or is no longer valid. Please sign in again.");
+        return;
+      }
+      if (res.status === 403) {
+        handleTokenRejected(
+          await readRejectedMessage(
+            res,
+            "Your access has been revoked. If you think this is a mistake, message us on WhatsApp below."
+          )
+        );
+      }
+    } catch {
+      // ignore network errors
+    }
+  };
+
   // Tell the ledger which device is online (mobile browser, desktop browser, or Windows app).
   useEffect(() => {
     if (!accessToken) return undefined;
 
-    const pingPresence = async () => {
-      try {
-        const res = await fetch(`${LEDGER_URL}/api/presence`, {
-          method: "POST",
-          headers: { ...authHeaders(), "Content-Type": "application/json" },
-          body: JSON.stringify(buildPresencePayload()),
-        });
-        if (res.status === 401) {
-          handleTokenRejected("Your access token was deleted or is no longer valid. Please sign in again.");
-          return;
-        }
-        if (res.status === 403) {
-          handleTokenRejected(
-            await readRejectedMessage(
-              res,
-              "Your access has been revoked. If you think this is a mistake, message us on WhatsApp below."
-            )
-          );
-        }
-      } catch {
-        // ignore network errors
-      }
-    };
-
-    pingPresence();
-    const interval = setInterval(pingPresence, 30000);
+    reportPresence();
+    const interval = setInterval(() => reportPresence(), 10000);
 
     const onVisible = () => {
-      if (document.visibilityState === "visible") pingPresence();
+      if (document.visibilityState === "visible") reportPresence();
     };
+    const onFocus = () => reportPresence();
     document.addEventListener("visibilitychange", onVisible);
-    window.addEventListener("focus", pingPresence);
+    window.addEventListener("focus", onFocus);
 
     return () => {
       clearInterval(interval);
       document.removeEventListener("visibilitychange", onVisible);
-      window.removeEventListener("focus", pingPresence);
+      window.removeEventListener("focus", onFocus);
     };
   }, [accessToken, isRunning]);
 
@@ -814,7 +819,7 @@ export default function App() {
 
   const validateAccessToken = async (token) => {
     try {
-      const res = await fetch(`${LEDGER_URL}/api/credits`, {
+      const res = await fetch(`${LEDGER_URL}/api/access-check`, {
         headers: {
           "X-Access-Token": token,
           "X-Client-Platform": getClientPlatform(),
@@ -925,6 +930,8 @@ export default function App() {
       setCreditsLoaded(true);
       setLedgerUnreachable(false);
       setDriverSetupFailed(false);
+      await reportPresence(token);
+      refreshBalance();
     } catch (err) {
       setDriverSetupFailed(true);
       setTokenError(String(err.message || err));
@@ -963,7 +970,7 @@ export default function App() {
 
   const refreshBalance = async () => {
     try {
-      const res = await fetch(`${LEDGER_URL}/api/credits`, { headers: authHeaders() });
+      const res = await fetch(`${LEDGER_URL}/api/access-check`, { headers: authHeaders() });
       if (res.status === 401) {
         handleTokenRejected("Your access token was deleted or is no longer valid. Please sign in again.");
         return;

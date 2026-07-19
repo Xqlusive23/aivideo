@@ -280,10 +280,15 @@ function readClientPlatform(req) {
 
 function isPlatformRevoked(user, scope) {
   if (!user) return true;
-  if (user.revoked) return true;
-  if (scope === "mobile") return Boolean(user.revoked_mobile);
-  if (scope === "desktop") return Boolean(user.revoked_desktop);
+  if (Number(user.revoked) === 1) return true;
+  if (scope === "mobile") return Number(user.revoked_mobile) === 1;
+  if (scope === "desktop") return Number(user.revoked_desktop) === 1;
   return false;
+}
+
+function resolvePlatformScope(req) {
+  const clientPlatform = readClientPlatform(req);
+  return normalizePlatformScope(clientPlatform) || "desktop";
 }
 
 function platformRevokeMessage(scope) {
@@ -305,14 +310,14 @@ function requireToken(req, res, next) {
   if (!user) return res.status(401).json({ error: "Invalid access token" });
 
   const clientPlatform = readClientPlatform(req);
-  const platformScope = normalizePlatformScope(clientPlatform);
+  const platformScope = resolvePlatformScope(req);
   req.clientPlatform = clientPlatform;
   req.clientPlatformScope = platformScope;
 
-  if (user.revoked) {
+  if (Number(user.revoked) === 1) {
     return res.status(403).json({ error: "This access token has been revoked", scope: "all" });
   }
-  if (platformScope && isPlatformRevoked(user, platformScope)) {
+  if (isPlatformRevoked(user, platformScope)) {
     return res.status(403).json({
       error: platformRevokeMessage(platformScope),
       scope: platformScope,
@@ -499,6 +504,36 @@ app.post("/api/admin/tokens/:token/restore-desktop", (req, res) => {
   res.json({ token, revoked_desktop: false, scope: "desktop" });
 });
 
+// Unified platform access control — preferred by the admin UI.
+app.post("/api/admin/tokens/:token/platform-access", (req, res) => {
+  if (!ADMIN_SECRET || req.headers["x-admin-secret"] !== ADMIN_SECRET) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  const { token } = req.params;
+  const { scope, action } = req.body || {};
+  if (!getUser(token)) return res.status(404).json({ error: "Unknown token" });
+
+  const validScopes = new Set(["mobile", "desktop", "all"]);
+  const validActions = new Set(["revoke", "restore"]);
+  if (!validScopes.has(scope) || !validActions.has(action)) {
+    return res.status(400).json({ error: "Provide scope (mobile|desktop|all) and action (revoke|restore)" });
+  }
+
+  const revoke = action === "revoke";
+  if (scope === "all") {
+    db.prepare("UPDATE users SET revoked = ? WHERE token = ?").run(revoke ? 1 : 0, token);
+    return res.json({ token, revoked: revoke, scope: "all" });
+  }
+
+  setPlatformRevoked(token, scope, revoke);
+  return res.json({
+    token,
+    scope,
+    revoked_mobile: scope === "mobile" ? revoke : Number(getUser(token).revoked_mobile) === 1,
+    revoked_desktop: scope === "desktop" ? revoke : Number(getUser(token).revoked_desktop) === 1,
+  });
+});
+
 // Permanently removes a token and all associated ledger rows. Unlike revoke,
 // this cannot be undone — use when a customer should no longer exist in the DB.
 app.delete("/api/admin/tokens/:token", (req, res) => {
@@ -526,6 +561,16 @@ app.delete("/api/admin/tokens/:token", (req, res) => {
     console.error("Failed to delete token:", err);
     res.status(500).json({ error: "Could not delete token" });
   }
+});
+
+// Lightweight access check for frequent client polling (revoke detection).
+app.get("/api/access-check", requireToken, (req, res) => {
+  res.json({
+    ok: true,
+    scope: req.clientPlatformScope,
+    platform: req.clientPlatform,
+    credits: getBalance(req.token),
+  });
 });
 
 // --- Balance ----------------------------------------------------------------
