@@ -7,10 +7,10 @@ import { checkAccessToken } from "./ledgerClient.js";
 import {
   SITE_NAME,
   SITE_TAGLINE,
-  WHATSAPP_NUMBER,
   WHATSAPP_ACCESS_REQUEST_MESSAGE,
   WINDOWS_DOWNLOAD_URL,
 } from "./siteConfig";
+import WhatsAppLink from "./WhatsAppLink.jsx";
 
 function WindowsIcon() {
   return (
@@ -88,7 +88,6 @@ export default function LandingPage() {
     }
   };
 
-  const whatsappAccessUrl = `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(WHATSAPP_ACCESS_REQUEST_MESSAGE)}`;
   const downloadReady = Boolean(WINDOWS_DOWNLOAD_URL);
 
   return (
@@ -196,14 +195,13 @@ export default function LandingPage() {
             <p className="itc-landing-section-lead">
               InspireTech is invite-only. Request an access token — we'll create your account and send you a personal token to paste below or in the studio.
             </p>
-            <a
-              href={whatsappAccessUrl}
-              target="_blank"
-              rel="noopener noreferrer"
+            <WhatsAppLink
+              message={WHATSAPP_ACCESS_REQUEST_MESSAGE}
               className="itc-btn itc-btn-primary"
+              showFallback
             >
               Request access on WhatsApp
-            </a>
+            </WhatsAppLink>
             <p className="itc-landing-fine-print">
               Already received a token? Enter it on the right to open the studio instantly.
             </p>
@@ -252,9 +250,9 @@ export default function LandingPage() {
 
       <footer className="itc-landing-footer">
         <span>© {new Date().getFullYear()} {SITE_NAME}</span>
-        <a href={whatsappAccessUrl} target="_blank" rel="noopener noreferrer">
+        <WhatsAppLink message={WHATSAPP_ACCESS_REQUEST_MESSAGE} className="itc-landing-footer-link" showFallback={false}>
           Contact on WhatsApp
-        </a>
+        </WhatsAppLink>
       </footer>
     </div>
   );

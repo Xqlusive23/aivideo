@@ -688,6 +688,44 @@ body {
   text-decoration: none;
 }
 
+.itc-whatsapp-contact {
+  margin-top: 18px;
+}
+
+.itc-whatsapp-contact .itc-access-whatsapp {
+  margin-top: 0;
+}
+
+.itc-whatsapp-fallback {
+  margin: 10px 0 0;
+  text-align: center;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--itc-text-muted);
+}
+
+.itc-whatsapp-copy {
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-weight: 600;
+  color: var(--itc-emerald);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.itc-landing-footer-link {
+  color: var(--itc-emerald);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.itc-landing-footer-link:hover {
+  text-decoration: underline;
+}
+
 .itc-access-back {
   display: block;
   text-align: center;

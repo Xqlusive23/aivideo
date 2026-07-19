@@ -1,10 +1,8 @@
 import React, { useState } from "react";
 import { Link } from "react-router-dom";
-import {
-  WHATSAPP_NUMBER,
-  WHATSAPP_DEFAULT_MESSAGE,
-} from "./siteConfig";
+import { WHATSAPP_DEFAULT_MESSAGE } from "./siteConfig";
 import { LogoLockup } from "./Logo.jsx";
+import WhatsAppLink from "./WhatsAppLink.jsx";
 
 export default function AccessGate({
   onAuthenticated,
@@ -93,14 +91,9 @@ export default function AccessGate({
               : "Continue & install camera"
             : "Open Studio"}
         </button>
-        <a
-          href={`https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(WHATSAPP_DEFAULT_MESSAGE)}`}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="itc-access-whatsapp"
-        >
+        <WhatsAppLink message={WHATSAPP_DEFAULT_MESSAGE}>
           💬 Need help? Message us on WhatsApp
-        </a>
+        </WhatsAppLink>
         {!embedded && !companionMode && (
           <Link to="/" className="itc-access-back">
             ← Back to home
