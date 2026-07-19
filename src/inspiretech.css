@@ -1451,6 +1451,19 @@ body {
   background: #000 !important;
 }
 
+.itc-mobile-theater-tap-layer {
+  display: none;
+}
+
+.itc-app.itc-mobile-theater .itc-mobile-theater-tap-layer {
+  display: block;
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  background: transparent;
+  touch-action: manipulation;
+}
+
 .itc-app.itc-mobile-theater .itc-mobile-theater-stop {
   display: flex !important;
   align-items: center;
@@ -1467,4 +1480,13 @@ body {
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
   pointer-events: auto;
   touch-action: manipulation;
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+.itc-app.itc-mobile-theater .itc-mobile-theater-stop.itc-theater-controls-hidden {
+  opacity: 0;
+  transform: translateY(12px);
+  pointer-events: none;
 }

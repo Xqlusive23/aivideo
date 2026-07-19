@@ -159,7 +159,41 @@ export default function App() {
   const isCompanionApp = () =>
     typeof window !== "undefined" && Boolean(window.inspiretechCompanion?.isDesktop);
 
-  const authHeaders = () => ({ "X-Access-Token": accessToken });
+  const getClientId = () => {
+    const storageKey = "inspiretech_client_id";
+    try {
+      let clientId = window.localStorage.getItem(storageKey);
+      if (!clientId) {
+        clientId = crypto.randomUUID();
+        window.localStorage.setItem(storageKey, clientId);
+      }
+      return clientId;
+    } catch {
+      return "anonymous";
+    }
+  };
+
+  const getClientPlatform = () => {
+    if (isCompanionApp()) return "windows-app";
+    const ua = typeof navigator !== "undefined" ? navigator.userAgent || "" : "";
+    if (/iPhone|iPad|iPod|Android|Mobile/i.test(ua)) return "mobile";
+    if (typeof window !== "undefined" && window.matchMedia(`(max-width: ${MOBILE_LAYOUT_MAX_WIDTH}px)`).matches) {
+      return "mobile";
+    }
+    return "desktop-web";
+  };
+
+  const buildPresencePayload = () => ({
+    clientId: getClientId(),
+    platform: getClientPlatform(),
+    isTransforming: Boolean(isRunning),
+    sessionId: billingSessionIdRef.current,
+  });
+
+  const authHeaders = () => ({
+    "X-Access-Token": accessToken,
+    "X-Client-Platform": getClientPlatform(),
+  });
 
   const saveAccessToken = (token) => {
     setAccessToken(token);
@@ -187,6 +221,7 @@ export default function App() {
   const [showAddCredits, setShowAddCredits] = useState(false);
   const [isPoppedOut, setIsPoppedOut] = useState(false);
   const [mobileOutputFocus, setMobileOutputFocus] = useState(false);
+  const [theaterControlsVisible, setTheaterControlsVisible] = useState(true);
   const [mobileControlsOpen, setMobileControlsOpen] = useState(true);
   const [isMobileLayout, setIsMobileLayout] = useState(() =>
     typeof window !== "undefined"
@@ -208,6 +243,7 @@ export default function App() {
   const clockTimerRef = useRef(null); // the local 5-min UX countdown (not billing)
   const heartbeatTimerRef = useRef(null); // the real billing tick, talking to the server
   const billingSessionIdRef = useRef(null);
+  const theaterControlsTimerRef = useRef(null);
   const creditSectionRef = useRef(null);
   const startInProgressRef = useRef(false);
 
@@ -502,6 +538,27 @@ export default function App() {
     }
   }, [isMobileLayout, isRunning]);
 
+  const THEATER_CONTROLS_HIDE_MS = 3500;
+
+  const clearTheaterControlsTimer = () => {
+    if (theaterControlsTimerRef.current) {
+      clearTimeout(theaterControlsTimerRef.current);
+      theaterControlsTimerRef.current = null;
+    }
+  };
+
+  const scheduleTheaterControlsHide = () => {
+    clearTheaterControlsTimer();
+    theaterControlsTimerRef.current = setTimeout(() => {
+      setTheaterControlsVisible(false);
+    }, THEATER_CONTROLS_HIDE_MS);
+  };
+
+  const revealTheaterControls = () => {
+    setTheaterControlsVisible(true);
+    scheduleTheaterControlsHide();
+  };
+
   const enterMobileTheater = () => {
     if (!isRunning) {
       setStatus("START TRANSFORMATION FIRST — THEN TAP FULL SCREEN");
@@ -513,6 +570,8 @@ export default function App() {
       return;
     }
     setMobileOutputFocus(true);
+    setTheaterControlsVisible(true);
+    scheduleTheaterControlsHide();
     try {
       document.documentElement.style.overflow = "hidden";
       document.body.style.overflow = "hidden";
@@ -524,6 +583,8 @@ export default function App() {
   const exitMobileTheater = async () => {
     setMobileOutputFocus(false);
     setIsPoppedOut(false);
+    clearTheaterControlsTimer();
+    setTheaterControlsVisible(true);
     try {
       document.documentElement.style.overflow = "";
       document.body.style.overflow = "";
@@ -565,6 +626,36 @@ export default function App() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isRunning]);
+
+  useEffect(() => () => clearTheaterControlsTimer(), []);
+
+  // Tell the ledger which device is online (mobile browser, desktop browser, or Windows app).
+  useEffect(() => {
+    if (!accessToken) return undefined;
+
+    const pingPresence = () => {
+      fetch(`${LEDGER_URL}/api/presence`, {
+        method: "POST",
+        headers: { ...authHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify(buildPresencePayload()),
+      }).catch(() => {});
+    };
+
+    pingPresence();
+    const interval = setInterval(pingPresence, 30000);
+
+    const onVisible = () => {
+      if (document.visibilityState === "visible") pingPresence();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", pingPresence);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", pingPresence);
+    };
+  }, [accessToken, isRunning]);
 
   // Load the voice list once, right after the token is accepted.
   useEffect(() => {
@@ -619,7 +710,7 @@ export default function App() {
         const data = await res.json().catch(() => ({}));
         if (res.status === 401 || res.status === 403) {
           if (res.status === 401) handleTokenRejected("Your access token was rejected. Please re-enter it.");
-          else handleTokenRejected("Your access has been revoked. If you think this is a mistake, message us on WhatsApp below.");
+          else handleTokenRejected(data.error || "Your access has been revoked. If you think this is a mistake, message us on WhatsApp below.");
           return;
         }
         if (!res.ok) {
@@ -695,6 +786,16 @@ export default function App() {
     setTokenError(message);
   };
 
+  const readRejectedMessage = async (res, fallback) => {
+    try {
+      const data = await res.json();
+      if (data?.error) return data.error;
+    } catch {
+      // ignore
+    }
+    return fallback;
+  };
+
   const validateAccessToken = async (token) => {
     try {
       const res = await fetch(`${LEDGER_URL}/api/credits`, {
@@ -706,7 +807,10 @@ export default function App() {
       if (res.status === 403) {
         return {
           ok: false,
-          error: "Your access has been revoked. If you think this is a mistake, message us on WhatsApp below.",
+          error: await readRejectedMessage(
+            res,
+            "Your access has been revoked. If you think this is a mistake, message us on WhatsApp below."
+          ),
         };
       }
       if (!res.ok) {
@@ -846,7 +950,12 @@ export default function App() {
         return;
       }
       if (res.status === 403) {
-        handleTokenRejected("Your access has been revoked. If you think this is a mistake, message us on WhatsApp below.");
+        handleTokenRejected(
+          await readRejectedMessage(
+            res,
+            "Your access has been revoked. If you think this is a mistake, message us on WhatsApp below."
+          )
+        );
         return;
       }
       if (!res.ok) throw new Error(`Ledger responded ${res.status}`);
@@ -1356,14 +1465,23 @@ export default function App() {
       try {
         const res = await fetch(`${LEDGER_URL}/api/sessions/${sessionId}/heartbeat`, {
           method: "POST",
-          headers: authHeaders(),
+          headers: { ...authHeaders(), "Content-Type": "application/json" },
+          body: JSON.stringify({
+            clientId: getClientId(),
+            platform: getClientPlatform(),
+          }),
         });
         if (res.status === 401) {
           handleTokenRejected("Your access token was deleted or is no longer valid. Please sign in again.");
           return;
         }
         if (res.status === 403) {
-          handleTokenRejected("Your access has been revoked. If you think this is a mistake, message us on WhatsApp below.");
+          handleTokenRejected(
+            await readRejectedMessage(
+              res,
+              "Your access has been revoked. If you think this is a mistake, message us on WhatsApp below."
+            )
+          );
           return;
         }
         if (!res.ok) throw new Error(`Heartbeat failed with ${res.status}`);
@@ -1518,7 +1636,14 @@ export default function App() {
     // real balance, not this client.
     let sessionId;
     try {
-      const res = await fetch(`${LEDGER_URL}/api/sessions/start`, { method: "POST", headers: authHeaders() });
+      const res = await fetch(`${LEDGER_URL}/api/sessions/start`, {
+        method: "POST",
+        headers: { ...authHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({
+          clientId: getClientId(),
+          platform: getClientPlatform(),
+        }),
+      });
       const data = await res.json();
       if (res.status === 401) {
         handleTokenRejected("Your access token was rejected. Please re-enter it.");
@@ -1526,7 +1651,12 @@ export default function App() {
         return;
       }
       if (res.status === 403) {
-        handleTokenRejected("Your access has been revoked. If you think this is a mistake, message us on WhatsApp below.");
+        handleTokenRejected(
+          await readRejectedMessage(
+            res,
+            "Your access has been revoked. If you think this is a mistake, message us on WhatsApp below."
+          )
+        );
         startInProgressRef.current = false;
         return;
       }
@@ -1644,7 +1774,14 @@ export default function App() {
   const endBillingSession = async (sessionId) => {
     if (!sessionId) return;
     try {
-      const res = await fetch(`${LEDGER_URL}/api/sessions/${sessionId}/end`, { method: "POST", headers: authHeaders() });
+      const res = await fetch(`${LEDGER_URL}/api/sessions/${sessionId}/end`, {
+        method: "POST",
+        headers: { ...authHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({
+          clientId: getClientId(),
+          platform: getClientPlatform(),
+        }),
+      });
       const data = await res.json();
       if (res.ok) setCredits(data.credits);
     } catch (err) {
@@ -1688,7 +1825,12 @@ export default function App() {
         return;
       }
       if (res.status === 403) {
-        handleTokenRejected("Your access has been revoked. If you think this is a mistake, message us on WhatsApp below.");
+        handleTokenRejected(
+          await readRejectedMessage(
+            res,
+            "Your access has been revoked. If you think this is a mistake, message us on WhatsApp below."
+          )
+        );
         return;
       }
       const data = await res.json();
@@ -2119,13 +2261,25 @@ export default function App() {
       </div>
 
       {isMobileLayout && mobileOutputFocus && (
-        <button
-          type="button"
-          className="itc-btn itc-btn-stop itc-mobile-theater-stop"
-          onClick={stopTransformation}
-        >
-          Stop transformation
-        </button>
+        <>
+          <div
+            className="itc-mobile-theater-tap-layer"
+            onClick={revealTheaterControls}
+            onTouchStart={revealTheaterControls}
+            aria-hidden="true"
+          />
+          <button
+            type="button"
+            className={`itc-btn itc-btn-stop itc-mobile-theater-stop${theaterControlsVisible ? "" : " itc-theater-controls-hidden"}`}
+            onClick={(event) => {
+              event.stopPropagation();
+              stopTransformation();
+            }}
+            onTouchStart={(event) => event.stopPropagation()}
+          >
+            Stop transformation
+          </button>
+        </>
       )}
 
       {isMobileLayout && !mobileOutputFocus && (

@@ -28,6 +28,7 @@ const PORT = process.env.PORT || 3002;
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
 const CREDITS_PER_SECOND = Number(process.env.CREDITS_PER_SECOND || 2);
 const MAX_HEARTBEAT_GAP_SECONDS = 10; // caps deduction if a heartbeat is late/missed
+const PRESENCE_ACTIVE_SECONDS = 90; // admin "online now" window
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY || "";
 const ADMIN_SECRET = process.env.ADMIN_SECRET || "";
 
@@ -118,6 +119,17 @@ db.exec(`
     ended_at TEXT,
     credits_used INTEGER NOT NULL DEFAULT 0
   );
+
+  CREATE TABLE IF NOT EXISTS client_presence (
+    token TEXT NOT NULL,
+    client_id TEXT NOT NULL,
+    platform TEXT NOT NULL,
+    user_agent TEXT,
+    last_seen_at TEXT NOT NULL,
+    is_transforming INTEGER NOT NULL DEFAULT 0,
+    session_id TEXT,
+    PRIMARY KEY (token, client_id)
+  );
 `);
 
 // Self-healing guard: if this DB_PATH previously belonged to an OLDER
@@ -139,10 +151,14 @@ function ensureColumn(table, column, definition) {
 try {
   ensureColumn("transactions", "token", "TEXT DEFAULT ''");
   ensureColumn("usage_sessions", "token", "TEXT DEFAULT ''");
+  ensureColumn("usage_sessions", "client_platform", "TEXT DEFAULT ''");
+  ensureColumn("usage_sessions", "client_id", "TEXT DEFAULT ''");
   // Lets you cut off a customer's access without deleting their history —
   // a revoked token keeps its balance/transactions on record, it just can't
   // be used to start sessions, buy credits, or check balance anymore.
   ensureColumn("users", "revoked", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn("users", "revoked_mobile", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn("users", "revoked_desktop", "INTEGER NOT NULL DEFAULT 0");
 } catch (err) {
   console.error("Schema self-heal failed — this DB file is likely from an incompatible older version.");
   console.error("Fix: set DB_PATH to a new filename (e.g. /data/ledger_v2.db) and redeploy.");
@@ -245,6 +261,38 @@ app.post("/api/webhooks/paystack", express.raw({ type: "application/json" }), (r
 
 app.use(express.json());
 
+function normalizePlatformScope(platform) {
+  if (platform === "mobile") return "mobile";
+  if (platform === "desktop-web" || platform === "windows-app") return "desktop";
+  return null;
+}
+
+function readClientPlatform(req) {
+  return (
+    req.headers["x-client-platform"] ||
+    req.body?.platform ||
+    null
+  );
+}
+
+function isPlatformRevoked(user, scope) {
+  if (!user) return true;
+  if (user.revoked) return true;
+  if (scope === "mobile") return Boolean(user.revoked_mobile);
+  if (scope === "desktop") return Boolean(user.revoked_desktop);
+  return false;
+}
+
+function platformRevokeMessage(scope) {
+  if (scope === "mobile") {
+    return "This access token has been revoked on mobile devices.";
+  }
+  if (scope === "desktop") {
+    return "This access token has been revoked on desktop web and the Windows app.";
+  }
+  return "This access token has been revoked.";
+}
+
 // Every user-facing route (except the webhook, verify, and admin routes)
 // requires a valid access token in the X-Access-Token header.
 function requireToken(req, res, next) {
@@ -252,8 +300,24 @@ function requireToken(req, res, next) {
   if (!token) return res.status(401).json({ error: "Missing access token" });
   const user = getUser(token);
   if (!user) return res.status(401).json({ error: "Invalid access token" });
-  if (user.revoked) return res.status(403).json({ error: "This access token has been revoked" });
+
+  const clientPlatform = readClientPlatform(req);
+  const platformScope = normalizePlatformScope(clientPlatform);
+  req.clientPlatform = clientPlatform;
+  req.clientPlatformScope = platformScope;
+
+  if (user.revoked) {
+    return res.status(403).json({ error: "This access token has been revoked", scope: "all" });
+  }
+  if (platformScope && isPlatformRevoked(user, platformScope)) {
+    return res.status(403).json({
+      error: platformRevokeMessage(platformScope),
+      scope: platformScope,
+    });
+  }
+
   req.token = token;
+  req.user = user;
   next();
 }
 
@@ -321,13 +385,52 @@ app.get("/api/admin/users", (req, res) => {
   if (!ADMIN_SECRET || req.headers["x-admin-secret"] !== ADMIN_SECRET) {
     return res.status(401).json({ error: "Unauthorized" });
   }
-  const rows = db.prepare("SELECT token, label, credits, revoked, created_at FROM users ORDER BY created_at DESC").all();
+  const rows = db
+    .prepare("SELECT token, label, credits, revoked, revoked_mobile, revoked_desktop, created_at FROM users ORDER BY created_at DESC")
+    .all();
   res.json({ users: rows });
 });
 
-// Cuts off a customer's access without deleting anything — their balance
-// and full transaction history stay on record, they just can't use the
-// token to check balance, start sessions, or buy more credits anymore.
+// Shows every device currently online (mobile browser, desktop browser, Windows
+// app) plus anyone actively running a transformation session.
+app.get("/api/admin/active-users", (req, res) => {
+  if (!ADMIN_SECRET || req.headers["x-admin-secret"] !== ADMIN_SECRET) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  const cutoff = new Date(Date.now() - PRESENCE_ACTIVE_SECONDS * 1000).toISOString();
+
+  const devices = db
+    .prepare(
+      `SELECT p.token, p.client_id, p.platform, p.user_agent, p.last_seen_at,
+              p.is_transforming, p.session_id, u.label, u.revoked, u.revoked_mobile,
+              u.revoked_desktop, u.credits
+       FROM client_presence p
+       JOIN users u ON u.token = p.token
+       WHERE p.last_seen_at >= ?
+       ORDER BY p.last_seen_at DESC`
+    )
+    .all(cutoff);
+
+  const liveSessions = db
+    .prepare(
+      `SELECT s.id, s.token, s.started_at, s.last_heartbeat_at, s.client_platform, s.client_id,
+              u.label, u.revoked, u.revoked_mobile, u.revoked_desktop, u.credits
+       FROM usage_sessions s
+       JOIN users u ON u.token = s.token
+       WHERE s.ended_at IS NULL AND s.last_heartbeat_at >= ?
+       ORDER BY s.last_heartbeat_at DESC`
+    )
+    .all(cutoff);
+
+  res.json({
+    activeWindowSeconds: PRESENCE_ACTIVE_SECONDS,
+    devices,
+    liveSessions,
+  });
+});
+
+// Cuts off a customer's access on every device without deleting anything.
 app.post("/api/admin/tokens/:token/revoke", (req, res) => {
   if (!ADMIN_SECRET || req.headers["x-admin-secret"] !== ADMIN_SECRET) {
     return res.status(401).json({ error: "Unauthorized" });
@@ -335,7 +438,7 @@ app.post("/api/admin/tokens/:token/revoke", (req, res) => {
   const { token } = req.params;
   if (!getUser(token)) return res.status(404).json({ error: "Unknown token" });
   db.prepare("UPDATE users SET revoked = 1 WHERE token = ?").run(token);
-  res.json({ token, revoked: true });
+  res.json({ token, revoked: true, scope: "all" });
 });
 
 app.post("/api/admin/tokens/:token/restore", (req, res) => {
@@ -345,7 +448,52 @@ app.post("/api/admin/tokens/:token/restore", (req, res) => {
   const { token } = req.params;
   if (!getUser(token)) return res.status(404).json({ error: "Unknown token" });
   db.prepare("UPDATE users SET revoked = 0 WHERE token = ?").run(token);
-  res.json({ token, revoked: false });
+  res.json({ token, revoked: false, scope: "all" });
+});
+
+function setPlatformRevoked(token, scope, revoked) {
+  const column = scope === "mobile" ? "revoked_mobile" : "revoked_desktop";
+  db.prepare(`UPDATE users SET ${column} = ? WHERE token = ?`).run(revoked ? 1 : 0, token);
+}
+
+app.post("/api/admin/tokens/:token/revoke-mobile", (req, res) => {
+  if (!ADMIN_SECRET || req.headers["x-admin-secret"] !== ADMIN_SECRET) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  const { token } = req.params;
+  if (!getUser(token)) return res.status(404).json({ error: "Unknown token" });
+  setPlatformRevoked(token, "mobile", true);
+  res.json({ token, revoked_mobile: true, scope: "mobile" });
+});
+
+app.post("/api/admin/tokens/:token/restore-mobile", (req, res) => {
+  if (!ADMIN_SECRET || req.headers["x-admin-secret"] !== ADMIN_SECRET) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  const { token } = req.params;
+  if (!getUser(token)) return res.status(404).json({ error: "Unknown token" });
+  setPlatformRevoked(token, "mobile", false);
+  res.json({ token, revoked_mobile: false, scope: "mobile" });
+});
+
+app.post("/api/admin/tokens/:token/revoke-desktop", (req, res) => {
+  if (!ADMIN_SECRET || req.headers["x-admin-secret"] !== ADMIN_SECRET) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  const { token } = req.params;
+  if (!getUser(token)) return res.status(404).json({ error: "Unknown token" });
+  setPlatformRevoked(token, "desktop", true);
+  res.json({ token, revoked_desktop: true, scope: "desktop" });
+});
+
+app.post("/api/admin/tokens/:token/restore-desktop", (req, res) => {
+  if (!ADMIN_SECRET || req.headers["x-admin-secret"] !== ADMIN_SECRET) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  const { token } = req.params;
+  if (!getUser(token)) return res.status(404).json({ error: "Unknown token" });
+  setPlatformRevoked(token, "desktop", false);
+  res.json({ token, revoked_desktop: false, scope: "desktop" });
 });
 
 // Permanently removes a token and all associated ledger rows. Unlike revoke,
@@ -360,10 +508,12 @@ app.delete("/api/admin/tokens/:token", (req, res) => {
   const deleteUser = db.prepare("DELETE FROM users WHERE token = ?");
   const deleteTransactions = db.prepare("DELETE FROM transactions WHERE token = ?");
   const deleteSessions = db.prepare("DELETE FROM usage_sessions WHERE token = ?");
+  const deletePresence = db.prepare("DELETE FROM client_presence WHERE token = ?");
 
   db.exec("BEGIN");
   try {
     deleteSessions.run(token);
+    deletePresence.run(token);
     deleteTransactions.run(token);
     deleteUser.run(token);
     db.exec("COMMIT");
@@ -582,6 +732,44 @@ app.get("/api/verify/:reference", async (req, res) => {
   }
 });
 
+// --- Client presence (online devices for admin dashboard) --------------------
+function upsertClientPresence({ token, clientId, platform, userAgent, isTransforming, sessionId }) {
+  if (!clientId || !platform) return;
+  const now = new Date().toISOString();
+  db.prepare(
+    `INSERT INTO client_presence (token, client_id, platform, user_agent, last_seen_at, is_transforming, session_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(token, client_id) DO UPDATE SET
+       platform = excluded.platform,
+       user_agent = excluded.user_agent,
+       last_seen_at = excluded.last_seen_at,
+       is_transforming = excluded.is_transforming,
+       session_id = excluded.session_id`
+  ).run(
+    token,
+    clientId,
+    platform,
+    userAgent ? String(userAgent).slice(0, 240) : null,
+    now,
+    isTransforming ? 1 : 0,
+    sessionId || null
+  );
+}
+
+app.post("/api/presence", requireToken, (req, res) => {
+  const { clientId, platform, isTransforming, sessionId } = req.body || {};
+  const userAgent = req.headers["user-agent"] || "";
+  upsertClientPresence({
+    token: req.token,
+    clientId,
+    platform,
+    userAgent,
+    isTransforming: Boolean(isTransforming),
+    sessionId,
+  });
+  res.json({ ok: true });
+});
+
 // --- Usage sessions (server-authoritative metering) --------------------------
 app.post("/api/sessions/start", requireToken, (req, res) => {
   const credits = getBalance(req.token);
@@ -620,9 +808,19 @@ app.post("/api/sessions/start", requireToken, (req, res) => {
 
   const id = randomUUID();
   const now = new Date().toISOString();
+  const { clientId, platform } = req.body || {};
+  const userAgent = req.headers["user-agent"] || "";
   db.prepare(
-    "INSERT INTO usage_sessions (id, token, started_at, last_heartbeat_at) VALUES (?, ?, ?, ?)"
-  ).run(id, req.token, now, now);
+    "INSERT INTO usage_sessions (id, token, started_at, last_heartbeat_at, client_platform, client_id) VALUES (?, ?, ?, ?, ?, ?)"
+  ).run(id, req.token, now, now, platform || null, clientId || null);
+  upsertClientPresence({
+    token: req.token,
+    clientId,
+    platform,
+    userAgent,
+    isTransforming: true,
+    sessionId: id,
+  });
   res.json({ sessionId: id, credits: freshCredits });
 });
 
@@ -648,6 +846,16 @@ app.post("/api/sessions/:id/heartbeat", requireToken, (req, res) => {
     "UPDATE usage_sessions SET last_heartbeat_at = ?, credits_used = credits_used + ? WHERE id = ?"
   ).run(now.toISOString(), creditsToDeduct, req.params.id);
 
+  const { clientId, platform } = req.body || {};
+  upsertClientPresence({
+    token: req.token,
+    clientId,
+    platform,
+    userAgent: req.headers["user-agent"] || "",
+    isTransforming: true,
+    sessionId: req.params.id,
+  });
+
   res.json({ credits: remaining, depleted: remaining <= 0 });
 });
 
@@ -670,6 +878,18 @@ app.post("/api/sessions/:id/end", requireToken, (req, res) => {
   db.prepare(
     "UPDATE usage_sessions SET ended_at = ?, credits_used = credits_used + ? WHERE id = ?"
   ).run(now.toISOString(), creditsToDeduct, req.params.id);
+
+  const { clientId, platform } = req.body || {};
+  if (clientId) {
+    upsertClientPresence({
+      token: req.token,
+      clientId,
+      platform,
+      userAgent: req.headers["user-agent"] || "",
+      isTransforming: false,
+      sessionId: null,
+    });
+  }
 
   res.json({ credits: remaining });
 });
