@@ -154,6 +154,15 @@ export default function App() {
       return "";
     }
   });
+  const [sessionReady, setSessionReady] = useState(() => {
+    try {
+      return !window.localStorage.getItem("inspiretech_access_token");
+    } catch {
+      return true;
+    }
+  });
+  const accessCheckPausedRef = useRef(false);
+  const gateJustAuthenticatedRef = useRef(false);
   const [tokenError, setTokenError] = useState("");
   const [gateLoading, setGateLoading] = useState(false);
   const [gateSetupMessage, setGateSetupMessage] = useState("");
@@ -371,7 +380,7 @@ export default function App() {
 
   // --- Fetch the real balance on load, and handle returning from Paystack Checkout ---
   useEffect(() => {
-    if (!accessToken) return;
+    if (!accessToken || !sessionReady) return;
     refreshBalance();
 
     const params = new URLSearchParams(window.location.search);
@@ -389,12 +398,47 @@ export default function App() {
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accessToken, sessionReady]);
+
+  // Validate a saved token once before entering the studio (avoids 401 poll spam).
+  useEffect(() => {
+    if (!accessToken) {
+      setSessionReady(true);
+      return undefined;
+    }
+    if (gateJustAuthenticatedRef.current) {
+      gateJustAuthenticatedRef.current = false;
+      return undefined;
+    }
+
+    let cancelled = false;
+    setSessionReady(false);
+    accessCheckPausedRef.current = false;
+
+    (async () => {
+      const validation = await validateAccessToken(accessToken);
+      if (cancelled) return;
+      if (!validation.ok) {
+        handleTokenRejected(validation.error);
+        return;
+      }
+      setCredits(validation.credits);
+      setCreditsLoaded(true);
+      setLedgerUnreachable(false);
+      setSessionReady(true);
+      await reportPresence(accessToken);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accessToken]);
 
   // Desktop app: if the user already has a saved token but drivers were never
   // installed (e.g. migrated from web), install them on load.
   useEffect(() => {
-    if (!accessToken || !isCompanionApp()) return;
+    if (!accessToken || !sessionReady || !isCompanionApp()) return;
     let cancelled = false;
 
     (async () => {
@@ -415,11 +459,11 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [accessToken]);
+  }, [accessToken, sessionReady]);
 
   // Idle access check: catches admin revoke/delete while the user is on the page.
   useEffect(() => {
-    if (!accessToken) return undefined;
+    if (!accessToken || !sessionReady) return undefined;
 
     const TOKEN_POLL_MS = 2000;
     const checkAccess = () => {
@@ -440,7 +484,7 @@ export default function App() {
       document.removeEventListener("visibilitychange", onVisible);
       window.removeEventListener("focus", checkAccess);
     };
-  }, [accessToken]);
+  }, [accessToken, sessionReady]);
 
   // --- Electron desktop shell integration (no-op in the normal web app) ---
   // window.inspireTechDesktop only exists when this page is running inside
@@ -806,8 +850,10 @@ export default function App() {
   // covers both an invalid token (401) and a revoked one (403). Always safe
   // to call: stopTransformation() itself no-ops if nothing is running.
   const handleTokenRejected = (message) => {
+    accessCheckPausedRef.current = true;
     stopTransformation();
     clearAccessToken();
+    setSessionReady(true);
     setTokenError(message);
   };
 
@@ -897,6 +943,9 @@ export default function App() {
       }
 
       saveAccessToken(validation.token || normalizeAccessToken(token));
+      gateJustAuthenticatedRef.current = true;
+      accessCheckPausedRef.current = false;
+      setSessionReady(true);
       setCredits(validation.credits);
       setCreditsLoaded(true);
       setLedgerUnreachable(false);
@@ -940,6 +989,7 @@ export default function App() {
   };
 
   const refreshBalance = async () => {
+    if (accessCheckPausedRef.current) return;
     try {
       const res = await fetch(`${LEDGER_URL}/api/access-check`, { headers: authHeaders() });
       if (res.status === 401) {
@@ -1843,14 +1893,15 @@ export default function App() {
   const isLowCredit = credits <= LOW_CREDIT_THRESHOLD;
 
   // No access token yet — show sign-in gate (landing page lives at /).
-  if (!accessToken) {
+  if (!accessToken || !sessionReady) {
+    const verifyingSaved = Boolean(accessToken && !sessionReady);
     return (
       <AccessGate
         companionMode={isCompanionApp()}
         onAuthenticated={handleGateAuthenticated}
         tokenError={tokenError}
-        loading={gateLoading}
-        setupMessage={gateSetupMessage}
+        loading={gateLoading || verifyingSaved}
+        setupMessage={verifyingSaved ? "Checking your saved access token…" : gateSetupMessage}
       />
     );
   }
