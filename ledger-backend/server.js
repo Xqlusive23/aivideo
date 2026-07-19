@@ -445,7 +445,7 @@ app.post("/api/admin/tokens/:token/revoke", (req, res) => {
   }
   const { token } = req.params;
   if (!getUser(token)) return res.status(404).json({ error: "Unknown token" });
-  db.prepare("UPDATE users SET revoked = 1 WHERE token = ?").run(token);
+  setAllAccessRevoked(token, true);
   res.json({ token, revoked: true, scope: "all" });
 });
 
@@ -455,9 +455,19 @@ app.post("/api/admin/tokens/:token/restore", (req, res) => {
   }
   const { token } = req.params;
   if (!getUser(token)) return res.status(404).json({ error: "Unknown token" });
-  db.prepare("UPDATE users SET revoked = 0 WHERE token = ?").run(token);
+  setAllAccessRevoked(token, false);
   res.json({ token, revoked: false, scope: "all" });
 });
+
+function setAllAccessRevoked(token, revoked) {
+  const flag = revoked ? 1 : 0;
+  db.prepare("UPDATE users SET revoked = ?, revoked_mobile = ?, revoked_desktop = ? WHERE token = ?").run(
+    flag,
+    flag,
+    flag,
+    token
+  );
+}
 
 function setPlatformRevoked(token, scope, revoked) {
   const column = scope === "mobile" ? "revoked_mobile" : "revoked_desktop";
@@ -521,16 +531,24 @@ app.post("/api/admin/tokens/:token/platform-access", (req, res) => {
 
   const revoke = action === "revoke";
   if (scope === "all") {
-    db.prepare("UPDATE users SET revoked = ? WHERE token = ?").run(revoke ? 1 : 0, token);
-    return res.json({ token, revoked: revoke, scope: "all" });
+    setAllAccessRevoked(token, revoke);
+    return res.json({
+      token,
+      revoked: revoke,
+      revoked_mobile: revoke,
+      revoked_desktop: revoke,
+      scope: "all",
+    });
   }
 
   setPlatformRevoked(token, scope, revoke);
+  const user = getUser(token);
   return res.json({
     token,
     scope,
-    revoked_mobile: scope === "mobile" ? revoke : Number(getUser(token).revoked_mobile) === 1,
-    revoked_desktop: scope === "desktop" ? revoke : Number(getUser(token).revoked_desktop) === 1,
+    revoked: Number(user.revoked) === 1,
+    revoked_mobile: Number(user.revoked_mobile) === 1,
+    revoked_desktop: Number(user.revoked_desktop) === 1,
   });
 });
 
