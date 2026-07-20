@@ -274,6 +274,7 @@ export default function App() {
   const rtcSocketRef = useRef(null);
   const rtcWorkletNodeRef = useRef(null);
   const rtcMicSourceRef = useRef(null);
+  const voiceRtUrlRef = useRef(VOICE_RT_URL); // synced from ledger; fallback to build-time VITE_VOICE_RT_URL
   const voicePreviewAudioRef = useRef(null);
   const voicePreviewObjectUrlRef = useRef(null);
 
@@ -774,11 +775,6 @@ export default function App() {
   // voice-rt-server directly for whatever voice folders are on its volume.
   useEffect(() => {
     if (!accessToken || voiceEngine !== "realtime") return;
-    if (!VOICE_RT_URL) {
-      setRtcLoadError("VITE_VOICE_RT_URL is not set in your project .env — add your RunPod voice-rt-server URL and restart npm run dev.");
-      setRtcVoicesLoading(false);
-      return;
-    }
     setRtcVoicesLoading(true);
     setRtcLoadError("");
     (async () => {
@@ -790,9 +786,18 @@ export default function App() {
           else handleTokenRejected(data.error || "Your access has been revoked. If you think this is a mistake, message us on WhatsApp below.");
           return;
         }
+        if (res.status === 402) {
+          setCredits(data.credits ?? 0);
+          setRtcLoadError("Out of credits — add credits to load real-time voices.");
+          setShowAddCredits(true);
+          return;
+        }
         if (!res.ok) {
           setRtcLoadError(data.error || `Could not load real-time voices (ledger responded ${res.status})`);
           return;
+        }
+        if (typeof data.voiceRtUrl === "string" && data.voiceRtUrl) {
+          voiceRtUrlRef.current = data.voiceRtUrl;
         }
         if (Array.isArray(data.voices)) {
           setRtcVoices(data.voices);
@@ -1064,7 +1069,10 @@ export default function App() {
         setRtcLoadError(data.error || "Could not get a connection ticket");
         return null;
       }
-      return data; // { ticket, expiresInSeconds }
+      if (typeof data.voiceRtUrl === "string" && data.voiceRtUrl) {
+        voiceRtUrlRef.current = data.voiceRtUrl;
+      }
+      return data; // { ticket, expiresInSeconds, voiceRtUrl? }
     } catch (err) {
       console.error("Failed to fetch RTC ticket:", err);
       setRtcLoadError("Could not reach the ledger backend for a connection ticket");
@@ -1478,10 +1486,16 @@ export default function App() {
   // care which engine produced it.
   const startRealtimeVoiceCapture = async (micStream) => {
     const micTrack = micStream.getAudioTracks()[0];
-    if (!micTrack || !VOICE_RT_URL || !rtcSelectedVoiceId) return null;
+    if (!micTrack || !rtcSelectedVoiceId) return null;
 
     const ticketRes = await ledgerFetchTicket();
     if (!ticketRes) return null;
+
+    const rtUrl = ticketRes.voiceRtUrl || voiceRtUrlRef.current || VOICE_RT_URL;
+    if (!rtUrl) {
+      setRtcLoadError("Real-time voice URL is not configured on the ledger server (VOICE_RT_URL).");
+      return null;
+    }
 
     const AudioCtx = window.AudioContext || window.webkitAudioContext;
     const audioCtx = new AudioCtx();
@@ -1499,8 +1513,8 @@ export default function App() {
       return null;
     }
 
-    const wsProtocol = VOICE_RT_URL.startsWith("https") ? "wss" : "ws";
-    const wsUrl = `${VOICE_RT_URL.replace(/^https?/, wsProtocol)}/convert?ticket=${encodeURIComponent(ticketRes.ticket)}&voice_id=${encodeURIComponent(rtcSelectedVoiceId)}`;
+    const wsProtocol = rtUrl.startsWith("https") ? "wss" : "ws";
+    const wsUrl = `${rtUrl.replace(/^https?/, wsProtocol)}/convert?ticket=${encodeURIComponent(ticketRes.ticket)}&voice_id=${encodeURIComponent(rtcSelectedVoiceId)}`;
     const socket = new WebSocket(wsUrl);
     socket.binaryType = "arraybuffer";
     rtcSocketRef.current = socket;
@@ -1529,7 +1543,7 @@ export default function App() {
 
     socket.onerror = (err) => {
       console.error("voice-rt-server WebSocket error:", err);
-      setStatus(`Real-time voice failed — check ${VOICE_RT_URL} is running and RTC_TICKET_SECRET matches on RunPod`);
+      setStatus(`Real-time voice failed — check ${rtUrl} is running and RTC_TICKET_SECRET matches on RunPod`);
     };
 
     socket.onclose = (event) => {
