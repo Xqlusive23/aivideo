@@ -633,7 +633,12 @@ app.get("/api/voice/voices", requireToken, async (req, res) => {
     if (!elevenRes.ok) {
       return res.status(elevenRes.status).json({ error: data.detail?.message || "Failed to fetch voices" });
     }
-    const voices = (data.voices || []).map((v) => ({ voice_id: v.voice_id, name: v.name, category: v.category }));
+    const voices = (data.voices || []).map((v) => ({
+      voice_id: v.voice_id,
+      name: v.name,
+      category: v.category,
+      preview_url: v.preview_url || null,
+    }));
     res.json({ voices });
   } catch (err) {
     console.error("Fetching ElevenLabs voices failed:", err);
@@ -673,7 +678,12 @@ app.post("/api/voice/convert", requireToken, upload.single("audio"), async (req,
     if (!elevenRes.ok) {
       const errText = await elevenRes.text();
       console.error("ElevenLabs speech-to-speech failed:", elevenRes.status, errText);
-      return res.status(elevenRes.status).json({ error: "Voice conversion failed" });
+      // Never forward ElevenLabs 401/403 — the browser treats those as app token rejection and logs the user out.
+      return res.status(502).json({
+        error: "Voice conversion failed",
+        detail: errText.slice(0, 240),
+        upstreamStatus: elevenRes.status,
+      });
     }
 
     res.setHeader("Content-Type", "audio/mpeg");
@@ -733,6 +743,41 @@ app.get("/api/voice/rtc-voices", requireToken, async (req, res) => {
       error: `Cannot reach voice-rt-server at ${VOICE_RT_URL}. Is the RunPod pod running?`,
       detail: err.message,
       voiceRtUrl: VOICE_RT_URL,
+    });
+  }
+});
+
+// Proxies voice-rt-server /preview — returns a WAV sample for the selected RVC voice.
+app.get("/api/voice/rtc-preview/:voiceId", requireToken, async (req, res) => {
+  if (!RTC_TICKET_SECRET) {
+    return res.status(500).json({ error: "RTC_TICKET_SECRET is not set in ledger-backend/.env" });
+  }
+  if (!VOICE_RT_URL) {
+    return res.status(500).json({ error: "VOICE_RT_URL is not set in ledger-backend/.env" });
+  }
+  const credits = getBalance(req.token);
+  if (credits <= 0) return res.status(402).json({ error: "Out of credits", credits });
+
+  const voiceId = req.params.voiceId;
+  if (!voiceId) return res.status(400).json({ error: "voiceId is required" });
+
+  const ticket = mintRtcTicket(req.token);
+  try {
+    const rtRes = await fetch(
+      `${VOICE_RT_URL}/preview?voice_id=${encodeURIComponent(voiceId)}&ticket=${encodeURIComponent(ticket)}`
+    );
+    if (!rtRes.ok) {
+      const data = await rtRes.json().catch(() => ({}));
+      const message = data.detail || data.error || `voice-rt-server preview failed (${rtRes.status})`;
+      return res.status(rtRes.status === 404 ? 404 : 502).json({ error: message });
+    }
+    res.setHeader("Content-Type", "audio/wav");
+    const { Readable } = await import("node:stream");
+    Readable.fromWeb(rtRes.body).pipe(res);
+  } catch (err) {
+    res.status(502).json({
+      error: `Cannot reach voice-rt-server at ${VOICE_RT_URL}`,
+      detail: err.message,
     });
   }
 });

@@ -61,7 +61,7 @@ const CREDITS_PER_DOLLAR = 100; // must also match ledger-backend/server.js's TI
 const NAIRA_PER_CREDIT = NAIRA_PER_DOLLAR / CREDITS_PER_DOLLAR; // = ₦20 per credit
 const DISPLAY_CREDITS_PER_SECOND = 2; // for UI copy only — the server decides the real rate
 const LOW_CREDIT_THRESHOLD = 40; // ~20 seconds left at 2 credits/sec — warn before it runs out
-const HEARTBEAT_INTERVAL_MS = 2000; // how often the frontend checks in with the server ledger
+const HEARTBEAT_INTERVAL_MS = 1000; // 1s ticks → ~2 credits deducted per tick at 2 credits/sec
 
 const TOP_UP_OPTIONS = [
   { naira: 20000, credits: 1000 },
@@ -89,7 +89,7 @@ const MOBILE_LAYOUT_MAX_WIDTH = 900;
 // above. See /voice-rt-server/README.md for what this actually is and why
 // it's architecturally different (no per-chunk delay).
 const VOICE_RT_URL = import.meta.env?.VITE_VOICE_RT_URL || "";
-const VOICE_RT_FRAME_SAMPLES = 640; // 40ms @ 16kHz — must match voice-rt-server's FRAME_SAMPLES
+const VOICE_RT_FRAME_SAMPLES_DEFAULT = 6400; // 400ms @ 16kHz — must match voice-rt-server FRAME_MS (synced from /voices)
 
 export default function App() {
   const [isRunning, setIsRunning] = useState(false);
@@ -122,6 +122,9 @@ export default function App() {
   const [rtcSelectedVoiceId, setRtcSelectedVoiceId] = useState("");
   const [rtcLoadError, setRtcLoadError] = useState("");
   const [rtcVoicesLoading, setRtcVoicesLoading] = useState(true);
+  const [rtcFrameSamples, setRtcFrameSamples] = useState(VOICE_RT_FRAME_SAMPLES_DEFAULT);
+  const [voicePreviewLoading, setVoicePreviewLoading] = useState(false);
+  const [voicePreviewError, setVoicePreviewError] = useState("");
 
   const [videoDevices, setVideoDevices] = useState([]);
   const [selectedVideoDeviceId, setSelectedVideoDeviceId] = useState("");
@@ -261,7 +264,7 @@ export default function App() {
   const voiceRecorderRef = useRef(null);
   const audioContextRef = useRef(null);
   const voiceDestinationRef = useRef(null);
-  const voicePlaybackQueueTimeRef = useRef(0);
+  const voiceSessionRef = useRef(null);
   const analyserRef = useRef(null);
   const voiceLevelIntervalRef = useRef(null);
   const chunkHadSpeechRef = useRef(false);
@@ -271,6 +274,8 @@ export default function App() {
   const rtcSocketRef = useRef(null);
   const rtcWorkletNodeRef = useRef(null);
   const rtcMicSourceRef = useRef(null);
+  const voicePreviewAudioRef = useRef(null);
+  const voicePreviewObjectUrlRef = useRef(null);
 
   const buildVideoConstraints = (deviceId, { strictDevice = false, relaxed = false } = {}) => {
     const constraints = {
@@ -791,6 +796,9 @@ export default function App() {
         }
         if (Array.isArray(data.voices)) {
           setRtcVoices(data.voices);
+          if (Number.isFinite(data.frame_samples) && data.frame_samples > 0) {
+            setRtcFrameSamples(data.frame_samples);
+          }
           if (data.voices.length === 0) {
             setRtcLoadError("voice-rt-server is reachable but has no voice models — upload .pth files to the pod's /models volume.");
           } else {
@@ -809,6 +817,77 @@ export default function App() {
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accessToken, voiceEngine]);
+
+  const stopVoicePreview = () => {
+    if (voicePreviewAudioRef.current) {
+      voicePreviewAudioRef.current.pause();
+      voicePreviewAudioRef.current = null;
+    }
+    if (voicePreviewObjectUrlRef.current) {
+      URL.revokeObjectURL(voicePreviewObjectUrlRef.current);
+      voicePreviewObjectUrlRef.current = null;
+    }
+  };
+
+  const playVoicePreview = async () => {
+    if (isRunning) return;
+    stopVoicePreview();
+    setVoicePreviewError("");
+
+    const voiceId = voiceEngine === "realtime" ? rtcSelectedVoiceId : selectedVoiceId;
+    if (!voiceId) {
+      setVoicePreviewError("Select a voice first.");
+      return;
+    }
+
+    setVoicePreviewLoading(true);
+    try {
+      if (voiceEngine === "elevenlabs") {
+        const voice = voices.find((v) => v.voice_id === voiceId);
+        if (!voice?.preview_url) {
+          setVoicePreviewError("No preview clip for this ElevenLabs voice.");
+          return;
+        }
+        const audio = new Audio(voice.preview_url);
+        voicePreviewAudioRef.current = audio;
+        audio.onended = () => {
+          voicePreviewAudioRef.current = null;
+        };
+        await audio.play();
+        return;
+      }
+
+      const res = await fetch(`${LEDGER_URL}/api/voice/rtc-preview/${encodeURIComponent(voiceId)}`, {
+        headers: authHeaders(),
+      });
+      if (res.status === 401) return handleTokenRejected("Your access token was rejected. Please re-enter it.");
+      if (res.status === 403) {
+        const data = await res.json().catch(() => ({}));
+        return handleTokenRejected(data.error || "Your access has been revoked. If you think this is a mistake, message us on WhatsApp below.");
+      }
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setVoicePreviewError(data.error || `Preview failed (${res.status})`);
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      voicePreviewObjectUrlRef.current = url;
+      const audio = new Audio(url);
+      voicePreviewAudioRef.current = audio;
+      audio.onended = () => {
+        stopVoicePreview();
+      };
+      await audio.play();
+    } catch (err) {
+      console.error("Voice preview failed:", err);
+      setVoicePreviewError("Could not play voice preview.");
+    } finally {
+      setVoicePreviewLoading(false);
+    }
+  };
+
+  useEffect(() => () => stopVoicePreview(), []);
 
   // --- Desktop companion app bridge (optional) --------------------------
   // Completely inert in a normal browser tab — window.inspiretechCompanion
@@ -1074,16 +1153,104 @@ export default function App() {
   // Tuned for quiet rooms with steady fan hum and occasional distant voices.
   // Fan = low-frequency constant noise (tracked as noise floor). Distant outside
   // voices = quieter, less peaky, weaker speech-band energy than you at the mic.
-  const VOICE_ACTIVITY_MULTIPLIER = 5.5;
-  const VOICE_ACTIVITY_MIN_THRESHOLD = 0.022;
+  const VOICE_ACTIVITY_MULTIPLIER = 4.0;
+  const VOICE_ACTIVITY_MIN_THRESHOLD = 0.015;
   const VOICE_ACTIVITY_MIN_CONSECUTIVE = 4;
   const VOICE_ACTIVITY_MIN_SPEECH_RATIO = 0.45;
   const VOICE_NOISE_FLOOR_MAX = 0.028;
   const VOICE_PEAK_MULTIPLIER = 1.55;
-  const VOICE_SPEECH_BAND_MIN = 0.38;
+  const VOICE_SPEECH_BAND_MIN = 0.32;
   const VOICE_WARMUP_CHECKS = 12;
   const VOICE_LEVEL_CHECK_MS = 100;
   const VOICE_SPEECH_BAND_HZ = { low: 280, high: 3500 };
+  // Real-time RVC: server-side VAD filters fan noise — do not gate sends on the client.
+  const RTC_MIC_GAIN = 2.5;
+
+  // One output bus → MediaStreamDestination only. Playback during transformation
+  // uses the same path as raw mic: Decart echoes input audio on the output video.
+  const createVoiceOutputSession = (audioCtx) => {
+    const decartDestination = audioCtx.createMediaStreamDestination();
+    const bus = audioCtx.createGain();
+    bus.gain.value = 1;
+    bus.connect(decartDestination);
+
+    let queueTime = audioCtx.currentTime;
+    let playbackChain = Promise.resolve();
+
+    const ensureRunning = async () => {
+      if (audioCtx.state === "suspended") await audioCtx.resume().catch(() => {});
+    };
+
+    const resetQueue = () => {
+      queueTime = audioCtx.currentTime;
+    };
+
+    const scheduleBuffer = (audioBuffer) => {
+      if (!audioBuffer || audioBuffer.length < 32) return;
+      if (audioCtx.state === "suspended") void audioCtx.resume();
+      const now = audioCtx.currentTime;
+      // Catch up if we fell behind; drop queued latency if buffer bloats (>1.5s).
+      if (queueTime < now) queueTime = now;
+      if (queueTime - now > 1.5) queueTime = now;
+      const startAt = queueTime;
+      const source = audioCtx.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(bus);
+      source.start(startAt);
+      queueTime = startAt + audioBuffer.duration;
+    };
+
+    const schedulePcmInt16 = (int16, sampleRate = 16000) => {
+      if (!int16?.length) return;
+      const audioBuffer = audioCtx.createBuffer(1, int16.length, sampleRate);
+      const channel = audioBuffer.getChannelData(0);
+      for (let i = 0; i < int16.length; i++) {
+        channel[i] = int16[i] / (int16[i] < 0 ? 0x8000 : 0x7fff);
+      }
+      scheduleBuffer(audioBuffer);
+    };
+
+    const playEncodedChunk = (arrayBuffer, mimeType = "audio/mpeg") => {
+      if (!arrayBuffer || arrayBuffer.byteLength < 128) return;
+      playbackChain = playbackChain.then(async () => {
+        if (voiceSessionRef.current?.bus !== bus) return;
+        await ensureRunning();
+        try {
+          const decoded = await audioCtx.decodeAudioData(arrayBuffer.slice(0));
+          scheduleBuffer(decoded);
+          return;
+        } catch {
+          // Some MP3 blobs fail decodeAudioData — tap the chunk through a media element.
+        }
+        const url = URL.createObjectURL(new Blob([arrayBuffer], { type: mimeType }));
+        const media = new Audio(url);
+        await new Promise((resolve, reject) => {
+          const finish = () => resolve();
+          media.addEventListener("canplaythrough", finish, { once: true });
+          media.addEventListener("error", () => reject(new Error("Could not decode voice chunk")), {
+            once: true,
+          });
+          setTimeout(finish, 2500);
+        });
+        const tap = audioCtx.createMediaElementSource(media);
+        tap.connect(bus);
+        await media.play();
+        await new Promise((resolve) => {
+          media.onended = () => {
+            URL.revokeObjectURL(url);
+            resolve();
+          };
+        });
+      }).catch((err) => console.error("Voice playback failed:", err));
+    };
+
+    return { stream: decartDestination.stream, decartDestination, bus, schedulePcmInt16, playEncodedChunk, resetQueue, ensureRunning };
+  };
+
+  const pickRecorderMimeType = () => {
+    const candidates = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg;codecs=opus"];
+    return candidates.find((type) => MediaRecorder.isTypeSupported(type)) || "";
+  };
 
   const measureMicLevel = (analyser, timeDomainData, freqData, sampleRate) => {
     analyser.getFloatTimeDomainData(timeDomainData);
@@ -1135,38 +1302,42 @@ export default function App() {
 
     if (res.status === 401) return handleTokenRejected("Your access token was rejected. Please re-enter it.");
     if (res.status === 403) return handleTokenRejected("Your access has been revoked. If you think this is a mistake, message us on WhatsApp below.");
-    if (!res.ok) throw new Error(`Voice conversion failed: ${res.status}`);
+    if (!res.ok) {
+      const errText = await res.text().catch(() => "");
+      let detail = errText.slice(0, 160);
+      try {
+        const data = JSON.parse(errText);
+        detail = data.detail || data.error || detail;
+      } catch {
+        // plain text body
+      }
+      throw new Error(`Voice conversion failed: ${res.status}${detail ? ` — ${detail}` : ""}`);
+    }
 
     const arrayBuffer = await res.arrayBuffer();
-    const audioCtx = audioContextRef.current;
-    const destination = voiceDestinationRef.current;
-    if (!audioCtx || !destination) return; // pipeline was stopped while this was in flight
+    if (arrayBuffer.byteLength < 256) return;
 
-    const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-    const source = audioCtx.createBufferSource();
-    source.buffer = audioBuffer;
-    source.connect(destination);
+    const session = voiceSessionRef.current;
+    if (!session) return;
 
-    // Schedule sequentially so chunks play back-to-back instead of overlapping
-    // or leaving gaps if one comes back slower than another.
-    const now = audioCtx.currentTime;
-    const startAt = Math.max(now, voicePlaybackQueueTimeRef.current);
-    source.start(startAt);
-    voicePlaybackQueueTimeRef.current = startAt + audioBuffer.duration;
+    const contentType = res.headers.get("Content-Type") || "";
+    const mime = contentType.includes("mpeg") ? "audio/mpeg" : contentType || "audio/mpeg";
+    session.playEncodedChunk(arrayBuffer.slice(0), mime);
   };
 
   // Starts the continuous record → convert → schedule loop, and returns the
   // synthetic converted-voice MediaStream to use instead of the raw mic.
-  const startVoiceChangerCapture = (micStream) => {
+  const startVoiceChangerCapture = async (micStream) => {
     const micTrack = micStream.getAudioTracks()[0];
     if (!micTrack) return null;
 
     const AudioCtx = window.AudioContext || window.webkitAudioContext;
     const audioCtx = new AudioCtx();
-    const destination = audioCtx.createMediaStreamDestination();
+    await audioCtx.resume().catch(() => {});
+    const session = createVoiceOutputSession(audioCtx);
     audioContextRef.current = audioCtx;
-    voiceDestinationRef.current = destination;
-    voicePlaybackQueueTimeRef.current = audioCtx.currentTime;
+    voiceDestinationRef.current = session.decartDestination;
+    voiceSessionRef.current = session;
     voiceChangerActiveRef.current = true;
     noiseFloorRef.current = 0.01; // fan rooms: start closer to typical steady hum
 
@@ -1186,6 +1357,11 @@ export default function App() {
     analyser.fftSize = 2048;
     const levelSource = audioCtx.createMediaStreamSource(new MediaStream([micTrack]));
     levelSource.connect(analyser);
+    // Keep the playback context running between chunk conversions (no continuous mic tap otherwise).
+    const keepAlive = audioCtx.createGain();
+    keepAlive.gain.value = 0;
+    levelSource.connect(keepAlive);
+    keepAlive.connect(audioCtx.destination);
     const timeDomainData = new Float32Array(analyser.fftSize);
     const freqData = new Float32Array(analyser.frequencyBinCount);
     analyserRef.current = analyser;
@@ -1239,7 +1415,10 @@ export default function App() {
       chunkHadSpeechRef.current = false;
       speechSamplesInChunkRef.current = 0;
       chunkSampleChecksRef.current = 0;
-      const recorder = new MediaRecorder(new MediaStream([micTrack]), { mimeType: "audio/webm" });
+      const recorderMime = pickRecorderMimeType();
+      const recorder = recorderMime
+        ? new MediaRecorder(new MediaStream([micTrack]), { mimeType: recorderMime })
+        : new MediaRecorder(new MediaStream([micTrack]));
       const chunks = [];
       recorder.ondataavailable = (e) => {
         if (e.data.size > 0) chunks.push(e.data);
@@ -1263,7 +1442,7 @@ export default function App() {
     };
 
     recordCycle();
-    return destination.stream;
+    return session.stream;
   };
 
   const stopVoiceChangerCapture = () => {
@@ -1286,6 +1465,7 @@ export default function App() {
       audioContextRef.current = null;
     }
     voiceDestinationRef.current = null;
+    voiceSessionRef.current = null;
   };
 
   // --- Real-time voice pipeline (voice-rt-server) --------------------------
@@ -1305,10 +1485,11 @@ export default function App() {
 
     const AudioCtx = window.AudioContext || window.webkitAudioContext;
     const audioCtx = new AudioCtx();
-    const destination = audioCtx.createMediaStreamDestination();
+    await audioCtx.resume().catch(() => {});
+    const session = createVoiceOutputSession(audioCtx);
     audioContextRef.current = audioCtx;
-    voiceDestinationRef.current = destination;
-    voicePlaybackQueueTimeRef.current = audioCtx.currentTime;
+    voiceDestinationRef.current = session.decartDestination;
+    voiceSessionRef.current = session;
 
     try {
       await audioCtx.audioWorklet.addModule("/pcm-capture-worklet.js");
@@ -1324,29 +1505,26 @@ export default function App() {
     socket.binaryType = "arraybuffer";
     rtcSocketRef.current = socket;
 
+    const socketReady = new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error("voice-rt-server connection timeout")), 15000);
+      socket.onopen = () => {
+        clearTimeout(timeout);
+        resolve();
+      };
+      socket.onerror = () => {
+        clearTimeout(timeout);
+        reject(new Error("voice-rt-server WebSocket failed to connect"));
+      };
+    });
+
     socket.onmessage = (event) => {
-      const audioCtxNow = audioContextRef.current;
-      const destinationNow = voiceDestinationRef.current;
-      if (!audioCtxNow || !destinationNow) return;
+      const sessionNow = voiceSessionRef.current;
+      if (!sessionNow) return;
       if (typeof event.data === "string") {
-        // voice-rt-server sends JSON text only for error messages (see server.py)
         console.error("voice-rt-server error:", event.data);
         return;
       }
-      const int16 = new Int16Array(event.data);
-      const float32 = new Float32Array(int16.length);
-      for (let i = 0; i < int16.length; i++) float32[i] = int16[i] / 32768;
-      // Web Audio resamples automatically if this buffer's rate differs from
-      // the context's — no manual upsampling needed for playback.
-      const audioBuffer = audioCtxNow.createBuffer(1, float32.length, 16000);
-      audioBuffer.copyToChannel(float32, 0);
-      const source = audioCtxNow.createBufferSource();
-      source.buffer = audioBuffer;
-      source.connect(destinationNow);
-      const now = audioCtxNow.currentTime;
-      const startAt = Math.max(now, voicePlaybackQueueTimeRef.current);
-      source.start(startAt);
-      voicePlaybackQueueTimeRef.current = startAt + audioBuffer.duration;
+      sessionNow.schedulePcmInt16(new Int16Array(event.data), 16000);
     };
 
     socket.onerror = (err) => {
@@ -1362,16 +1540,38 @@ export default function App() {
       }
     };
 
+    try {
+      await socketReady;
+    } catch (err) {
+      console.error(err);
+      setStatus(`Real-time voice failed — ${err.message}`);
+      try {
+        socket.close();
+      } catch {
+        // already closed
+      }
+      rtcSocketRef.current = null;
+      audioCtx.close().catch(() => {});
+      audioContextRef.current = null;
+      voiceDestinationRef.current = null;
+      voiceSessionRef.current = null;
+      return null;
+    }
+
     const micSource = audioCtx.createMediaStreamSource(new MediaStream([micTrack]));
     rtcMicSourceRef.current = micSource;
+    const micGain = audioCtx.createGain();
+    micGain.gain.value = RTC_MIC_GAIN;
+    micSource.connect(micGain);
+
     const workletNode = new AudioWorkletNode(audioCtx, "pcm-capture-processor", {
-      processorOptions: { targetSampleRate: 16000, frameSamples: VOICE_RT_FRAME_SAMPLES },
+      processorOptions: { targetSampleRate: 16000, frameSamples: rtcFrameSamples },
     });
     rtcWorkletNodeRef.current = workletNode;
 
     workletNode.port.onmessage = (event) => {
       if (socket.readyState === WebSocket.OPEN) {
-        socket.send(event.data); // ArrayBuffer of Int16 PCM samples
+        socket.send(event.data);
       }
     };
 
@@ -1380,11 +1580,11 @@ export default function App() {
     // node so it never actually plays back locally.
     const silentGain = audioCtx.createGain();
     silentGain.gain.value = 0;
-    micSource.connect(workletNode);
+    micGain.connect(workletNode);
     workletNode.connect(silentGain);
     silentGain.connect(audioCtx.destination);
 
-    return destination.stream;
+    return session.stream;
   };
 
   const stopRealtimeVoiceCapture = () => {
@@ -1409,6 +1609,7 @@ export default function App() {
       audioContextRef.current = null;
     }
     voiceDestinationRef.current = null;
+    voiceSessionRef.current = null;
   };
 
   // Checks which pipeline is ACTUALLY running (via refs, not just the
@@ -1477,6 +1678,7 @@ export default function App() {
   };
 
   const stopActiveVoicePipeline = () => {
+    stopVoicePreview();
     stopCompanionAudioExport();
     if (rtcSocketRef.current || rtcWorkletNodeRef.current) {
       stopRealtimeVoiceCapture();
@@ -1508,6 +1710,51 @@ export default function App() {
     }
   };
 
+  // Opens a server billing session and starts the elapsed clock + heartbeat.
+  // Called only once Decart is live — handshake/setup time is not billed.
+  const beginBillingSession = async () => {
+    try {
+      const res = await fetch(`${LEDGER_URL}/api/sessions/start`, {
+        method: "POST",
+        headers: { ...authHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({
+          clientId: getClientId(),
+          platform: getClientPlatform(),
+        }),
+      });
+      const data = await res.json();
+      if (res.status === 401) {
+        handleTokenRejected("Your access token was rejected. Please re-enter it.");
+        return false;
+      }
+      if (res.status === 403) {
+        handleTokenRejected(
+          await readRejectedMessage(
+            res,
+            "Your access has been revoked. If you think this is a mistake, message us on WhatsApp below."
+          )
+        );
+        return false;
+      }
+      if (!res.ok) {
+        setCredits(data.credits ?? 0);
+        setStatus("OUT OF CREDITS — ADD MORE TO CONTINUE");
+        setShowAddCredits(true);
+        return false;
+      }
+      billingSessionIdRef.current = data.sessionId;
+      setCredits(data.credits);
+      startClockTimer();
+      startHeartbeat(data.sessionId);
+      return true;
+    } catch (err) {
+      console.error("Failed to start billing session:", err);
+      setStatus("LEDGER BACKEND UNREACHABLE — CHECK IT'S RUNNING");
+      setLedgerUnreachable(true);
+      return false;
+    }
+  };
+
   // The REAL billing loop — every tick asks the server "how much do I have
   // left now", and the server is the one doing the math and the deduction.
   const startHeartbeat = (sessionId) => {
@@ -1515,7 +1762,7 @@ export default function App() {
     setSessionCreditsUsed(0);
     const startedAtCredits = credits;
 
-    heartbeatTimerRef.current = setInterval(async () => {
+    const sendHeartbeat = async () => {
       try {
         const res = await fetch(`${LEDGER_URL}/api/sessions/${sessionId}/heartbeat`, {
           method: "POST",
@@ -1551,10 +1798,11 @@ export default function App() {
         }
       } catch (err) {
         console.error("Heartbeat error:", err);
-        // Network hiccup — don't kill the session over one missed beat,
-        // but if the backend is genuinely down the next beats will keep failing.
       }
-    }, HEARTBEAT_INTERVAL_MS);
+    };
+
+    heartbeatTimerRef.current = setInterval(sendHeartbeat, HEARTBEAT_INTERVAL_MS);
+    void sendHeartbeat();
   };
 
   const clearHeartbeat = () => {
@@ -1686,18 +1934,9 @@ export default function App() {
       return;
     }
 
-    // Ask the server for permission to start — it's the one that knows the
-    // real balance, not this client.
-    let sessionId;
+    // Pre-check balance only — billing session opens when Decart is actually live.
     try {
-      const res = await fetch(`${LEDGER_URL}/api/sessions/start`, {
-        method: "POST",
-        headers: { ...authHeaders(), "Content-Type": "application/json" },
-        body: JSON.stringify({
-          clientId: getClientId(),
-          platform: getClientPlatform(),
-        }),
-      });
+      const res = await fetch(`${LEDGER_URL}/api/access-check`, { headers: authHeaders() });
       const data = await res.json();
       if (res.status === 401) {
         handleTokenRejected("Your access token was rejected. Please re-enter it.");
@@ -1714,24 +1953,24 @@ export default function App() {
         startInProgressRef.current = false;
         return;
       }
-      if (!res.ok) {
-        setCredits(data.credits ?? 0);
+      if (!res.ok) throw new Error(`Access check failed with ${res.status}`);
+      if (data.credits <= 0) {
+        setCredits(data.credits);
         setStatus("OUT OF CREDITS — ADD MORE TO CONTINUE");
         setShowAddCredits(true);
         startInProgressRef.current = false;
         return;
       }
-      sessionId = data.sessionId;
       setCredits(data.credits);
     } catch (err) {
-      console.error("Failed to start billing session:", err);
+      console.error("Failed to verify credits before start:", err);
       setStatus("LEDGER BACKEND UNREACHABLE — CHECK IT'S RUNNING");
       setLedgerUnreachable(true);
       startInProgressRef.current = false;
       return;
     }
 
-    billingSessionIdRef.current = sessionId;
+    billingSessionIdRef.current = null;
     setIsRunning(true);
     // From here on, isRunning (true) covers the double-click guard duty via
     // the Start button's disabled state — safe to release the ref lock.
@@ -1750,7 +1989,7 @@ export default function App() {
         convertedAudioStream =
           voiceEngine === "realtime"
             ? await startRealtimeVoiceCapture(localStreamRef.current)
-            : startVoiceChangerCapture(localStreamRef.current);
+            : await startVoiceChangerCapture(localStreamRef.current);
         if (convertedAudioStream) {
           const videoTrack = localStreamRef.current.getVideoTracks()[0];
           const convertedAudioTrack = convertedAudioStream.getAudioTracks()[0];
@@ -1777,7 +2016,11 @@ export default function App() {
             model: models.realtime(getModelId()),
             mirror: "auto", // Decart's current docs recommend this over a hardcoded false/true
             onRemoteStream: (remoteStream) => {
-              if (outputVideoRef.current) outputVideoRef.current.srcObject = remoteStream;
+              const video = outputVideoRef.current;
+              if (!video) return;
+              video.srcObject = remoteStream;
+              video.muted = false;
+              void video.play().catch(() => {});
             },
             onError: (err) => {
               console.error("Decart Session Error:", err);
@@ -1785,6 +2028,9 @@ export default function App() {
               setIsRunning(false);
               clearClockTimer();
               clearHeartbeat();
+              const sid = billingSessionIdRef.current;
+              billingSessionIdRef.current = null;
+              endBillingSession(sid);
               stopActiveVoicePipeline();
             },
             onDisconnect: () => {
@@ -1792,6 +2038,9 @@ export default function App() {
               setIsRunning(false);
               clearClockTimer();
               clearHeartbeat();
+              const sid = billingSessionIdRef.current;
+              billingSessionIdRef.current = null;
+              endBillingSession(sid);
               stopActiveVoicePipeline();
             },
             initialState: {
@@ -1805,15 +2054,24 @@ export default function App() {
           });
 
           realtimeClientRef.current = session;
+          const billingOk = await beginBillingSession();
+          if (!billingOk) {
+            try {
+              session.disconnect();
+            } catch {
+              // already disconnected
+            }
+            realtimeClientRef.current = null;
+            setIsRunning(false);
+            stopActiveVoicePipeline();
+            return;
+          }
           setStatus("COMPUTE LINK ONLINE // REALTIME TRANSFORMATION TERMINAL");
-          startClockTimer();
-          startHeartbeat(sessionId);
         } catch (connectErr) {
           console.error(connectErr);
           setStatus(`HANDSHAKE REJECTED: ${connectErr.message}`);
           setIsRunning(false);
           stopActiveVoicePipeline();
-          endBillingSession(sessionId);
         }
       };
     } catch (err) {
@@ -1821,7 +2079,6 @@ export default function App() {
       setStatus(`CLIENT INIT FAILED: ${err.message || "check VITE_DECART_API_KEY is set"}`);
       setIsRunning(false);
       stopActiveVoicePipeline();
-      endBillingSession(sessionId);
     }
   };
 
@@ -2154,38 +2411,79 @@ export default function App() {
                 {voiceEngine === "elevenlabs" ? (
                   <div style={styles.voiceSelectGroup}>
                     <label className="itc-studio-label" style={styles.paramLabel}>Target voice</label>
-                    <select
-                      value={selectedVoiceId}
-                      onChange={(e) => setSelectedVoiceId(e.target.value)}
-                      disabled={isRunning || voices.length === 0}
-                      style={styles.voiceSelect}
-                      className="itc-select"
-                    >
-                      {voices.length === 0 && (
-                        <option value="">{voicesLoading ? "Loading voices..." : "No voices available"}</option>
-                      )}
-                      {voices.map((v) => (
-                        <option key={v.voice_id} value={v.voice_id}>{v.name}</option>
-                      ))}
-                    </select>
+                    <div style={styles.voiceSelectRow}>
+                      <select
+                        value={selectedVoiceId}
+                        onChange={(e) => {
+                          setSelectedVoiceId(e.target.value);
+                          setVoicePreviewError("");
+                        }}
+                        disabled={isRunning || voices.length === 0}
+                        style={styles.voiceSelect}
+                        className="itc-select"
+                      >
+                        {voices.length === 0 && (
+                          <option value="">{voicesLoading ? "Loading voices..." : "No voices available"}</option>
+                        )}
+                        {voices.map((v) => (
+                          <option key={v.voice_id} value={v.voice_id}>{v.name}</option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        style={styles.voicePreviewBtn}
+                        className="itc-btn itc-btn-secondary"
+                        onClick={playVoicePreview}
+                        disabled={isRunning || !selectedVoiceId || voicePreviewLoading}
+                        title="Play a sample of this voice"
+                      >
+                        {voicePreviewLoading ? "…" : "▶ Preview"}
+                      </button>
+                    </div>
                   </div>
                 ) : (
                   <div style={styles.voiceSelectGroup}>
                     <label className="itc-studio-label" style={styles.paramLabel}>Target voice</label>
-                    <select
-                      value={rtcSelectedVoiceId}
-                      onChange={(e) => setRtcSelectedVoiceId(e.target.value)}
-                      disabled={isRunning || rtcVoices.length === 0}
-                      style={styles.voiceSelect}
-                      className="itc-select"
-                    >
-                      {rtcVoices.length === 0 && (
-                        <option value="">{rtcVoicesLoading ? "Loading voices..." : "No voices available"}</option>
-                      )}
-                      {rtcVoices.map((v) => (
-                        <option key={v.voice_id} value={v.voice_id}>{v.name}</option>
-                      ))}
-                    </select>
+                    <div style={styles.voiceSelectRow}>
+                      <select
+                        value={rtcSelectedVoiceId}
+                        onChange={(e) => {
+                          setRtcSelectedVoiceId(e.target.value);
+                          setVoicePreviewError("");
+                        }}
+                        disabled={isRunning || rtcVoices.length === 0}
+                        style={styles.voiceSelect}
+                        className="itc-select"
+                      >
+                        {rtcVoices.length === 0 && (
+                          <option value="">{rtcVoicesLoading ? "Loading voices..." : "No voices available"}</option>
+                        )}
+                        {rtcVoices.map((v) => (
+                          <option key={v.voice_id} value={v.voice_id}>
+                            {v.name}{v.pitch_lvl ? ` (+${v.pitch_lvl} pitch)` : ""}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        style={styles.voicePreviewBtn}
+                        className="itc-btn itc-btn-secondary"
+                        onClick={playVoicePreview}
+                        disabled={
+                          isRunning ||
+                          !rtcSelectedVoiceId ||
+                          voicePreviewLoading ||
+                          !rtcVoices.find((v) => v.voice_id === rtcSelectedVoiceId)?.has_preview
+                        }
+                        title={
+                          rtcVoices.find((v) => v.voice_id === rtcSelectedVoiceId)?.has_preview
+                            ? "Play a sample of this RVC model"
+                            : "Add preview.wav or preview_in.wav on the pod to enable preview"
+                        }
+                      >
+                        {voicePreviewLoading ? "…" : "▶ Preview"}
+                      </button>
+                    </div>
                   </div>
                 )}
               </>
@@ -2196,12 +2494,15 @@ export default function App() {
             {voiceChangerEnabled && voiceEngine === "realtime" && rtcLoadError && (
               <div style={styles.ledgerErrorNote}>{rtcLoadError}</div>
             )}
+            {voiceChangerEnabled && voicePreviewError && (
+              <div style={styles.ledgerErrorNote}>{voicePreviewError}</div>
+            )}
             <div style={styles.paramsLockedNote}>
               {isRunning
                 ? "Locked while live — changes apply on next deploy"
                 : voiceEngine === "elevenlabs"
-                ? `Converts your voice in ~${VOICE_CHUNK_MS / 1000}s clips — tuned for fan noise; speak clearly at the mic. Distant voices are ignored.`
-                : "Continuous conversion via voice-rt-server (RunPod). Needs a running GPU pod. ElevenLabs above works without RunPod."}
+                ? `Converts your voice in ~${VOICE_CHUNK_MS / 1000}s clips — speak clearly at the mic. Audio plays through the output video, same as without voice changer.`
+                : "Real-time RVC via voice-rt-server (RunPod). Audio plays through the output video. Fan noise is gated before sending to the GPU."}
             </div>
           </div>
 
@@ -2294,7 +2595,7 @@ export default function App() {
                 </div>
               )}
               <div style={styles.fixedOutputContainer} className={`itc-fixed-output${isRunning ? " itc-live" : ""}`}>
-                <video ref={outputVideoRef} autoPlay playsInline webkit-playsinline style={styles.mirroredVideo} />
+                <video ref={outputVideoRef} autoPlay playsInline style={styles.mirroredVideo} />
                 {!isRunning && (
                   <div style={styles.canvasOverlay}>
                     <div style={styles.overlayPingWrap}>
@@ -2418,7 +2719,9 @@ const styles = {
   paramCheckbox: { width: "14px", height: "14px", accentColor: c.primary },
   paramSelect: { backgroundColor: c.bg, color: c.textSoft, border: `1px solid ${c.border}`, borderRadius: "5px", padding: "4px 8px", fontFamily: "inherit", fontSize: "11px" },
   voiceSelectGroup: { display: "flex", flexDirection: "column", gap: "6px", marginBottom: "10px" },
-  voiceSelect: { width: "100%", maxWidth: "100%", boxSizing: "border-box", backgroundColor: c.bg, color: c.textSoft, border: `1px solid ${c.border}`, borderRadius: "5px", padding: "6px 8px", fontFamily: "inherit", fontSize: "11px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+  voiceSelectRow: { display: "flex", gap: "6px", alignItems: "stretch", width: "100%" },
+  voiceSelect: { flex: 1, minWidth: 0, maxWidth: "100%", boxSizing: "border-box", backgroundColor: c.bg, color: c.textSoft, border: `1px solid ${c.border}`, borderRadius: "5px", padding: "6px 8px", fontFamily: "inherit", fontSize: "11px" },
+  voicePreviewBtn: { flexShrink: 0, padding: "6px 10px", fontSize: "10px", whiteSpace: "nowrap" },
   paramsLockedNote: { fontSize: "10px", color: c.textDim, fontStyle: "italic", marginTop: "4px", paddingTop: "8px", borderTop: `1px solid ${c.border}` },
   compatNote: { fontSize: "10px", color: c.sky, lineHeight: 1.45, marginTop: "10px", padding: "10px", backgroundColor: "rgba(99,102,241,0.08)", border: `1px solid rgba(129,140,248,0.25)`, borderRadius: r.sm },
   creditBalanceRow: { display: "flex", alignItems: "baseline", gap: "8px", marginBottom: "8px" },

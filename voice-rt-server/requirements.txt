@@ -6,11 +6,12 @@ soundfile==0.12.1
 
 # infer_rvc_python (MIT license, R3gm) — the actual RVC inference library
 # convert_chunk() in server.py is built on. Needs ffmpeg installed on the
-# system (already present in the RunPod pytorch base image used by the
-# Dockerfile). fairseq (an infer_rvc_python dependency) isn't yet compatible
+# system binary: apt-get install -y ffmpeg (install-deps.sh does this).
+# ffmpeg-python alone is not enough. fairseq (an infer_rvc_python dependency)
+# isn't yet compatible
 # with Python 3.11+ as of writing — if you hit a fairseq install error, run:
-#   pip install https://github.com/One-sixth/fairseq/archive/main.zip
-# BEFORE this line, then retry.
+#   bash install-deps.sh
+# on the RunPod pod instead of plain `pip install -r requirements.txt`.
 infer-rvc-python==1.2.0
 
 # Torch is pulled in by infer-rvc-python, but pin explicitly so you control
