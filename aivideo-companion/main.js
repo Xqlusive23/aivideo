@@ -3,14 +3,17 @@
 // Production build opens the live studio at inspirestream.xyz (see paths.js).
 // Dev mode (INSPIRETECH_DEV=1) loads http://localhost:5173 instead.
 //
-// On first authenticated launch, the web app installs virtual camera (Unity
-// Capture) and virtual audio (VB-CABLE) drivers via the preload bridge.
+// On first launch, a native setup wizard installs virtual camera (Unity Capture)
+// and optional VB-CABLE before the main window opens. After sign-in, the web app
+// can retry or finish driver setup via the preload bridge.
 
 const { app, BrowserWindow, ipcMain } = require("electron");
 const fs = require("fs");
 const path = require("path");
 const {
   registerSetupIpc,
+  needsFirstRunSetup,
+  showSetupWizard,
 } = require("./setup");
 const { getAppUrl } = require("./paths");
 const { startFeeder, sendFrameToFeeder, stopFeeder } = require("./feeder");
@@ -66,6 +69,11 @@ ipcMain.on("inspiretech:audio-stop", () => {
 async function launchApp() {
   registerSetupIpc();
   startFeeder();
+
+  if (await needsFirstRunSetup()) {
+    await showSetupWizard();
+  }
+
   createMainWindow();
 
   app.on("activate", () => {

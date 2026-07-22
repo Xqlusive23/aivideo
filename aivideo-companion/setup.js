@@ -309,11 +309,12 @@ async function getSetupStatus() {
 
 async function needsFirstRunSetup() {
   const status = await getSetupStatus();
-  if (status.setupComplete) {
-    return false;
-  }
   const audioRequired = status.vbCableBundled && !status.skipVirtualAudio;
-  return !status.cameraInstalled || (audioRequired && !status.audioInstalled);
+  const driversMissing =
+    !status.cameraInstalled || (audioRequired && !status.audioInstalled);
+  // Re-show the wizard if drivers are still missing, even when setupComplete
+  // was set incorrectly or an earlier install was interrupted.
+  return driversMissing;
 }
 
 function createSetupWindow() {

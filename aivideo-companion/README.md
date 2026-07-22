@@ -10,9 +10,10 @@ transformed video (and audio routing setup) to calling apps via virtual drivers.
 | Virtual camera | Unity Capture (MIT) | **InspireTech Camera** |
 | Virtual audio | VB-CABLE (donationware) | **CABLE Output (VB-Audio Virtual Cable)** |
 
-On first launch, a setup wizard runs before the main window. Click **Install
-drivers** — Windows will show UAC prompts for each driver (required by Windows,
-cannot be skipped).
+On first launch, a **setup wizard opens before the studio** (no sign-in required yet).
+Click **Install camera only** or **Install camera + VB-CABLE** — Windows will show UAC
+prompts for each driver (required by Windows, cannot be skipped). After drivers are
+ready, sign in with your access token; the studio can retry driver setup if needed.
 
 ## Development
 

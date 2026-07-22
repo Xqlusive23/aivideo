@@ -964,10 +964,21 @@ export default function App() {
     fromGate = true,
   } = {}) => {
     const companion = window.inspiretechCompanion;
-    if (!companion?.getSetupStatus || !companion?.installDrivers) return;
+    if (!companion?.getSetupStatus || !companion?.installDrivers) {
+      throw new Error(
+        "Desktop driver bridge unavailable. Close and reopen InspireTech, or reinstall from the latest Windows installer."
+      );
+    }
 
     const status = await companion.getSetupStatus();
-    const skipAudio = skipVirtualMic || status.skipVirtualAudio;
+    if (!status.unityCaptureBundled) {
+      throw new Error(
+        "InspireTech Camera driver files are missing from this build. Download the latest installer from inspirestream.xyz."
+      );
+    }
+
+    // Gate checkbox is the explicit user choice; saved state only applies on background retries.
+    const skipAudio = fromGate ? skipVirtualMic : status.skipVirtualAudio;
     const needsCamera = !status.cameraInstalled;
     const needsAudio = status.vbCableBundled && !status.audioInstalled && !skipAudio;
 
@@ -1029,6 +1040,9 @@ export default function App() {
       const normalized = validation.token || normalizeAccessToken(token);
 
       if (isCompanionApp()) {
+        if (window.inspiretechCompanion?.setSkipAudio) {
+          await window.inspiretechCompanion.setSkipAudio(Boolean(options.skipVirtualMic ?? true));
+        }
         await runCompanionDriverSetup({ ...options, forceReinstall: true, fromGate: true });
       }
 
