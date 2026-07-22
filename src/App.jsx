@@ -103,7 +103,6 @@ export default function App() {
 
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
 
-  const [inferenceWeight, setInferenceWeight] = useState(85);
   const [enhanceMask, setEnhanceMask] = useState(true);
   const [activeModel, setActiveModel] = useState("lucy-realtime-v2.5");
 
@@ -148,6 +147,7 @@ export default function App() {
     "lucy-speed-v1.9": "lucy-1.9",
   };
   const getModelId = () => MODEL_ID_MAP[activeModel] || "lucy-2.5";
+  const getRealtimeModel = () => models.realtime(getModelId());
 
   // --- Access token (given to you by the admin — see ledger-backend README) ---
   const [accessToken, setAccessToken] = useState(() => {
@@ -279,10 +279,11 @@ export default function App() {
   const voicePreviewObjectUrlRef = useRef(null);
 
   const buildVideoConstraints = (deviceId, { strictDevice = false, relaxed = false } = {}) => {
+    const model = getRealtimeModel();
     const constraints = {
-      frameRate: { ideal: 24 },
-      width: { ideal: relaxed ? 1280 : 1920 },
-      height: { ideal: relaxed ? 720 : 1080 },
+      frameRate: relaxed ? { ideal: 24, max: 30 } : model.fps,
+      width: { ideal: relaxed ? 640 : model.width },
+      height: { ideal: relaxed ? 480 : model.height },
     };
     if (deviceId) {
       constraints.deviceId = strictDevice ? { exact: deviceId } : { ideal: deviceId };
@@ -2026,9 +2027,11 @@ export default function App() {
       reader.onloadend = async () => {
         const base64Image = reader.result;
         try {
+          const realtimeModel = getRealtimeModel();
           const session = await client.realtime.connect(streamForDecart, {
-            model: models.realtime(getModelId()),
+            model: realtimeModel,
             mirror: "auto", // Decart's current docs recommend this over a hardcoded false/true
+            resolution: "720p",
             onRemoteStream: (remoteStream) => {
               const video = outputVideoRef.current;
               if (!video) return;
@@ -2061,7 +2064,6 @@ export default function App() {
               prompt: {
                 text: "Substitute the character in the video with this character.",
                 enhance: enhanceMask,
-                weight: inferenceWeight / 100,
               },
               image: base64Image,
             },
@@ -2561,7 +2563,7 @@ export default function App() {
           <div style={styles.canvasControlBar} className="itc-canvas-control-bar">
             <div style={styles.canvasTitleGroup} className="itc-canvas-title-group">
               <h2 className="itc-canvas-title">Output monitor</h2>
-              <span className="itc-canvas-subtitle" style={styles.canvasSubtitle}>1920×1080 Lucy 2.5 output, scaled to fit your screen</span>
+              <span className="itc-canvas-subtitle" style={styles.canvasSubtitle}>1280×720 Lucy 2.5 output, scaled to fit your screen</span>
             </div>
             <div style={styles.actionRow} className="itc-action-row itc-desktop-action-row">
               <button

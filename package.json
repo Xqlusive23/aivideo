@@ -11,7 +11,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@decartai/sdk": "^0.1.14",
+    "@decartai/sdk": "^0.1.15",
     "@fal-ai/client": "^1.10.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
