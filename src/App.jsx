@@ -178,9 +178,11 @@ export default function App() {
   const [appUpdateBusy, setAppUpdateBusy] = useState(false);
   const [appUpdateError, setAppUpdateError] = useState("");
   const [desktopAppVersion, setDesktopAppVersion] = useState("");
+  const [companionNavSection, setCompanionNavSection] = useState("studio");
 
   const isCompanionApp = () =>
     typeof window !== "undefined" && Boolean(window.inspiretechCompanion?.isDesktop);
+  const useCompanionShell = () => isCompanionApp() && !isMobileLayout;
 
   const getClientId = () => {
     const storageKey = "inspiretech_client_id";
@@ -1154,7 +1156,7 @@ export default function App() {
               ? `InspireTech ${nextVersion} has been downloaded. Restart to apply driver, shell, and desktop feature updates.`
               : appUpdatePhase === "downloading"
               ? `Downloading InspireTech ${nextVersion}. Keep this window open until the download finishes.`
-              : `You're on v${currentVersion}. InspireTech ${nextVersion} is available with the latest desktop features and fixes.`}
+              : `You're on v${currentVersion}. InspireTech ${nextVersion} is available with the latest desktop features and fixes. Update now, or decline to stay on this version.`}
           </p>
 
           {appUpdatePhase === "downloading" && (
@@ -1180,7 +1182,7 @@ export default function App() {
                   disabled={appUpdateBusy}
                   onClick={startAppUpdateDownload}
                 >
-                  {isManual ? "Download and install" : "Download update"}
+                  {isManual ? "Update now" : "Update now"}
                 </button>
                 <button
                   type="button"
@@ -1188,7 +1190,7 @@ export default function App() {
                   disabled={appUpdateBusy}
                   onClick={() => dismissAppUpdate()}
                 >
-                  Later
+                  Decline
                 </button>
               </>
             )}
@@ -2377,6 +2379,9 @@ export default function App() {
 
   const creditPercent = Math.min(100, (credits / 1000) * 100); // 1,000 credits ≈ the smallest top-up tier now
   const isLowCredit = credits <= LOW_CREDIT_THRESHOLD;
+  const companionShell = useCompanionShell();
+  const companionSectionClass = (section) =>
+    companionShell && companionNavSection !== section ? "itc-companion-hidden" : "";
 
   // No access token yet — show sign-in gate (landing page lives at /).
   if (!accessToken || !sessionReady) {
@@ -2399,8 +2404,39 @@ export default function App() {
     <>
     <div
       style={styles.appContainer}
-      className={`itc-app${isMobileLayout ? " itc-app-mobile" : ""}${mobileOutputFocus ? " itc-mobile-theater" : ""}${isMobileLayout && !mobileControlsOpen ? " itc-mobile-sidebar-collapsed" : ""}`}
+      className={`itc-app${companionShell ? " itc-app-companion" : ""}${isMobileLayout ? " itc-app-mobile" : ""}${mobileOutputFocus ? " itc-mobile-theater" : ""}${isMobileLayout && !mobileControlsOpen ? " itc-mobile-sidebar-collapsed" : ""}`}
     >
+      {companionShell ? (
+        <header className="itc-companion-topbar">
+          <div className="itc-companion-topbar-left">
+            <LogoLockup size="sm" />
+            <div className="itc-companion-topbar-title">
+              <span className="itc-companion-page-title">
+                {companionNavSection.charAt(0).toUpperCase() + companionNavSection.slice(1)}
+              </span>
+              <span className={`itc-companion-status-line${isRunning ? " is-live" : ""}`}>
+                {formatStatusDisplay(status)}
+              </span>
+            </div>
+          </div>
+          <div className="itc-companion-topbar-right">
+            <div className={`itc-companion-pill${isRunning ? " is-live" : ""}`}>
+              <span className="itc-companion-pill-label">Status</span>
+              <span className="itc-companion-pill-value">{formatStatusDisplay(status)}</span>
+            </div>
+            <div className={`itc-companion-pill itc-companion-pill-credits${isLowCredit ? " is-danger" : ""}`}>
+              <span className="itc-companion-pill-icon">⚡</span>
+              <span className="itc-companion-pill-value">{creditsLoaded ? credits : "…"}</span>
+              {creditsLoaded && <span className="itc-companion-pill-sub">{formatNaira(credits)}</span>}
+            </div>
+            {desktopAppVersion && (
+              <div className="itc-companion-pill itc-companion-pill-version">
+                <span className="itc-companion-pill-value">v{desktopAppVersion}</span>
+              </div>
+            )}
+          </div>
+        </header>
+      ) : (
       <header className="itc-top-header">
         <div className="itc-header-brand">
           <div className="itc-header-brand-id">
@@ -2469,10 +2505,49 @@ export default function App() {
           </div>
         </div>
       </header>
+      )}
 
-      <div style={styles.mainWorkspace} className="itc-main-workspace">
-        <aside style={styles.controlSidebar} className="itc-sidebar">
+      <div
+        style={styles.mainWorkspace}
+        className={companionShell ? "itc-companion-body" : "itc-main-workspace"}
+      >
+        {companionShell && (
+          <nav className="itc-companion-nav" aria-label="Studio navigation">
+            <div className="itc-companion-nav-brand">INSPIRE_TECH</div>
+            <div className="itc-companion-nav-items">
+              {[
+                { id: "studio", label: "Studio", icon: "🎬" },
+                { id: "devices", label: "Devices", icon: "📹" },
+                { id: "voice", label: "Voice", icon: "🎙️" },
+                { id: "credits", label: "Credits", icon: "💳" },
+                { id: "drivers", label: "Drivers", icon: "🖥️" },
+                { id: "account", label: "Account", icon: "⚙️" },
+              ].map((section) => (
+                <button
+                  key={section.id}
+                  type="button"
+                  className={`itc-companion-nav-item${companionNavSection === section.id ? " is-active" : ""}`}
+                  onClick={() => setCompanionNavSection(section.id)}
+                >
+                  <span className="itc-companion-nav-icon" aria-hidden="true">
+                    {section.icon}
+                  </span>
+                  <span className="itc-companion-nav-label">{section.label}</span>
+                  {section.id === "drivers" && driverSetupFailed && (
+                    <span className="itc-companion-nav-badge" aria-label="Driver setup needs attention" />
+                  )}
+                </button>
+              ))}
+            </div>
+          </nav>
+        )}
 
+        <aside
+          style={companionShell ? undefined : styles.controlSidebar}
+          className={companionShell ? "itc-companion-panel" : "itc-sidebar"}
+        >
+
+          <div className={companionSectionClass("devices")}>
           <div style={styles.sectionCard} className="itc-card itc-section-card">
             <div className="itc-studio-card-title">
               <span>⚙️</span> Camera & inputs
@@ -2537,7 +2612,7 @@ export default function App() {
                 ? "Change the dropdowns to switch camera or mic instantly."
                 : "Pick devices, then click Start Hardware Camera. Names appear after permission is granted."}
             </div>
-            {typeof window !== "undefined" && window.inspiretechCompanion && (
+            {typeof window !== "undefined" && window.inspiretechCompanion && !companionShell && (
               <div style={styles.compatNote}>
                 <strong>Calling app setup:</strong> Camera → <strong>InspireTech Camera</strong>.
                 {routeAudioToVirtualCable
@@ -2546,6 +2621,7 @@ export default function App() {
                 {" "}WhatsApp Desktop cannot see InspireTech Camera — use Telegram/Discord or WhatsApp Web.
               </div>
             )}
+            {!companionShell && (
             <div style={styles.buttonStack}>
               <button style={styles.primaryButton} className="itc-btn itc-btn-primary" onClick={() => startCamera()} disabled={isRunning}>
                 {cameraActive ? "Restart Hardware Camera" : "Start Hardware Camera"}
@@ -2555,8 +2631,11 @@ export default function App() {
               </button>
               <input type="file" ref={fileInputRef} accept="image/*" style={{ display: "none" }} onChange={(e) => handleFileChange(e.target.files?.[0])} />
             </div>
+            )}
+          </div>
           </div>
 
+          <div className={companionSectionClass("credits")}>
           {/* --- Real credit meter card --- */}
           <div style={styles.sectionCard} className="itc-card itc-section-card">
             <div className="itc-studio-card-title">
@@ -2589,7 +2668,9 @@ export default function App() {
               + Add Credits
             </button>
           </div>
+          </div>
 
+          <div className={companionSectionClass("studio")}>
           <div style={styles.sectionCard} className="itc-card itc-section-card">
             <div className="itc-studio-card-title">
               <span>🖼️</span> Reference image
@@ -2602,7 +2683,9 @@ export default function App() {
               )}
             </div>
           </div>
+          </div>
 
+          <div className={companionSectionClass("voice")}>
           <div style={styles.sectionCard} className="itc-card itc-section-card">
             <div className="itc-studio-card-title">
               <span>🎙️</span> Voice changer
@@ -2731,7 +2814,9 @@ export default function App() {
                 : "Real-time RVC via voice-rt-server (RunPod). Audio plays through the output video. Fan noise is gated before sending to the GPU."}
             </div>
           </div>
+          </div>
 
+          <div className={companionSectionClass("studio")}>
           <div style={styles.sectionCard} className="itc-card itc-section-card">
             <div className="itc-studio-card-title">
               <span>👁️</span> Local preview
@@ -2741,6 +2826,25 @@ export default function App() {
             </div>
           </div>
 
+          {companionShell && (
+            <div style={styles.sectionCard} className="itc-card itc-section-card">
+              <div className="itc-studio-card-title">
+                <span>🚀</span> Quick actions
+              </div>
+              <div style={styles.buttonStack}>
+                <button style={styles.primaryButton} className="itc-btn itc-btn-primary" onClick={() => startCamera()} disabled={isRunning}>
+                  {cameraActive ? "Restart Hardware Camera" : "Start Hardware Camera"}
+                </button>
+                <button style={styles.secondaryButton} className="itc-btn itc-btn-secondary" onClick={() => fileInputRef.current?.click()}>
+                  Upload Reference Image
+                </button>
+                <input type="file" ref={fileInputRef} accept="image/*" style={{ display: "none" }} onChange={(e) => handleFileChange(e.target.files?.[0])} />
+              </div>
+            </div>
+          )}
+          </div>
+
+          <div className={companionSectionClass("credits")}>
           <div ref={creditSectionRef} style={{...styles.sectionCard, ...(showAddCredits ? styles.sectionCardAlert : {})}} className="itc-card itc-section-card">
             <div className="itc-studio-card-title">
               <span>💳</span> Buy more credits
@@ -2767,8 +2871,70 @@ export default function App() {
               Real Paystack Checkout — this redirects off-app to a live payment page.
             </div>
           </div>
+          </div>
+
+          {companionShell && (
+            <div className={companionSectionClass("drivers")}>
+              <div style={styles.sectionCard} className="itc-card itc-section-card">
+                <div className="itc-studio-card-title">
+                  <span>🖥️</span> Virtual drivers
+                </div>
+                <div style={styles.compatNote}>
+                  <strong>Calling app setup:</strong> Camera → <strong>InspireTech Camera</strong>.
+                  {routeAudioToVirtualCable
+                    ? " Microphone → CABLE Output (VB-Audio Virtual Cable)."
+                    : " Use your physical mic unless VB-CABLE routing is enabled under Devices."}
+                  {" "}WhatsApp Desktop cannot see InspireTech Camera — use Telegram, Discord, or WhatsApp Web.
+                </div>
+                {driverSetupFailed && (
+                  <button
+                    type="button"
+                    className="itc-btn itc-btn-primary"
+                    style={{ marginTop: "12px", width: "100%" }}
+                    disabled={driverSetupBusy}
+                    onClick={retryCompanionDriverSetup}
+                  >
+                    {driverSetupBusy ? "Retrying drivers…" : "Retry driver install"}
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
+          {companionShell && (
+            <div className={companionSectionClass("account")}>
+              <div style={styles.sectionCard} className="itc-card itc-section-card">
+                <div className="itc-studio-card-title">
+                  <span>⚙️</span> Desktop app
+                </div>
+                <div style={styles.creditMeta}>
+                  <span>Installed version: {desktopAppVersion || "…"}</span>
+                </div>
+                <div style={styles.buttonStack}>
+                  <button
+                    type="button"
+                    className="itc-btn itc-btn-secondary"
+                    onClick={() => window.inspiretechCompanion?.checkForUpdates?.()}
+                  >
+                    Check for app updates
+                  </button>
+                  <button
+                    type="button"
+                    className="itc-btn itc-btn-secondary"
+                    onClick={() => {
+                      if (isRunning) stopTransformation();
+                      clearAccessToken();
+                    }}
+                  >
+                    Switch access token
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </aside>
 
+        <div className={companionShell ? "itc-companion-stage" : undefined}>
         <main style={styles.outputCanvas} className="itc-output-canvas">
           <div style={styles.canvasControlBar} className="itc-canvas-control-bar">
             <div style={styles.canvasTitleGroup} className="itc-canvas-title-group">
@@ -2840,6 +3006,7 @@ export default function App() {
             </div>
           </div>
         </main>
+        </div>
       </div>
 
       {isMobileLayout && mobileOutputFocus && (

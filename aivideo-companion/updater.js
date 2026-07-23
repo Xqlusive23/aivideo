@@ -255,7 +255,7 @@ function setUpdateMainWindow(window) {
   mainWindowRef = window;
 }
 
-function scheduleUpdateCheck(delayMs = 8000) {
+function scheduleUpdateCheck(delayMs = 1500) {
   if (!app.isPackaged) return;
   setTimeout(() => {
     runUpdateCheck().catch(() => {});

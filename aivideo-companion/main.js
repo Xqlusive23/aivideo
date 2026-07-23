@@ -51,7 +51,9 @@ function createMainWindow() {
 
   mainWindow.loadURL(getAppUrl());
   setUpdateMainWindow(mainWindow);
-  scheduleUpdateCheck();
+  mainWindow.webContents.once("did-finish-load", () => {
+    scheduleUpdateCheck(500);
+  });
 
   mainWindow.on("closed", () => {
     setUpdateMainWindow(null);
