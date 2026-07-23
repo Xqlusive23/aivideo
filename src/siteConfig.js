@@ -14,7 +14,8 @@ export const WHATSAPP_ACCESS_REQUEST_MESSAGE =
   "Hi, I'd like to request access to InspireTech. Please send me an access token.";
 
 export const WINDOWS_DOWNLOAD_URL =
-  import.meta.env?.VITE_WINDOWS_DOWNLOAD_URL || "";
+  import.meta.env?.VITE_WINDOWS_DOWNLOAD_URL ||
+  "https://github.com/Xqlusive23/aivideo/releases/download/v0.3.4/InspireTech.Setup.0.3.4.exe";
 
 export const SITE_NAME = "InspireTech";
 export const SITE_TAGLINE = "Real-time AI video transformation for live calls";
