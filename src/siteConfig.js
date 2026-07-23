@@ -15,7 +15,7 @@ export const WHATSAPP_ACCESS_REQUEST_MESSAGE =
 
 export const WINDOWS_DOWNLOAD_URL =
   import.meta.env?.VITE_WINDOWS_DOWNLOAD_URL ||
-  "https://github.com/Xqlusive23/aivideo/releases/download/v0.3.5/InspireTech.Setup.0.3.5.exe";
+  "https://github.com/Xqlusive23/aivideo/releases/download/v0.3.6/InspireTech.Setup.0.3.6.exe";
 
 export const SITE_NAME = "InspireTech";
 export const SITE_TAGLINE = "Real-time AI video transformation for live calls";
