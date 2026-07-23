@@ -336,6 +336,7 @@ function createSetupWindow() {
   });
 
   win.loadFile(path.join(__dirname, "setup", "setup.html"));
+  win.setMenuBarVisibility(false);
   return win;
 }
 

@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import AccessGate from "./AccessGate";
 import { LogoLockup } from "./Logo.jsx";
@@ -9,6 +9,7 @@ import {
   SITE_TAGLINE,
   WHATSAPP_ACCESS_REQUEST_MESSAGE,
   WINDOWS_DOWNLOAD_URL,
+  WINDOWS_DOWNLOAD_FALLBACK,
 } from "./siteConfig";
 import WhatsAppLink from "./WhatsAppLink.jsx";
 
@@ -24,10 +25,38 @@ function WindowsIcon() {
 }
 
 function WindowsDownloadButton({ className = "itc-btn itc-btn-primary itc-btn-windows" }) {
+  const [downloadUrl, setDownloadUrl] = useState(WINDOWS_DOWNLOAD_URL);
+  const [releaseLabel, setReleaseLabel] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("https://api.github.com/repos/Xqlusive23/aivideo/releases/latest", {
+          headers: { Accept: "application/vnd.github+json" },
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        const asset =
+          data.assets?.find((entry) => /\.exe$/i.test(entry.name) && /setup/i.test(entry.name)) ||
+          data.assets?.find((entry) => /\.exe$/i.test(entry.name));
+        if (cancelled || !asset?.browser_download_url) return;
+        setDownloadUrl(asset.browser_download_url);
+        const tag = String(data.tag_name || "").replace(/^v/i, "");
+        if (tag) setReleaseLabel(`v${tag}`);
+      } catch {
+        if (!cancelled) setDownloadUrl(WINDOWS_DOWNLOAD_FALLBACK);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   return (
-    <a href={WINDOWS_DOWNLOAD_URL} className={className} download>
+    <a href={downloadUrl} className={className} download>
       <WindowsIcon />
-      <span>Windows</span>
+      <span>{releaseLabel ? `Download ${releaseLabel}` : "Download for Windows"}</span>
     </a>
   );
 }

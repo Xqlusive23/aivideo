@@ -7,7 +7,7 @@
 // and optional VB-CABLE before the main window opens. After sign-in, the web app
 // can retry or finish driver setup via the preload bridge.
 
-const { app, BrowserWindow, ipcMain } = require("electron");
+const { app, BrowserWindow, ipcMain, Menu } = require("electron");
 const fs = require("fs");
 const path = require("path");
 const {
@@ -42,6 +42,7 @@ function createMainWindow() {
     height: 900,
     title: "InspireTech",
     icon: getWindowIcon(),
+    autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -50,6 +51,7 @@ function createMainWindow() {
   });
 
   mainWindow.loadURL(getAppUrl());
+  mainWindow.setMenuBarVisibility(false);
   setUpdateMainWindow(mainWindow);
   mainWindow.webContents.once("did-finish-load", () => {
     scheduleUpdateCheck(500);
@@ -78,6 +80,7 @@ ipcMain.on("inspiretech:audio-stop", () => {
 });
 
 async function launchApp() {
+  Menu.setApplicationMenu(null);
   initUpdater();
   registerUpdaterIpc();
   registerSetupIpc();

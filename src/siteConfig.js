@@ -13,9 +13,12 @@ export const WHATSAPP_DEFAULT_MESSAGE = "Hi, I need help getting access to Inspi
 export const WHATSAPP_ACCESS_REQUEST_MESSAGE =
   "Hi, I'd like to request access to InspireTech. Please send me an access token.";
 
+export const WINDOWS_DOWNLOAD_FALLBACK =
+  "https://github.com/Xqlusive23/aivideo/releases/download/v0.3.8/InspireTech-Setup-0.3.8.exe";
+
+// Vercel may still have a stale VITE_WINDOWS_DOWNLOAD_URL — LandingPage resolves latest from GitHub.
 export const WINDOWS_DOWNLOAD_URL =
-  import.meta.env?.VITE_WINDOWS_DOWNLOAD_URL ||
-  "https://github.com/Xqlusive23/aivideo/releases/download/v0.3.6/InspireTech.Setup.0.3.6.exe";
+  import.meta.env?.VITE_WINDOWS_DOWNLOAD_URL || WINDOWS_DOWNLOAD_FALLBACK;
 
 export const SITE_NAME = "InspireTech";
 export const SITE_TAGLINE = "Real-time AI video transformation for live calls";

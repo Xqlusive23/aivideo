@@ -83,6 +83,111 @@ const TOP_UP_OPTIONS = [
 // context conversion; longer chunks = smoother conversion but more delay.
 const VOICE_CHUNK_MS = 500;
 const MOBILE_LAYOUT_MAX_WIDTH = 900;
+const DEFAULT_TRANSFORMATION_PROMPT =
+  "Substitute the character in the video with the person in the reference image.";
+const CHARACTER_WITH_REF_PROMPT = DEFAULT_TRANSFORMATION_PROMPT;
+const CHARACTER_SWAP_PATTERN =
+  /substitute the character|transform into this character|person in the reference image|character from the reference image|with this character/i;
+const BACKGROUND_INTENT_PATTERN =
+  /background|office|beach|studio|city|skyline|environment|room|setting|scene|backdrop|interior|outdoor|setup/i;
+const DEFAULT_BACKGROUND_PROMPT =
+  "Change the background to a bright modern office with desk, chair, window light, and soft afternoon shadows, filling the entire frame behind the person with the new environment and no visible trace of the original camera room.";
+const PROMPT_PRESETS = [
+  {
+    label: "Office",
+    text: "Change the background to a bright modern office with desk, chair, window light, and soft afternoon shadows.",
+  },
+  {
+    label: "Beach",
+    text: "Change the background to a sunny beach at sunset with waves on the shore and sunlight reflecting on the water.",
+  },
+  {
+    label: "Studio",
+    text: "Change the background to a professional green screen studio with soft key lighting and a clean floor.",
+  },
+  {
+    label: "City night",
+    text: "Change the background to a neon city skyline at night with bokeh lights and light traffic below.",
+  },
+];
+
+function hasBackgroundIntent(text) {
+  return BACKGROUND_INTENT_PATTERN.test(String(text || "").trim());
+}
+
+function normalizeBackgroundClause(text) {
+  let clause = String(text || "").trim();
+  if (!clause) return DEFAULT_BACKGROUND_PROMPT;
+
+  clause = clause
+    .replace(/^change (my |the )?(entire )?background (to|with)\s*/i, "")
+    .replace(/^replace (my |the )?(entire )?background (to|with)\s*/i, "")
+    .replace(/^place them in\s*/i, "")
+    .replace(/^put me in\s*/i, "")
+    .replace(/^set the background to\s*/i, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\.$/, "");
+
+  if (!clause) return DEFAULT_BACKGROUND_PROMPT;
+  if (/^change the background to/i.test(clause)) {
+    const base = clause.endsWith(".") ? clause.slice(0, -1) : clause;
+    return `${base}, filling the entire frame behind the person with the new environment and no visible trace of the original camera room.`;
+  }
+  // Lucy 2.5 prompting guide: "Change the background to <scene with visible activity>."
+  return `Change the background to ${clause}, filling the entire frame behind the person with the new environment and no visible trace of the original camera room.`;
+}
+
+function composeLayeredPrompt(userText, hasReferenceImage = true) {
+  const trimmed = String(userText || "").trim();
+  const wantsBackground = hasBackgroundIntent(trimmed);
+  if (!hasReferenceImage) return composeTransformationPrompt(trimmed, false);
+  if (!wantsBackground) return CHARACTER_WITH_REF_PROMPT;
+  const backgroundClause = normalizeBackgroundClause(trimmed);
+  // Layered edit: background first, then character from reference (Decart Lucy 2.5 guide).
+  return `${backgroundClause} ${CHARACTER_WITH_REF_PROMPT}`;
+}
+
+function composeTransformationPrompt(userText, hasReferenceImage = true) {
+  const trimmed = String(userText || "").trim();
+  const wantsBackground = hasBackgroundIntent(trimmed);
+
+  if (!hasReferenceImage) {
+    if (!trimmed) return DEFAULT_TRANSFORMATION_PROMPT;
+    if (wantsBackground) return normalizeBackgroundClause(trimmed);
+    return trimmed;
+  }
+
+  if (!trimmed || trimmed === DEFAULT_TRANSFORMATION_PROMPT) {
+    return CHARACTER_WITH_REF_PROMPT;
+  }
+
+  if (wantsBackground) {
+    return composeLayeredPrompt(trimmed, true);
+  }
+
+  if (CHARACTER_SWAP_PATTERN.test(trimmed)) {
+    return trimmed;
+  }
+
+  return `${CHARACTER_WITH_REF_PROMPT} ${trimmed.endsWith(".") ? trimmed : `${trimmed}.`}`;
+}
+
+function getConnectPrompt(hasReferenceImage) {
+  if (hasReferenceImage) return CHARACTER_WITH_REF_PROMPT;
+  return composeTransformationPrompt("", false);
+}
+
+function shouldEnhanceDecartPrompt(userText, enhanceEnabled) {
+  if (enhanceEnabled) return true;
+  const trimmed = String(userText || "").trim();
+  // Lucy 2.5 rewrites prompts (and reference context) into its structured format.
+  if (hasBackgroundIntent(trimmed)) return true;
+  if (!trimmed || trimmed === DEFAULT_TRANSFORMATION_PROMPT || CHARACTER_SWAP_PATTERN.test(trimmed)) {
+    return true;
+  }
+  return false;
+}
 
 // Real-time voice conversion server (voice-rt-server on RunPod) — a
 // continuous WebSocket alternative to the ElevenLabs chunk-based pipeline
@@ -103,7 +208,10 @@ export default function App() {
 
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
 
-  const [enhanceMask, setEnhanceMask] = useState(true);
+  const [enhanceMask, setEnhanceMask] = useState(false);
+  const [transformationPrompt, setTransformationPrompt] = useState(DEFAULT_TRANSFORMATION_PROMPT);
+  const [promptApplyBusy, setPromptApplyBusy] = useState(false);
+  const [promptApplyNote, setPromptApplyNote] = useState("");
   const [activeModel, setActiveModel] = useState("lucy-realtime-v2.5");
 
   // --- Voice changer state ---
@@ -182,7 +290,7 @@ export default function App() {
 
   const isCompanionApp = () =>
     typeof window !== "undefined" && Boolean(window.inspiretechCompanion?.isDesktop);
-  const useCompanionShell = () => isCompanionApp() && !isMobileLayout;
+  const useCompanionShell = () => false;
 
   const getClientId = () => {
     const storageKey = "inspiretech_client_id";
@@ -2133,6 +2241,84 @@ export default function App() {
     setStatus("PAYLOAD READY FOR TRANSMISSION");
   };
 
+  const getPromptText = () => transformationPrompt.trim() || DEFAULT_TRANSFORMATION_PROMPT;
+
+  const getDecartPrompt = () => composeTransformationPrompt(getPromptText(), Boolean(selectedFile));
+
+  const getDecartEnhance = (sourcePrompt = getPromptText()) =>
+    shouldEnhanceDecartPrompt(sourcePrompt, enhanceMask);
+
+  const waitForDecartGenerating = (session, timeoutMs = 6000) =>
+    new Promise((resolve) => {
+      const started = Date.now();
+      const tick = () => {
+        if (!session?.isConnected?.()) {
+          resolve(false);
+          return;
+        }
+        const state = session.getConnectionState?.();
+        if (state === "generating") {
+          resolve(true);
+          return;
+        }
+        if (Date.now() - started >= timeoutMs) {
+          resolve(false);
+          return;
+        }
+        setTimeout(tick, 250);
+      };
+      tick();
+    });
+
+  const pushDecartState = async (session, sourcePrompt) => {
+    const hasRef = Boolean(selectedFile);
+    const promptText = composeTransformationPrompt(sourcePrompt, hasRef);
+    const useEnhance = shouldEnhanceDecartPrompt(sourcePrompt, enhanceMask);
+
+    console.info("[InspireTech] Decart prompt →", { promptText, enhance: useEnhance });
+
+    if (hasRef) {
+      await session.set({ prompt: promptText, image: selectedFile, enhance: useEnhance });
+    } else {
+      await session.setPrompt(promptText, { enhance: useEnhance });
+    }
+  };
+
+  const handleDecartSessionFault = (err, label = "Decart session error") => {
+    console.error(label, err);
+    setStatus(`CRITICAL FAULT: ${err?.message || label}`);
+    setIsRunning(false);
+    clearClockTimer();
+    clearHeartbeat();
+    const sid = billingSessionIdRef.current;
+    billingSessionIdRef.current = null;
+    endBillingSession(sid);
+    stopActiveVoicePipeline();
+  };
+
+  const applyTransformationPrompt = async (promptOverride) => {
+    const sourcePrompt = promptOverride ?? getPromptText();
+    const session = realtimeClientRef.current;
+
+    if (!session?.isConnected?.()) {
+      setPromptApplyNote("Saved — this prompt will apply when you start transformation.");
+      return;
+    }
+
+    setPromptApplyBusy(true);
+    setPromptApplyNote("");
+    try {
+      await pushDecartState(session, sourcePrompt);
+      setPromptApplyNote("Prompt applied to the live stream.");
+      setStatus("PROMPT UPDATED // LIVE TRANSFORMATION");
+    } catch (err) {
+      console.error("Failed to apply prompt:", err);
+      setPromptApplyNote(err?.message || "Could not apply prompt.");
+    } finally {
+      setPromptApplyBusy(false);
+    }
+  };
+
   const startTransformation = async () => {
     // isRunning is React state — it doesn't update synchronously, so a fast
     // double-click can fire this twice before the Start button visually
@@ -2230,77 +2416,76 @@ export default function App() {
 
     try {
       const client = createDecartClient({ apiKey: MY_DECART_KEY });
-      const reader = new FileReader();
-      reader.readAsDataURL(selectedFile);
-      reader.onloadend = async () => {
-        const base64Image = reader.result;
-        try {
-          const realtimeModel = getRealtimeModel();
-          const session = await client.realtime.connect(streamForDecart, {
-            model: realtimeModel,
-            mirror: "auto", // Decart's current docs recommend this over a hardcoded false/true
-            resolution: "720p",
-            onRemoteStream: (remoteStream) => {
-              const video = outputVideoRef.current;
-              if (!video) return;
-              video.srcObject = remoteStream;
-              video.muted = false;
-              void video.play().catch(() => {});
-            },
-            onError: (err) => {
-              console.error("Decart Session Error:", err);
-              setStatus(`CRITICAL FAULT: ${err.message}`);
-              setIsRunning(false);
-              clearClockTimer();
-              clearHeartbeat();
-              const sid = billingSessionIdRef.current;
-              billingSessionIdRef.current = null;
-              endBillingSession(sid);
-              stopActiveVoicePipeline();
-            },
-            onDisconnect: () => {
-              setStatus("PIPELINE TERMINATED");
-              setIsRunning(false);
-              clearClockTimer();
-              clearHeartbeat();
-              const sid = billingSessionIdRef.current;
-              billingSessionIdRef.current = null;
-              endBillingSession(sid);
-              stopActiveVoicePipeline();
-            },
-            initialState: {
-              prompt: {
-                text: "Substitute the character in the video with this character.",
-                enhance: enhanceMask,
-              },
-              image: base64Image,
-            },
-          });
+      const realtimeModel = getRealtimeModel();
+      const sourcePrompt = getPromptText();
+      const connectPrompt = getConnectPrompt(Boolean(selectedFile));
+      const connectEnhance = getDecartEnhance(CHARACTER_WITH_REF_PROMPT);
+      console.info("[InspireTech] Decart connect prompt →", {
+        connectPrompt,
+        enhance: connectEnhance,
+        pendingBackground: hasBackgroundIntent(sourcePrompt),
+      });
 
-          realtimeClientRef.current = session;
-          const billingOk = await beginBillingSession();
-          if (!billingOk) {
-            try {
-              session.disconnect();
-            } catch {
-              // already disconnected
-            }
-            realtimeClientRef.current = null;
-            setIsRunning(false);
-            stopActiveVoicePipeline();
-            return;
-          }
-          setStatus("COMPUTE LINK ONLINE // REALTIME TRANSFORMATION TERMINAL");
-        } catch (connectErr) {
-          console.error(connectErr);
-          setStatus(`HANDSHAKE REJECTED: ${connectErr.message}`);
-          setIsRunning(false);
-          stopActiveVoicePipeline();
+      const session = await client.realtime.connect(streamForDecart, {
+        model: realtimeModel,
+        mirror: "auto", // Decart's current docs recommend this over a hardcoded false/true
+        resolution: "720p",
+        onRemoteStream: (remoteStream) => {
+          const video = outputVideoRef.current;
+          if (!video) return;
+          video.srcObject = remoteStream;
+          video.muted = false;
+          void video.play().catch(() => {});
+        },
+        initialState: {
+          prompt: {
+            text: connectPrompt,
+            enhance: connectEnhance,
+          },
+          image: selectedFile,
+        },
+      });
+
+      session.on("error", (err) => handleDecartSessionFault(err));
+      session.on("connectionChange", (state) => {
+        if (state !== "disconnected") return;
+        if (realtimeClientRef.current !== session) return;
+        handleDecartSessionFault(new Error("Decart session disconnected"), "Decart disconnected");
+      });
+
+      realtimeClientRef.current = session;
+      const billingOk = await beginBillingSession();
+      if (!billingOk) {
+        try {
+          session.disconnect();
+        } catch {
+          // already disconnected
         }
-      };
-    } catch (err) {
-      console.error("Failed to initialize Decart client:", err);
-      setStatus(`CLIENT INIT FAILED: ${err.message || "check VITE_DECART_API_KEY is set"}`);
+        realtimeClientRef.current = null;
+        setIsRunning(false);
+        stopActiveVoicePipeline();
+        return;
+      }
+
+      if (hasBackgroundIntent(sourcePrompt)) {
+        setStatus("ESTABLISHING CHARACTER, THEN BACKGROUND…");
+        const generating = await waitForDecartGenerating(session);
+        if (!generating) {
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+        }
+        try {
+          await pushDecartState(session, sourcePrompt);
+          setPromptApplyNote("Character + background prompt applied.");
+        } catch (err) {
+          console.error("Failed to apply layered prompt after connect:", err);
+          setPromptApplyNote(err?.message || "Layered prompt failed — try Apply again.");
+        }
+      }
+
+      setStatus("COMPUTE LINK ONLINE // REALTIME TRANSFORMATION TERMINAL");
+    } catch (connectErr) {
+      console.error(connectErr);
+      setStatus(`HANDSHAKE REJECTED: ${connectErr.message}`);
       setIsRunning(false);
       stopActiveVoicePipeline();
     }
@@ -2325,9 +2510,10 @@ export default function App() {
   };
 
   const stopTransformation = () => {
-    if (realtimeClientRef.current) {
-      realtimeClientRef.current.disconnect();
-      realtimeClientRef.current = null;
+    const session = realtimeClientRef.current;
+    realtimeClientRef.current = null;
+    if (session) {
+      session.disconnect();
     }
     if (fpsIntervalRef.current) clearInterval(fpsIntervalRef.current);
     clearClockTimer();
@@ -2464,6 +2650,18 @@ export default function App() {
                 {driverSetupBusy ? "Retrying drivers…" : "Retry driver install"}
               </button>
             )}
+            {isCompanionApp() && desktopAppVersion && (
+              <span className="itc-header-version">Desktop v{desktopAppVersion}</span>
+            )}
+            {isCompanionApp() && (
+              <button
+                type="button"
+                className="itc-header-link"
+                onClick={() => window.inspiretechCompanion?.checkForUpdates?.()}
+              >
+                Check for updates
+              </button>
+            )}
             {!isCompanionApp() && (
               <Link to="/" className="itc-header-link">
                 Home
@@ -2547,7 +2745,7 @@ export default function App() {
           className={companionShell ? "itc-companion-panel" : "itc-sidebar"}
         >
 
-          <div className={companionSectionClass("devices")}>
+          <div className={`${companionSectionClass("devices")} itc-sidebar-section itc-sidebar-section-devices`}>
           <div style={styles.sectionCard} className="itc-card itc-section-card">
             <div className="itc-studio-card-title">
               <span>⚙️</span> Camera & inputs
@@ -2635,7 +2833,7 @@ export default function App() {
           </div>
           </div>
 
-          <div className={companionSectionClass("credits")}>
+          <div className={`${companionSectionClass("credits")} itc-sidebar-section itc-sidebar-section-credits`}>
           {/* --- Real credit meter card --- */}
           <div style={styles.sectionCard} className="itc-card itc-section-card">
             <div className="itc-studio-card-title">
@@ -2670,14 +2868,14 @@ export default function App() {
           </div>
           </div>
 
-          <div className={companionSectionClass("studio")}>
+          <div className={`${companionSectionClass("studio")} itc-sidebar-section itc-sidebar-section-ref`}>
           <div style={styles.sectionCard} className="itc-card itc-section-card">
             <div className="itc-studio-card-title">
               <span>🖼️</span> Reference image
             </div>
-            <div style={styles.imageBox}>
+            <div className="itc-reference-image-box">
               {imagePreview ? (
-                <img src={imagePreview} alt="Target Reference" style={styles.fittedImage} />
+                <img src={imagePreview} alt="Target Reference" />
               ) : (
                 <div style={styles.emptyBoxPlaceholder}>No reference image yet</div>
               )}
@@ -2685,7 +2883,7 @@ export default function App() {
           </div>
           </div>
 
-          <div className={companionSectionClass("voice")}>
+          <div className={`${companionSectionClass("voice")} itc-sidebar-section itc-sidebar-section-voice`}>
           <div style={styles.sectionCard} className="itc-card itc-section-card">
             <div className="itc-studio-card-title">
               <span>🎙️</span> Voice changer
@@ -2816,7 +3014,7 @@ export default function App() {
           </div>
           </div>
 
-          <div className={companionSectionClass("studio")}>
+          <div className={`${companionSectionClass("studio")} itc-sidebar-section itc-sidebar-section-preview`}>
           <div style={styles.sectionCard} className="itc-card itc-section-card">
             <div className="itc-studio-card-title">
               <span>👁️</span> Local preview
@@ -2844,7 +3042,7 @@ export default function App() {
           )}
           </div>
 
-          <div className={companionSectionClass("credits")}>
+          <div className={`${companionSectionClass("credits")} itc-sidebar-section itc-sidebar-section-topup`}>
           <div ref={creditSectionRef} style={{...styles.sectionCard, ...(showAddCredits ? styles.sectionCardAlert : {})}} className="itc-card itc-section-card">
             <div className="itc-studio-card-title">
               <span>💳</span> Buy more credits
@@ -2934,12 +3132,12 @@ export default function App() {
           )}
         </aside>
 
-        <div className={companionShell ? "itc-companion-stage" : undefined}>
+        <div className={companionShell ? "itc-companion-stage" : "itc-studio-stage"}>
         <main style={styles.outputCanvas} className="itc-output-canvas">
           <div style={styles.canvasControlBar} className="itc-canvas-control-bar">
             <div style={styles.canvasTitleGroup} className="itc-canvas-title-group">
               <h2 className="itc-canvas-title">Output monitor</h2>
-              <span className="itc-canvas-subtitle" style={styles.canvasSubtitle}>1280×720 Lucy 2.5 output, scaled to fit your screen</span>
+              <span className="itc-canvas-subtitle" style={styles.canvasSubtitle}>1280×720 Lucy 2.5 output</span>
             </div>
             <div style={styles.actionRow} className="itc-action-row itc-desktop-action-row">
               <button
@@ -3002,6 +3200,76 @@ export default function App() {
                     </div>
                   </div>
                 )}
+              </div>
+
+              <div className="itc-prompt-dock">
+                <div className="itc-prompt-dock-header">
+                  <div>
+                    <h3 className="itc-prompt-dock-title">Transformation prompt</h3>
+                    <p className="itc-prompt-dock-subtitle">
+                      Character loads first on Start; background presets apply once live. Both stay active together — click Apply to switch scenes.
+                    </p>
+                  </div>
+                  <label className="itc-prompt-enhance-toggle">
+                    <input
+                      type="checkbox"
+                      checked={enhanceMask}
+                      onChange={(e) => setEnhanceMask(e.target.checked)}
+                      disabled={promptApplyBusy}
+                      className="itc-checkbox"
+                    />
+                    <span>Enhance prompt (optional)</span>
+                  </label>
+                </div>
+                <textarea
+                  className="itc-prompt-input"
+                  value={transformationPrompt}
+                  onChange={(e) => {
+                    setTransformationPrompt(e.target.value);
+                    if (promptApplyNote) setPromptApplyNote("");
+                  }}
+                  rows={2}
+                  placeholder="e.g. Change the background to a modern office with desk, chair, and window light"
+                  onKeyDown={(e) => {
+                    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+                      e.preventDefault();
+                      void applyTransformationPrompt();
+                    }
+                  }}
+                />
+                <div className="itc-prompt-presets" aria-label="Prompt presets">
+                  {PROMPT_PRESETS.map((preset) => (
+                    <button
+                      key={preset.label}
+                      type="button"
+                      className="itc-prompt-preset"
+                      onClick={() => {
+                        setTransformationPrompt(preset.text);
+                        setPromptApplyNote("");
+                        if (isRunning) {
+                          void applyTransformationPrompt(preset.text);
+                        }
+                      }}
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
+                <div className="itc-prompt-actions">
+                  <button
+                    type="button"
+                    className="itc-btn itc-btn-primary"
+                    onClick={() => void applyTransformationPrompt()}
+                    disabled={promptApplyBusy}
+                  >
+                    {promptApplyBusy
+                      ? "Applying…"
+                      : isRunning
+                      ? "Apply to live stream"
+                      : "Save prompt"}
+                  </button>
+                  {promptApplyNote && <span className="itc-prompt-note">{promptApplyNote}</span>}
+                </div>
               </div>
             </div>
           </div>
@@ -3097,12 +3365,12 @@ const styles = {
   metaValue: { color: c.primary, fontWeight: "700", transition: "color 0.3s cubic-bezier(0.4,0,0.2,1)" },
   creditsDollar: { color: c.textDim, fontWeight: "500", fontSize: "0.6875rem" },
   mainWorkspace: { display: "flex", flex: 1, width: "100%", minWidth: 0, minHeight: 0, overflow: "hidden", boxSizing: "border-box" },
-  controlSidebar: { flex: "0 0 260px", width: "260px", maxWidth: "100%", borderRight: `1px solid ${c.border}`, backgroundColor: c.bgElevated, display: "flex", flexDirection: "column", gap: "1px", overflowY: "auto", padding: "8px", boxSizing: "border-box" },
+  controlSidebar: { flex: "0 0 280px", width: "280px", maxWidth: "100%", borderRight: `1px solid ${c.border}`, backgroundColor: c.bgElevated, display: "flex", flexDirection: "column", gap: "1px", overflowY: "auto", padding: "8px", boxSizing: "border-box" },
   sectionCard: { backgroundColor: c.surface, border: `1px solid ${c.border}`, borderRadius: r.md, padding: "12px", marginBottom: "8px", display: "flex", flexDirection: "column", boxShadow: "0 1px 0 rgba(255,255,255,0.03) inset, 0 6px 16px -14px rgba(0,0,0,0.8)" },
   buttonStack: { display: "flex", flexDirection: "column", gap: "8px" },
   primaryButton: { backgroundImage: g.primary, color: "#fff", border: "1px solid rgba(129,140,248,0.4)", padding: "10px 14px", borderRadius: r.sm, fontSize: "0.8125rem", fontWeight: "600", cursor: "pointer", fontFamily: "inherit", textAlign: "left", boxShadow: "0 4px 14px -6px rgba(99,102,241,0.55)" },
   secondaryButton: { backgroundColor: c.bgElevated, color: c.textMuted, border: `1px solid ${c.border}`, padding: "10px 14px", borderRadius: r.sm, fontSize: "0.8125rem", fontWeight: "600", cursor: "pointer", fontFamily: "inherit", textAlign: "left" },
-  imageBox: { height: "auto", backgroundColor: c.bg, borderRadius: r.sm, border: `1px dashed ${c.border}`, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", minHeight: "64px", maxHeight: "100px" },
+  imageBox: { height: "auto", backgroundColor: c.bg, borderRadius: r.sm, border: `1px dashed ${c.border}`, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", minHeight: "64px" },
   emptyBoxPlaceholder: { fontSize: "0.75rem", color: c.textDim },
   sidebarVideoWrapper: { position: "relative", width: "100%", aspectRatio: "16/9", backgroundColor: c.bg, borderRadius: r.sm, overflow: "hidden", border: `1px solid ${c.border}` },
   localPreviewVideo: { position: "absolute", inset: 0, display: "block", width: "100%", height: "100%", objectFit: "contain", objectPosition: "center", transform: "scaleX(-1)", backgroundColor: c.bg },
@@ -3141,17 +3409,17 @@ const styles = {
   modalNote: { fontSize: "9px", color: c.textDim, fontStyle: "italic", marginTop: "12px", textAlign: "center" },
   sectionCardAlert: { border: `1px solid ${c.rose}`, boxShadow: "0 0 0 3px rgba(251,113,133,0.15)" },
   outputCanvas: { flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column", backgroundColor: c.bg, overflow: "hidden" },
-  canvasControlBar: { display: "flex", flexWrap: "wrap", justifyContent: "space-between", alignItems: "center", gap: "10px", padding: "12px 18px", borderBottom: `1px solid ${c.border}`, backgroundColor: c.bgElevated, flexShrink: 0 },
-  canvasTitleGroup: { display: "flex", flexDirection: "column", gap: "2px", flex: "1 1 200px" },
-  canvasTitle: { fontSize: "1rem", fontWeight: "700", fontFamily: fd, color: c.text, margin: 0, letterSpacing: "-0.02em" },
-  canvasSubtitle: { fontSize: "0.75rem", color: c.textDim, lineHeight: 1.5 },
-  actionRow: { display: "flex", flexWrap: "wrap", gap: "8px", flex: "1 1 280px", justifyContent: "flex-end" },
-  actionButton: { border: "1px solid transparent", padding: "9px 16px", borderRadius: r.sm, fontSize: "0.8125rem", fontWeight: "600", cursor: "pointer", fontFamily: "inherit", letterSpacing: "-0.01em" },
+  canvasControlBar: { display: "flex", flexWrap: "wrap", justifyContent: "space-between", alignItems: "center", gap: "8px", padding: "8px 14px", borderBottom: `1px solid ${c.border}`, backgroundColor: c.bgElevated, flexShrink: 0 },
+  canvasTitleGroup: { display: "flex", flexDirection: "column", gap: "1px", flex: "1 1 180px" },
+  canvasTitle: { fontSize: "0.875rem", fontWeight: "700", fontFamily: fd, color: c.text, margin: 0, letterSpacing: "-0.02em" },
+  canvasSubtitle: { fontSize: "0.6875rem", color: c.textDim, lineHeight: 1.4 },
+  actionRow: { display: "flex", flexWrap: "wrap", gap: "6px", flex: "1 1 240px", justifyContent: "flex-end" },
+  actionButton: { border: "1px solid transparent", padding: "7px 12px", borderRadius: r.sm, fontSize: "0.75rem", fontWeight: "600", cursor: "pointer", fontFamily: "inherit", letterSpacing: "-0.01em" },
   startButton: { backgroundImage: g.live, color: "#fff", boxShadow: "0 4px 14px -6px rgba(52,211,153,0.5)" },
   stopButton: { backgroundImage: g.stop, color: "#fff", boxShadow: "0 4px 14px -6px rgba(251,113,133,0.5)" },
   popOutButton: { backgroundColor: c.bgElevated, color: c.textMuted, border: `1px solid ${c.border}` },
-  canvasViewportContainer: { flex: 1, minHeight: 0, display: "flex", alignItems: "center", justifyContent: "center", padding: "12px 16px", overflow: "hidden" },
-  outputColumn: { display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "8px", width: "100%", maxWidth: "100%", maxHeight: "100%", minHeight: 0 },
+  canvasViewportContainer: { flex: 1, minHeight: 0, display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "10px 16px 12px", overflow: "auto" },
+  outputColumn: { display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-start", gap: "10px", width: "100%", maxWidth: "100%", minHeight: "min-content" },
   timerBadgeRow: { display: "flex", gap: "8px", flexWrap: "wrap", justifyContent: "center" },
   timerBadgeOutside: { backgroundColor: c.surface, border: `1px solid ${c.border}`, borderRadius: r.sm, padding: "4px 12px", fontSize: "11px", fontWeight: "700", color: c.primary, letterSpacing: "0.08em" },
   fixedOutputContainer: { backgroundColor: "#000", borderRadius: r.md, border: `1px solid ${c.border}`, position: "relative", overflow: "hidden", boxShadow: `0 24px 48px -20px rgba(0,0,0,0.8), 0 0 0 1px rgba(129,140,248,0.08)` },
