@@ -1,6 +1,6 @@
 {
   "name": "inspiretech-companion",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "private": true,
   "description": "InspireTech desktop app — virtual camera + virtual audio for calling apps",
   "main": "main.js",
@@ -20,7 +20,9 @@
     "dist:fresh": "node scripts/clean-dist.js release-new && npm run build:web && npm run build:feeders && electron-builder --win --config.directories.output=release-new",
     "dist:prod": "node scripts/clean-dist.js release-prod && npm run build:web && npm run build:feeders && electron-builder --win --config.directories.output=release-prod"
   },
-  "dependencies": {},
+  "dependencies": {
+    "electron-updater": "^6.6.2"
+  },
   "devDependencies": {
     "cross-env": "^7.0.3",
     "electron": "^32.0.0",
@@ -37,6 +39,7 @@
       "main.js",
       "paths.js",
       "setup.js",
+      "updater.js",
       "feeder.js",
       "audio-feeder.js",
       "preload.js",
@@ -86,6 +89,14 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "InspireTech"
-    }
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "Xqlusive23",
+        "repo": "aivideo",
+        "releaseType": "release"
+      }
+    ]
   }
 }

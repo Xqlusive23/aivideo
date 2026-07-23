@@ -107,16 +107,41 @@ Open your calling app (Zoom, Telegram, Discord) and pick those devices before or
 | `INSPIRETECH_APP_URL` | `https://www.inspirestream.xyz/#/app` | Live studio URL in packaged builds |
 | `INSPIRETECH_PYTHON` | `python` | Python for dev feeder |
 
-## Production updates (no reinstall for UI changes)
+## Production updates
+
+### Web studio (automatic)
 
 Packaged builds open **https://www.inspirestream.xyz/#/app** instead of a frozen copy
 bundled inside the installer. When you deploy the website (Vercel) or ledger backend
 (Railway), desktop users get those changes the next time they open InspireTech — voice
-changer (ElevenLabs), credits, login fixes, etc. all use the same live APIs as the browser.
+changer, credits, login fixes, etc. all use the same live APIs as the browser.
 
-You only need a **new installer** when the desktop shell changes (drivers, feeders,
-Electron, or this `paths.js` behavior). Bump `version` in `package.json`, run
-`npm run dist`, and publish a GitHub release.
+### Desktop shell (in-app updater)
+
+When the **Electron shell** changes (drivers, feeders, updater, or `main.js`), bump
+`version` in `package.json`, build, and publish a GitHub release.
+
+Packaged apps check for updates on launch and show an in-app modal when a newer
+release is available. Users can download and install without visiting the website.
+
+**Release checklist**
+
+1. `npm run dist:prod` in `aivideo-companion`
+2. Create a GitHub release tag matching `package.json` (example: `v0.3.5`)
+3. Upload **all** of these from `release-prod/`:
+   - `InspireTech Setup X.Y.Z.exe`
+   - `latest.yml` (required for seamless in-app updates)
+   - `*.blockmap` (optional but recommended)
+
+If `latest.yml` is missing, older apps still prompt via a GitHub API fallback and
+download the `.exe` directly, then launch the installer.
+
+To publish automatically instead of manual uploads:
+
+```powershell
+$env:GH_TOKEN="your-github-token"
+npm run dist:prod -- --publish always
+```
 
 ## Code signing
 

@@ -1710,3 +1710,79 @@ body {
   transform: translateY(12px);
   pointer-events: none;
 }
+
+.itc-update-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 11000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(5, 8, 18, 0.72);
+  backdrop-filter: blur(6px);
+}
+
+.itc-update-modal {
+  width: min(100%, 460px);
+  background: var(--itc-bg-elevated);
+  border: 1px solid var(--itc-border);
+  border-radius: 16px;
+  padding: 24px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
+}
+
+.itc-update-title {
+  margin: 0 0 10px;
+  font-family: var(--itc-font-display);
+  font-size: 1.25rem;
+  color: var(--itc-text);
+}
+
+.itc-update-copy {
+  margin: 0 0 16px;
+  color: var(--itc-text-muted);
+  line-height: 1.55;
+  font-size: 0.92rem;
+}
+
+.itc-update-progress-wrap {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.itc-update-progress-bar {
+  flex: 1;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(129, 140, 248, 0.15);
+  overflow: hidden;
+}
+
+.itc-update-progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--itc-gradient);
+  transition: width 0.2s ease;
+}
+
+.itc-update-progress-label {
+  min-width: 3rem;
+  font-family: var(--itc-font-mono);
+  font-size: 0.8rem;
+  color: var(--itc-text-muted);
+}
+
+.itc-update-error {
+  margin-bottom: 12px;
+  color: var(--itc-rose);
+  font-size: 0.85rem;
+}
+
+.itc-update-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}

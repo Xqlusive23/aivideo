@@ -171,6 +171,13 @@ export default function App() {
   const [gateSetupMessage, setGateSetupMessage] = useState("");
   const [driverSetupFailed, setDriverSetupFailed] = useState(false);
   const [driverSetupBusy, setDriverSetupBusy] = useState(false);
+  const [appUpdateOpen, setAppUpdateOpen] = useState(false);
+  const [appUpdateInfo, setAppUpdateInfo] = useState(null);
+  const [appUpdatePhase, setAppUpdatePhase] = useState("available");
+  const [appUpdateProgress, setAppUpdateProgress] = useState(0);
+  const [appUpdateBusy, setAppUpdateBusy] = useState(false);
+  const [appUpdateError, setAppUpdateError] = useState("");
+  const [desktopAppVersion, setDesktopAppVersion] = useState("");
 
   const isCompanionApp = () =>
     typeof window !== "undefined" && Boolean(window.inspiretechCompanion?.isDesktop);
@@ -470,6 +477,65 @@ export default function App() {
       cancelled = true;
     };
   }, [accessToken, sessionReady]);
+
+  // Desktop app: check GitHub / electron-updater for a newer shell build.
+  useEffect(() => {
+    if (!isCompanionApp()) return undefined;
+    const companion = window.inspiretechCompanion;
+    if (!companion?.onUpdateEvent) return undefined;
+
+    companion.getAppVersion?.().then((version) => {
+      if (version) setDesktopAppVersion(String(version));
+    });
+
+    const unsubscribe = companion.onUpdateEvent((payload) => {
+      if (!payload?.event) return;
+
+      if (payload.event === "checking") {
+        setAppUpdateError("");
+        return;
+      }
+
+      if (payload.event === "available") {
+        let snoozedUntil = 0;
+        try {
+          snoozedUntil = Number(window.localStorage.getItem("inspiretech_update_snooze_until") || 0);
+        } catch {
+          // ignore
+        }
+        if (Date.now() < snoozedUntil) return;
+
+        setAppUpdateInfo(payload);
+        setAppUpdatePhase("available");
+        setAppUpdateProgress(0);
+        setAppUpdateError("");
+        setAppUpdateOpen(true);
+        return;
+      }
+
+      if (payload.event === "progress") {
+        setAppUpdatePhase("downloading");
+        setAppUpdateProgress(Math.max(0, Math.min(100, Number(payload.percent) || 0)));
+        return;
+      }
+
+      if (payload.event === "downloaded") {
+        setAppUpdatePhase("downloaded");
+        setAppUpdateBusy(false);
+        setAppUpdateProgress(100);
+        return;
+      }
+
+      if (payload.event === "error") {
+        setAppUpdateBusy(false);
+        setAppUpdateError(String(payload.message || "Update check failed"));
+      }
+    });
+
+    companion.checkForUpdates?.().catch(() => {});
+
+    return unsubscribe;
+  }, []);
 
   // Idle access check: catches admin revoke/delete while the user is on the page.
   useEffect(() => {
@@ -1024,6 +1090,132 @@ export default function App() {
     } finally {
       setDriverSetupBusy(false);
     }
+  };
+
+  const dismissAppUpdate = (hours = 24) => {
+    try {
+      window.localStorage.setItem(
+        "inspiretech_update_snooze_until",
+        String(Date.now() + hours * 60 * 60 * 1000)
+      );
+    } catch {
+      // ignore
+    }
+    setAppUpdateOpen(false);
+    setAppUpdateBusy(false);
+  };
+
+  const startAppUpdateDownload = async () => {
+    const companion = window.inspiretechCompanion;
+    if (!companion?.downloadUpdate) return;
+    setAppUpdateBusy(true);
+    setAppUpdateError("");
+    setAppUpdatePhase("downloading");
+    try {
+      await companion.downloadUpdate();
+    } catch (err) {
+      setAppUpdateBusy(false);
+      setAppUpdatePhase("available");
+      setAppUpdateError(String(err.message || err));
+    }
+  };
+
+  const restartForAppUpdate = async () => {
+    try {
+      await window.inspiretechCompanion?.installUpdate?.();
+    } catch (err) {
+      setAppUpdateError(String(err.message || err));
+    }
+  };
+
+  const renderAppUpdateModal = () => {
+    if (!isCompanionApp() || !appUpdateOpen || !appUpdateInfo) return null;
+
+    const currentVersion = appUpdateInfo.currentVersion || desktopAppVersion || "unknown";
+    const nextVersion = appUpdateInfo.version || "latest";
+    const isManual = appUpdateInfo.mode === "manual";
+    const title =
+      appUpdatePhase === "downloaded"
+        ? isManual
+          ? "Installer launched"
+          : "Update ready to install"
+        : appUpdatePhase === "downloading"
+        ? "Downloading update…"
+        : "Update available";
+
+    return (
+      <div className="itc-update-overlay" role="dialog" aria-modal="true" aria-labelledby="itc-update-title">
+        <div className="itc-update-modal">
+          <h2 id="itc-update-title" className="itc-update-title">{title}</h2>
+          <p className="itc-update-copy">
+            {appUpdatePhase === "downloaded" && isManual
+              ? "Follow the installer window to finish updating InspireTech. This app will close so the new version can install."
+              : appUpdatePhase === "downloaded"
+              ? `InspireTech ${nextVersion} has been downloaded. Restart to apply driver, shell, and desktop feature updates.`
+              : appUpdatePhase === "downloading"
+              ? `Downloading InspireTech ${nextVersion}. Keep this window open until the download finishes.`
+              : `You're on v${currentVersion}. InspireTech ${nextVersion} is available with the latest desktop features and fixes.`}
+          </p>
+
+          {appUpdatePhase === "downloading" && (
+            <div className="itc-update-progress-wrap">
+              <div className="itc-update-progress-bar">
+                <div
+                  className="itc-update-progress-fill"
+                  style={{ width: `${Math.round(appUpdateProgress)}%` }}
+                />
+              </div>
+              <span className="itc-update-progress-label">{Math.round(appUpdateProgress)}%</span>
+            </div>
+          )}
+
+          {appUpdateError && <div className="itc-update-error">{appUpdateError}</div>}
+
+          <div className="itc-update-actions">
+            {appUpdatePhase === "available" && (
+              <>
+                <button
+                  type="button"
+                  className="itc-btn itc-btn-primary"
+                  disabled={appUpdateBusy}
+                  onClick={startAppUpdateDownload}
+                >
+                  {isManual ? "Download and install" : "Download update"}
+                </button>
+                <button
+                  type="button"
+                  className="itc-btn itc-btn-secondary"
+                  disabled={appUpdateBusy}
+                  onClick={() => dismissAppUpdate()}
+                >
+                  Later
+                </button>
+              </>
+            )}
+            {appUpdatePhase === "downloading" && (
+              <button type="button" className="itc-btn itc-btn-secondary" disabled>
+                Downloading…
+              </button>
+            )}
+            {appUpdatePhase === "downloaded" && !isManual && (
+              <>
+                <button type="button" className="itc-btn itc-btn-primary" onClick={restartForAppUpdate}>
+                  Restart now
+                </button>
+                <button type="button" className="itc-btn itc-btn-secondary" onClick={() => dismissAppUpdate(1)}>
+                  Restart later
+                </button>
+              </>
+            )}
+            {appUpdatePhase === "downloaded" && isManual && (
+              <button type="button" className="itc-btn itc-btn-secondary" onClick={() => setAppUpdateOpen(false)}>
+                Close
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    );
   };
 
   const handleGateAuthenticated = async (token, options = {}) => {
@@ -2190,17 +2382,21 @@ export default function App() {
   if (!accessToken || !sessionReady) {
     const verifyingSaved = Boolean(accessToken && !sessionReady);
     return (
-      <AccessGate
-        companionMode={isCompanionApp()}
-        onAuthenticated={handleGateAuthenticated}
-        tokenError={tokenError}
-        loading={gateLoading || verifyingSaved}
-        setupMessage={verifyingSaved ? "Checking your saved access token…" : gateSetupMessage}
-      />
+      <>
+        <AccessGate
+          companionMode={isCompanionApp()}
+          onAuthenticated={handleGateAuthenticated}
+          tokenError={tokenError}
+          loading={gateLoading || verifyingSaved}
+          setupMessage={verifyingSaved ? "Checking your saved access token…" : gateSetupMessage}
+        />
+        {renderAppUpdateModal()}
+      </>
     );
   }
 
   return (
+    <>
     <div
       style={styles.appContainer}
       className={`itc-app${isMobileLayout ? " itc-app-mobile" : ""}${mobileOutputFocus ? " itc-mobile-theater" : ""}${isMobileLayout && !mobileControlsOpen ? " itc-mobile-sidebar-collapsed" : ""}`}
@@ -2704,6 +2900,8 @@ export default function App() {
         </div>
       )}
     </div>
+    {renderAppUpdateModal()}
+    </>
   );
 }
 

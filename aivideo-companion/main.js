@@ -15,6 +15,12 @@ const {
   needsFirstRunSetup,
   showSetupWizard,
 } = require("./setup");
+const {
+  initUpdater,
+  registerUpdaterIpc,
+  setUpdateMainWindow,
+  scheduleUpdateCheck,
+} = require("./updater");
 const { getAppUrl } = require("./paths");
 const { startFeeder, sendFrameToFeeder, stopFeeder } = require("./feeder");
 const {
@@ -44,8 +50,11 @@ function createMainWindow() {
   });
 
   mainWindow.loadURL(getAppUrl());
+  setUpdateMainWindow(mainWindow);
+  scheduleUpdateCheck();
 
   mainWindow.on("closed", () => {
+    setUpdateMainWindow(null);
     mainWindow = null;
   });
 }
@@ -67,6 +76,8 @@ ipcMain.on("inspiretech:audio-stop", () => {
 });
 
 async function launchApp() {
+  initUpdater();
+  registerUpdaterIpc();
   registerSetupIpc();
   startFeeder();
 
