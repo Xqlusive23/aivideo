@@ -530,6 +530,15 @@ body {
   letter-spacing: 0.02em;
 }
 
+.itc-btn-disabled,
+.itc-btn-windows.itc-btn-disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  pointer-events: none;
+  filter: grayscale(0.35);
+  text-decoration: none;
+}
+
 .itc-windows-icon {
   width: 18px;
   height: 18px;
@@ -1135,6 +1144,10 @@ body {
 .itc-sidebar-section-voice { order: 4; }
 .itc-sidebar-section-credits { order: 5; }
 .itc-sidebar-section-topup { order: 6; }
+
+.itc-app-mobile .itc-sidebar-section-prompt {
+  order: 0;
+}
 
 .itc-studio-stage {
   flex: 1 1 auto;
@@ -1794,7 +1807,8 @@ body {
 .itc-app.itc-mobile-theater .itc-canvas-control-bar,
 .itc-app.itc-mobile-theater .itc-desktop-action-row,
 .itc-app.itc-mobile-theater .itc-timer-badge-row,
-.itc-app.itc-mobile-theater .itc-canvas-overlay {
+.itc-app.itc-mobile-theater .itc-canvas-overlay,
+.itc-app.itc-mobile-theater .itc-prompt-dock {
   display: none !important;
 }
 

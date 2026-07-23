@@ -24,11 +24,35 @@ function WindowsIcon() {
   );
 }
 
-function WindowsDownloadButton({ className = "itc-btn itc-btn-primary itc-btn-windows" }) {
+function useIsMobileDevice() {
+  const detect = () =>
+    typeof window !== "undefined" &&
+    (/iPhone|iPad|iPod|Android|Mobile/i.test(navigator.userAgent) ||
+      window.matchMedia("(max-width: 900px)").matches);
+
+  const [isMobileDevice, setIsMobileDevice] = useState(detect);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const mediaQuery = window.matchMedia("(max-width: 900px)");
+    const sync = () => setIsMobileDevice(detect());
+    sync();
+    mediaQuery.addEventListener("change", sync);
+    return () => mediaQuery.removeEventListener("change", sync);
+  }, []);
+
+  return isMobileDevice;
+}
+
+function WindowsDownloadButton({
+  className = "itc-btn itc-btn-primary itc-btn-windows",
+  disabled = false,
+}) {
   const [downloadUrl, setDownloadUrl] = useState(WINDOWS_DOWNLOAD_URL);
   const [releaseLabel, setReleaseLabel] = useState("");
 
   useEffect(() => {
+    if (disabled) return undefined;
     let cancelled = false;
     (async () => {
       try {
@@ -51,7 +75,20 @@ function WindowsDownloadButton({ className = "itc-btn itc-btn-primary itc-btn-wi
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [disabled]);
+
+  if (disabled) {
+    return (
+      <span
+        className={`${className} itc-btn-disabled`}
+        aria-disabled="true"
+        title="The Windows desktop app is for PC only. Use Open studio in your mobile browser."
+      >
+        <WindowsIcon />
+        <span>Windows app — desktop only</span>
+      </span>
+    );
+  }
 
   return (
     <a href={downloadUrl} className={className} download>
@@ -93,6 +130,7 @@ const STEPS = [
 
 export default function LandingPage() {
   const navigate = useNavigate();
+  const isMobileDevice = useIsMobileDevice();
   const [gateLoading, setGateLoading] = useState(false);
   const [gateError, setGateError] = useState("");
   const [navOpen, setNavOpen] = useState(false);
@@ -164,7 +202,10 @@ export default function LandingPage() {
             <div className="itc-landing-hero-actions">
               <a href="#access" className="itc-btn itc-btn-primary">Get access</a>
               {downloadReady ? (
-                <WindowsDownloadButton className="itc-btn itc-btn-secondary itc-btn-windows" />
+                <WindowsDownloadButton
+                  className="itc-btn itc-btn-secondary itc-btn-windows"
+                  disabled={isMobileDevice}
+                />
               ) : (
                 <a href="#download" className="itc-btn itc-btn-secondary">Download Windows app</a>
               )}
@@ -272,7 +313,7 @@ export default function LandingPage() {
           </div>
           <div className="itc-landing-download-actions">
             {downloadReady ? (
-              <WindowsDownloadButton />
+              <WindowsDownloadButton disabled={isMobileDevice} />
             ) : (
               <>
                 <button className="itc-btn itc-btn-primary" disabled>

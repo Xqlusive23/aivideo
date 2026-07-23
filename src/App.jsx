@@ -91,7 +91,9 @@ const CHARACTER_SWAP_PATTERN =
 const BACKGROUND_INTENT_PATTERN =
   /background|office|beach|studio|city|skyline|environment|room|setting|scene|backdrop|interior|outdoor|setup/i;
 const DEFAULT_BACKGROUND_PROMPT =
-  "Change the background to a bright modern office with desk, chair, window light, and soft afternoon shadows, filling the entire frame behind the person with the new environment and no visible trace of the original camera room.";
+  "Change the background to a bright modern office with desk, chair, window light, and soft afternoon shadows, with coworkers passing in the background and sunlight on the floor, filling every pixel behind and around the person including frame edges and corners.";
+const BACKGROUND_COMPLETION_SUFFIX =
+  "with soft natural lighting integrated into the scene, filling every pixel behind and around the person including frame edges and corners";
 const PROMPT_PRESETS = [
   {
     label: "Office",
@@ -132,10 +134,10 @@ function normalizeBackgroundClause(text) {
   if (!clause) return DEFAULT_BACKGROUND_PROMPT;
   if (/^change the background to/i.test(clause)) {
     const base = clause.endsWith(".") ? clause.slice(0, -1) : clause;
-    return `${base}, filling the entire frame behind the person with the new environment and no visible trace of the original camera room.`;
+    if (/filling every pixel/i.test(base)) return `${base}.`;
+    return `${base}, ${BACKGROUND_COMPLETION_SUFFIX}.`;
   }
-  // Lucy 2.5 prompting guide: "Change the background to <scene with visible activity>."
-  return `Change the background to ${clause}, filling the entire frame behind the person with the new environment and no visible trace of the original camera room.`;
+  return `Change the background to ${clause}, ${BACKGROUND_COMPLETION_SUFFIX}.`;
 }
 
 function composeLayeredPrompt(userText, hasReferenceImage = true) {
@@ -144,8 +146,8 @@ function composeLayeredPrompt(userText, hasReferenceImage = true) {
   if (!hasReferenceImage) return composeTransformationPrompt(trimmed, false);
   if (!wantsBackground) return CHARACTER_WITH_REF_PROMPT;
   const backgroundClause = normalizeBackgroundClause(trimmed);
-  // Layered edit: background first, then character from reference (Decart Lucy 2.5 guide).
-  return `${backgroundClause} ${CHARACTER_WITH_REF_PROMPT}`;
+  // Character identity first, then full-scene background replacement.
+  return `${CHARACTER_WITH_REF_PROMPT} ${backgroundClause}`;
 }
 
 function composeTransformationPrompt(userText, hasReferenceImage = true) {
@@ -2284,6 +2286,14 @@ export default function App() {
     }
   };
 
+  const reinforceBackgroundPrompt = async (session, sourcePrompt) => {
+    if (!hasBackgroundIntent(sourcePrompt)) return;
+    await pushDecartState(session, sourcePrompt);
+    await new Promise((resolve) => setTimeout(resolve, 3500));
+    if (realtimeClientRef.current !== session || !session.isConnected?.()) return;
+    await pushDecartState(session, sourcePrompt);
+  };
+
   const handleDecartSessionFault = (err, label = "Decart session error") => {
     console.error(label, err);
     setStatus(`CRITICAL FAULT: ${err?.message || label}`);
@@ -2308,7 +2318,11 @@ export default function App() {
     setPromptApplyBusy(true);
     setPromptApplyNote("");
     try {
-      await pushDecartState(session, sourcePrompt);
+      if (hasBackgroundIntent(sourcePrompt)) {
+        await reinforceBackgroundPrompt(session, sourcePrompt);
+      } else {
+        await pushDecartState(session, sourcePrompt);
+      }
       setPromptApplyNote("Prompt applied to the live stream.");
       setStatus("PROMPT UPDATED // LIVE TRANSFORMATION");
     } catch (err) {
@@ -2474,7 +2488,7 @@ export default function App() {
           await new Promise((resolve) => setTimeout(resolve, 2000));
         }
         try {
-          await pushDecartState(session, sourcePrompt);
+          await reinforceBackgroundPrompt(session, sourcePrompt);
           setPromptApplyNote("Character + background prompt applied.");
         } catch (err) {
           console.error("Failed to apply layered prompt after connect:", err);
@@ -2532,6 +2546,79 @@ export default function App() {
     }
     if (outputVideoRef.current) outputVideoRef.current.srcObject = null;
   };
+
+  const renderPromptDock = () => (
+    <div className="itc-prompt-dock">
+      <div className="itc-prompt-dock-header">
+        <div>
+          <h3 className="itc-prompt-dock-title">Transformation prompt</h3>
+          <p className="itc-prompt-dock-subtitle">
+            {isMobileLayout
+              ? "Set a scene before Start. While live, open Show setup to edit and Apply."
+              : "Character loads first on Start; background presets apply once live. Both stay active together — click Apply to switch scenes."}
+          </p>
+        </div>
+        <label className="itc-prompt-enhance-toggle">
+          <input
+            type="checkbox"
+            checked={enhanceMask}
+            onChange={(e) => setEnhanceMask(e.target.checked)}
+            disabled={promptApplyBusy}
+            className="itc-checkbox"
+          />
+          <span>Enhance prompt (optional)</span>
+        </label>
+      </div>
+      <textarea
+        className="itc-prompt-input"
+        value={transformationPrompt}
+        onChange={(e) => {
+          setTransformationPrompt(e.target.value);
+          if (promptApplyNote) setPromptApplyNote("");
+        }}
+        rows={2}
+        placeholder="e.g. Change the background to a modern office with desk, chair, and window light"
+        onKeyDown={(e) => {
+          if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+            e.preventDefault();
+            void applyTransformationPrompt();
+          }
+        }}
+      />
+      <div className="itc-prompt-presets" aria-label="Prompt presets">
+        {PROMPT_PRESETS.map((preset) => (
+          <button
+            key={preset.label}
+            type="button"
+            className="itc-prompt-preset"
+            onClick={() => {
+              setTransformationPrompt(preset.text);
+              setPromptApplyNote("");
+              if (isRunning) {
+                void applyTransformationPrompt(preset.text);
+              }
+            }}
+          >
+            {preset.label}
+          </button>
+        ))}
+      </div>
+      <div className="itc-prompt-actions">
+        <button
+          type="button"
+          className="itc-btn itc-btn-primary"
+          onClick={() => void applyTransformationPrompt()}
+          disabled={promptApplyBusy}
+        >
+          {promptApplyBusy ? "Applying…" : isRunning ? "Apply to live stream" : "Save prompt"}
+        </button>
+        {promptApplyNote && <span className="itc-prompt-note">{promptApplyNote}</span>}
+      </div>
+    </div>
+  );
+
+  const showPromptBelowOutput = !isMobileLayout || !isRunning;
+  const showPromptInSidebar = isMobileLayout && isRunning;
 
   const purchaseCredits = async (creditAmount) => {
     try {
@@ -3130,6 +3217,9 @@ export default function App() {
               </div>
             </div>
           )}
+          {showPromptInSidebar && (
+            <div className="itc-sidebar-section itc-sidebar-section-prompt">{renderPromptDock()}</div>
+          )}
         </aside>
 
         <div className={companionShell ? "itc-companion-stage" : "itc-studio-stage"}>
@@ -3202,75 +3292,7 @@ export default function App() {
                 )}
               </div>
 
-              <div className="itc-prompt-dock">
-                <div className="itc-prompt-dock-header">
-                  <div>
-                    <h3 className="itc-prompt-dock-title">Transformation prompt</h3>
-                    <p className="itc-prompt-dock-subtitle">
-                      Character loads first on Start; background presets apply once live. Both stay active together — click Apply to switch scenes.
-                    </p>
-                  </div>
-                  <label className="itc-prompt-enhance-toggle">
-                    <input
-                      type="checkbox"
-                      checked={enhanceMask}
-                      onChange={(e) => setEnhanceMask(e.target.checked)}
-                      disabled={promptApplyBusy}
-                      className="itc-checkbox"
-                    />
-                    <span>Enhance prompt (optional)</span>
-                  </label>
-                </div>
-                <textarea
-                  className="itc-prompt-input"
-                  value={transformationPrompt}
-                  onChange={(e) => {
-                    setTransformationPrompt(e.target.value);
-                    if (promptApplyNote) setPromptApplyNote("");
-                  }}
-                  rows={2}
-                  placeholder="e.g. Change the background to a modern office with desk, chair, and window light"
-                  onKeyDown={(e) => {
-                    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
-                      e.preventDefault();
-                      void applyTransformationPrompt();
-                    }
-                  }}
-                />
-                <div className="itc-prompt-presets" aria-label="Prompt presets">
-                  {PROMPT_PRESETS.map((preset) => (
-                    <button
-                      key={preset.label}
-                      type="button"
-                      className="itc-prompt-preset"
-                      onClick={() => {
-                        setTransformationPrompt(preset.text);
-                        setPromptApplyNote("");
-                        if (isRunning) {
-                          void applyTransformationPrompt(preset.text);
-                        }
-                      }}
-                    >
-                      {preset.label}
-                    </button>
-                  ))}
-                </div>
-                <div className="itc-prompt-actions">
-                  <button
-                    type="button"
-                    className="itc-btn itc-btn-primary"
-                    onClick={() => void applyTransformationPrompt()}
-                    disabled={promptApplyBusy}
-                  >
-                    {promptApplyBusy
-                      ? "Applying…"
-                      : isRunning
-                      ? "Apply to live stream"
-                      : "Save prompt"}
-                  </button>
-                  {promptApplyNote && <span className="itc-prompt-note">{promptApplyNote}</span>}
-                </div>
-              </div>
+              {showPromptBelowOutput && renderPromptDock()}
             </div>
           </div>
         </main>
