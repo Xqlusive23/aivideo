@@ -1,9 +1,9 @@
 // Shared public-site constants — safe to import from landing page and app.
 
 // Full international number, digits only (no +, spaces, or leading 0).
-// Nigeria example: 2348012345678   US example: 13306717093
+// Nigeria example: 2348012345678   US example: 13802737219
 export const WHATSAPP_NUMBER = normalizeWhatsAppNumber(
-  import.meta.env?.VITE_WHATSAPP_NUMBER || "13306717093"
+  import.meta.env?.VITE_WHATSAPP_NUMBER || "13802737219"
 );
 
 export const WHATSAPP_DISPLAY =
