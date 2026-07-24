@@ -56,19 +56,32 @@ const MY_DECART_KEY = (import.meta.env?.VITE_DECART_API_KEY || "").trim();
 // --- Real credit ledger backend --------------------------------------------
 // See /ledger-backend. The browser NEVER decides the balance — it only ever
 // displays whatever this server last reported.
-const NAIRA_PER_DOLLAR = 2000; // must match ledger-backend/server.js — keep these in sync
-const CREDITS_PER_DOLLAR = 100; // must also match ledger-backend/server.js's TIERS
-const NAIRA_PER_CREDIT = NAIRA_PER_DOLLAR / CREDITS_PER_DOLLAR; // = ₦20 per credit
+const CREDITS_PER_DOLLAR = 100; // must match ledger-backend/server.js TIERS ($1 = 100 credits)
+const NAIRA_PER_CREDIT = 20; // ₦20/credit — must match ledger-backend (NAIRA_PER_DOLLAR / CREDITS_PER_DOLLAR)
+// Display-only FX: converts fixed Paystack NGN charges to USD labels (not the checkout amount).
+const DISPLAY_NAIRA_PER_USD = Number(import.meta.env?.VITE_NAIRA_PER_USD) || 1500;
 const DISPLAY_CREDITS_PER_SECOND = 2; // for UI copy only — the server decides the real rate
 const LOW_CREDIT_THRESHOLD = 40; // ~20 seconds left at 2 credits/sec — warn before it runs out
 const HEARTBEAT_INTERVAL_MS = 1000; // 1s ticks → ~2 credits deducted per tick at 2 credits/sec
 
+// Paystack checkout charges the naira amount; USD is a display conversion only.
 const TOP_UP_OPTIONS = [
   { naira: 20000, credits: 1000 },
   { naira: 100000, credits: 5000 },
   { naira: 200000, credits: 10000, popular: true },
   { naira: 1000000, credits: 50000 },
 ];
+
+const formatUsdFromNaira = (nairaAmount) => {
+  const dollars = nairaAmount / DISPLAY_NAIRA_PER_USD;
+  return `$${dollars.toLocaleString(undefined, {
+    minimumFractionDigits: dollars >= 100 ? 0 : 2,
+    maximumFractionDigits: 2,
+  })}`;
+};
+
+const formatUsdFromCredits = (creditAmount) =>
+  formatUsdFromNaira(creditAmount * NAIRA_PER_CREDIT);
 
 // --- WhatsApp contact (shown on the access-token gate) ---------------------
 // Configured in src/siteConfig.js
@@ -2152,8 +2165,6 @@ export default function App() {
     return h > 0 ? `${h}:${m}:${s}` : `${m}:${s}`;
   };
 
-  const formatNaira = (creditAmount) => `₦${Math.round(creditAmount * NAIRA_PER_CREDIT).toLocaleString()}`;
-
   const startCamera = async (deviceId) => {
     const requestedId = deviceId !== undefined ? deviceId : selectedVideoDeviceIdRef.current;
     try {
@@ -2700,7 +2711,7 @@ export default function App() {
             <div className={`itc-companion-pill itc-companion-pill-credits${isLowCredit ? " is-danger" : ""}`}>
               <span className="itc-companion-pill-icon">⚡</span>
               <span className="itc-companion-pill-value">{creditsLoaded ? credits : "…"}</span>
-              {creditsLoaded && <span className="itc-companion-pill-sub">{formatNaira(credits)}</span>}
+              {creditsLoaded && <span className="itc-companion-pill-sub">{formatUsdFromCredits(credits)}</span>}
             </div>
             {desktopAppVersion && (
               <div className="itc-companion-pill itc-companion-pill-version">
@@ -2785,7 +2796,7 @@ export default function App() {
               style={{ animation: isLowCredit && isRunning ? "creditPulse 1s infinite" : "none" }}
             >
               {creditsLoaded ? credits : "…"}
-              {creditsLoaded && <span style={styles.creditsDollar}> ({formatNaira(credits)})</span>}
+              {creditsLoaded && <span style={styles.creditsDollar}> ({formatUsdFromCredits(credits)})</span>}
             </span>
           </div>
         </div>
@@ -2934,14 +2945,14 @@ export default function App() {
               <>
                 <div style={styles.creditBalanceRow}>
                   <span style={styles.creditBalanceNumber}>{creditsLoaded ? credits : "…"}</span>
-                  <span style={styles.creditBalanceSub}>credits · {creditsLoaded ? formatNaira(credits) : "—"}</span>
+                  <span style={styles.creditBalanceSub}>credits · {creditsLoaded ? formatUsdFromCredits(credits) : "—"}</span>
                 </div>
                 <div style={styles.creditBarTrack}>
                   <div style={{...styles.creditBarFill, width: `${creditPercent}%`, backgroundColor: isLowCredit ? c.rose : c.primary}} />
                 </div>
                 <div style={styles.creditMeta}>
                   <span>~{DISPLAY_CREDITS_PER_SECOND} credits/sec while live (billed server-side)</span>
-                  {isRunning && <span>Used this session: {sessionCreditsUsed} ({formatNaira(sessionCreditsUsed)})</span>}
+                  {isRunning && <span>Used this session: {sessionCreditsUsed} ({formatUsdFromCredits(sessionCreditsUsed)})</span>}
                 </div>
               </>
             )}
@@ -3147,13 +3158,13 @@ export default function App() {
                     className="itc-btn itc-btn-topup"
                     onClick={() => purchaseCredits(opt.credits)}
                   >
-                    Buy for ₦{opt.naira.toLocaleString()}
+                    Buy for {formatUsdFromNaira(opt.naira)}
                   </button>
                 </div>
               ))}
             </div>
             <div style={styles.modalNote}>
-              Real Paystack Checkout — this redirects off-app to a live payment page.
+              USD is approximate (₦{DISPLAY_NAIRA_PER_USD.toLocaleString()} ≈ $1). Paystack Checkout charges the exact naira amount (e.g. ₦20,000).
             </div>
           </div>
           </div>

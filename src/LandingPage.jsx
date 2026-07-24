@@ -117,7 +117,7 @@ const FEATURES = [
   {
     icon: "💳",
     title: "Pay-as-you-go credits",
-    body: "Usage is metered per second while live. Top up with Paystack when you need more time.",
+    body: "Usage is metered per second while live. Top up via Paystack when you need more time — prices shown in USD, checkout in Nigerian Naira.",
   },
 ];
 
@@ -257,6 +257,21 @@ export default function LandingPage() {
             );
           })}
         </div>
+      </section>
+
+      <section id="payments" className="itc-landing-section">
+        <h2 className="itc-landing-section-title">Payments worldwide</h2>
+        <p className="itc-landing-section-lead">
+          InspireTech uses Paystack for credit top-ups. The studio shows approximate USD prices; Paystack checkout charges the exact amount in Nigerian Naira (for example ₦20,000 for 1,000 credits).
+        </p>
+        <ul className="itc-landing-download-list">
+          <li><strong>Outside Nigeria:</strong> pay with international Visa or Mastercard — your bank converts at their rate.</li>
+          <li><strong>In Nigeria:</strong> card, bank transfer, and USSD are supported on the same checkout.</li>
+          <li><strong>Credits:</strong> added to your account automatically after payment succeeds.</li>
+        </ul>
+        <p className="itc-landing-fine-print">
+          International cards are accepted. You do not need a Nigerian bank account to top up credits.
+        </p>
       </section>
 
       <section className="itc-landing-section">
