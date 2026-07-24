@@ -783,19 +783,14 @@ app.get("/api/voice/rtc-preview/:voiceId", requireToken, async (req, res) => {
 });
 
 // --- Checkout (purchases) ----------------------------------------------------
-// Exchange rate: ₦1,900 per $1 (set by you — update this single number if the
-// rate changes, rather than recalculating each tier by hand).
-// Exchange rate: ₦1,900 per $1, and 2,000 credits per $1 (was 100 — a straight
-// 20x repricing). Same dollar/naira tiers as before, just more credits per tier.
+// Exchange rate: ₦1,600 per $1, and 100 credits per $1 (1 credit = ₦16 at list; tiers priced in USD below).
 // Amounts are in KOBO (Paystack's subunit for NGN — 1 naira = 100 kobo).
-// Exchange rate: ₦2,000 per $1, and 100 credits per $1 (1 credit = ₦20).
-// Amounts are in KOBO (Paystack's subunit for NGN — 1 naira = 100 kobo).
-const NAIRA_PER_DOLLAR = 2000;
+const NAIRA_PER_DOLLAR = 1600;
 const TIERS = {
-  1000: 10 * NAIRA_PER_DOLLAR * 100,   // $10  -> ₦20,000   -> 1,000 credits
-  5000: 50 * NAIRA_PER_DOLLAR * 100,   // $50  -> ₦100,000  -> 5,000 credits
-  10000: 100 * NAIRA_PER_DOLLAR * 100, // $100 -> ₦200,000  -> 10,000 credits
-  50000: 500 * NAIRA_PER_DOLLAR * 100, // $500 -> ₦1,000,000 -> 50,000 credits
+  1000: 14 * NAIRA_PER_DOLLAR * 100,   // $14  -> ₦22,400   -> 1,000 credits
+  5000: 70 * NAIRA_PER_DOLLAR * 100,   // $70  -> ₦112,000  -> 5,000 credits
+  10000: 140 * NAIRA_PER_DOLLAR * 100, // $140 -> ₦224,000  -> 10,000 credits
+  50000: 700 * NAIRA_PER_DOLLAR * 100, // $700 -> ₦1,120,000 -> 50,000 credits
 };
 
 app.post("/api/checkout", requireToken, async (req, res) => {

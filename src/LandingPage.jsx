@@ -262,7 +262,7 @@ export default function LandingPage() {
       <section id="payments" className="itc-landing-section">
         <h2 className="itc-landing-section-title">Payments worldwide</h2>
         <p className="itc-landing-section-lead">
-          InspireTech uses Paystack for credit top-ups. The studio shows approximate USD prices; Paystack checkout charges the exact amount in Nigerian Naira (for example ₦20,000 for 1,000 credits).
+          InspireTech uses Paystack for credit top-ups. The studio shows approximate USD prices; Paystack checkout charges the exact amount in Nigerian Naira (for example ₦22,400 for 1,000 credits / $14).
         </p>
         <ul className="itc-landing-download-list">
           <li><strong>Outside Nigeria:</strong> pay with international Visa or Mastercard — your bank converts at their rate.</li>

@@ -57,19 +57,19 @@ const MY_DECART_KEY = (import.meta.env?.VITE_DECART_API_KEY || "").trim();
 // See /ledger-backend. The browser NEVER decides the balance — it only ever
 // displays whatever this server last reported.
 const CREDITS_PER_DOLLAR = 100; // must match ledger-backend/server.js TIERS ($1 = 100 credits)
-const NAIRA_PER_CREDIT = 20; // ₦20/credit — must match ledger-backend (NAIRA_PER_DOLLAR / CREDITS_PER_DOLLAR)
-// Display-only FX: converts fixed Paystack NGN charges to USD labels (not the checkout amount).
-const DISPLAY_NAIRA_PER_USD = Number(import.meta.env?.VITE_NAIRA_PER_USD) || 1500;
+const NAIRA_PER_USD = 1600; // must match ledger-backend/server.js NAIRA_PER_DOLLAR
+const NAIRA_PER_CREDIT = (14 * NAIRA_PER_USD) / 1000; // ₦22.40/credit — matches $14 / 1,000 credits tier
+const DISPLAY_NAIRA_PER_USD = Number(import.meta.env?.VITE_NAIRA_PER_USD) || NAIRA_PER_USD;
 const DISPLAY_CREDITS_PER_SECOND = 2; // for UI copy only — the server decides the real rate
 const LOW_CREDIT_THRESHOLD = 40; // ~20 seconds left at 2 credits/sec — warn before it runs out
 const HEARTBEAT_INTERVAL_MS = 1000; // 1s ticks → ~2 credits deducted per tick at 2 credits/sec
 
 // Paystack checkout charges the naira amount; USD is a display conversion only.
 const TOP_UP_OPTIONS = [
-  { naira: 20000, credits: 1000 },
-  { naira: 100000, credits: 5000 },
-  { naira: 200000, credits: 10000, popular: true },
-  { naira: 1000000, credits: 50000 },
+  { naira: 22400, credits: 1000 },
+  { naira: 112000, credits: 5000 },
+  { naira: 224000, credits: 10000, popular: true },
+  { naira: 1120000, credits: 50000 },
 ];
 
 const formatUsdFromNaira = (nairaAmount) => {
@@ -3164,7 +3164,7 @@ export default function App() {
               ))}
             </div>
             <div style={styles.modalNote}>
-              USD is approximate (₦{DISPLAY_NAIRA_PER_USD.toLocaleString()} ≈ $1). Paystack Checkout charges the exact naira amount (e.g. ₦20,000).
+              USD is approximate (₦{DISPLAY_NAIRA_PER_USD.toLocaleString()} ≈ $1). Paystack Checkout charges the exact naira amount (e.g. ₦22,400).
             </div>
           </div>
           </div>
