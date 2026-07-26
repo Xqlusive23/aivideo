@@ -1,11 +1,12 @@
 const { app, BrowserWindow, ipcMain, shell } = require("electron");
 const fs = require("fs");
 const path = require("path");
-const { execFile } = require("child_process");
+const { execFile, execFileSync } = require("child_process");
 const {
   VIRTUAL_CAMERA_NAME,
   getSetupStatePath,
   getUnityCaptureInstallDir,
+  getStagedUnityCaptureDir,
   getVbCableInstaller,
 } = require("./paths");
 
@@ -129,14 +130,22 @@ async function waitForDetection(checkFn, attempts = 8, delayMs = 750) {
   return checkFn();
 }
 
-function runElevatedError(exitCode, stepLabel) {
+function runElevatedError(exitCode, stepLabel, manualPath = "") {
   if (exitCode === UAC_CANCELLED_EXIT_CODE) {
     return new Error(
       `${stepLabel}: installation cancelled. Click Install again and approve the Windows UAC prompt.`
     );
   }
+  if (exitCode === 3) {
+    return new Error(
+      `${stepLabel} failed (exit code 3 — Windows blocked driver registration). ` +
+        `Approve UAC, then try again. If it still fails, right-click Run as administrator:` +
+        (manualPath ? `\n${manualPath}` : "")
+    );
+  }
   return new Error(
-    `${stepLabel} failed (exit code ${exitCode}). Approve UAC, ensure you have administrator rights, and try again.`
+    `${stepLabel} failed (exit code ${exitCode}). Approve UAC, ensure you have administrator rights, and try again.` +
+      (manualPath ? `\nManual install: ${manualPath}` : "")
   );
 }
 
@@ -171,71 +180,67 @@ function runElevated(command, args = [], cwd, options = {}) {
   });
 }
 
-async function installVirtualCamera() {
-  const stepLabel = "InspireTech Camera (Unity Capture)";
-  const installDir = getUnityCaptureInstallDir();
-  if (!installDir) {
+function stageUnityCaptureInstallFiles() {
+  const bundleDir = getUnityCaptureInstallDir();
+  if (!bundleDir) {
     throw new Error(
       "Unity Capture driver files are missing from this build. Re-run npm run prepare:drivers."
     );
   }
 
-  const dll64 = path.join(installDir, "UnityCaptureFilter64.dll");
-  if (!fs.existsSync(dll64)) {
-    throw new Error(`Missing driver file: ${dll64}`);
+  const stageDir = getStagedUnityCaptureDir();
+  fs.mkdirSync(stageDir, { recursive: true });
+
+  const required = ["UnityCaptureFilter64.dll", "InstallInspireTech.bat"];
+  for (const file of required) {
+    const src = path.join(bundleDir, file);
+    if (!fs.existsSync(src)) {
+      throw new Error(`Missing driver file: ${src}`);
+    }
+    fs.copyFileSync(src, path.join(stageDir, file));
   }
+
+  const dll32 = path.join(bundleDir, "UnityCaptureFilter32.dll");
+  if (fs.existsSync(dll32)) {
+    fs.copyFileSync(dll32, path.join(stageDir, "UnityCaptureFilter32.dll"));
+  }
+
+  try {
+    execFileSync(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        `Get-ChildItem -LiteralPath '${stageDir.replace(/'/g, "''")}' -Filter 'UnityCaptureFilter*.dll' | Unblock-File -ErrorAction SilentlyContinue`,
+      ],
+      { windowsHide: true }
+    );
+  } catch {
+    // Unblock is best-effort; the .bat also unblocks before regsvr32.
+  }
+
+  return stageDir;
+}
+
+async function installVirtualCamera() {
+  const stepLabel = "InspireTech Camera (Unity Capture)";
+  const stageDir = stageUnityCaptureInstallFiles();
+  const batPath = path.join(stageDir, "InstallInspireTech.bat");
 
   cleanupInstallTempFiles();
 
-  const ps1Path = path.join(app.getPath("temp"), "inspiretech-register-camera.ps1");
-  const ps1Content = `
-$ErrorActionPreference = 'Stop'
-Set-Location -LiteralPath '${installDir.replace(/'/g, "''")}'
-Get-ChildItem -Filter 'UnityCaptureFilter*.dll' | Unblock-File -ErrorAction SilentlyContinue
-$nameArg = '/i:UnityCaptureName=InspireTech Camera'
-$dll64 = Join-Path $PWD 'UnityCaptureFilter64.dll'
-$dll32 = Join-Path $PWD 'UnityCaptureFilter32.dll'
-$regsvr64 = Join-Path $env:SystemRoot 'System32\\regsvr32.exe'
-$regsvr32 = Join-Path $env:SystemRoot 'SysWOW64\\regsvr32.exe'
-
-function Unregister-Dll($regsvr, $dll) {
-  if (-not (Test-Path $regsvr) -or -not (Test-Path $dll)) { return }
-  Start-Process -FilePath $regsvr -ArgumentList @('/s', '/u', $dll) -Wait -PassThru -WindowStyle Hidden | Out-Null
-}
-
-# Clear any stale or partial registration before reinstalling.
-Unregister-Dll $regsvr64 $dll64
-Unregister-Dll $regsvr32 $dll32
-
-$p64 = Start-Process -FilePath $regsvr64 -ArgumentList @('/s', $dll64, $nameArg) -Wait -PassThru -WindowStyle Hidden
-if ($p64.ExitCode -ne 0) { exit $p64.ExitCode }
-if ((Test-Path $regsvr32) -and (Test-Path $dll32)) {
-  Start-Process -FilePath $regsvr32 -ArgumentList @('/s', $dll32, $nameArg) -Wait -PassThru -WindowStyle Hidden | Out-Null
-}
-exit 0
-`.trim();
-
-  fs.writeFileSync(ps1Path, ps1Content, "utf8");
   try {
-    await runElevated(
-      "powershell.exe",
-      ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ps1Path],
-      installDir
-    );
+    await runElevated("cmd.exe", ["/c", batPath], stageDir);
   } catch (error) {
-    throw runElevatedError(error.code || 1, stepLabel);
-  } finally {
-    try {
-      fs.unlinkSync(ps1Path);
-    } catch {
-      // temp script may remain if UAC was cancelled mid-run
-    }
+    throw runElevatedError(error.code || 1, stepLabel, batPath);
   }
 
   const installed = await waitForDetection(isVirtualCameraInstalled, 12, 1000);
   if (!installed) {
     throw new Error(
-      `${stepLabel} was not detected after install. Reboot Windows and try again, or run as Administrator from:\n${installDir}`
+      `${stepLabel} was not detected after install. Reboot Windows and try again, or right-click Run as administrator:\n${batPath}`
     );
   }
   return true;
@@ -304,6 +309,7 @@ async function getSetupStatus() {
     vbCableBundled,
     unityCaptureBundled,
     virtualCameraName: VIRTUAL_CAMERA_NAME,
+    manualCameraInstallBat: path.join(getStagedUnityCaptureDir(), "InstallInspireTech.bat"),
   };
 }
 

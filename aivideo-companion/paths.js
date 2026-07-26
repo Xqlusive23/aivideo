@@ -73,6 +73,13 @@ function getAudioFeederCommand() {
   return null;
 }
 
+function getStagedUnityCaptureDir() {
+  const base =
+    process.env.ProgramData ||
+    path.join(process.env.SystemDrive || "C:", "ProgramData");
+  return path.join(base, "InspireTech", "UnityCapture");
+}
+
 function getUnityCaptureInstallDir() {
   const bundledPortrait = getDriversPath("unity-capture-bundle");
   if (fs.existsSync(path.join(bundledPortrait, "UnityCaptureFilter64.dll"))) {
@@ -113,5 +120,6 @@ module.exports = {
   getFeederCommand,
   getAudioFeederCommand,
   getUnityCaptureInstallDir,
+  getStagedUnityCaptureDir,
   getVbCableInstaller,
 };

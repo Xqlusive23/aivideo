@@ -8,13 +8,23 @@ REM Remove Mark-of-the-Web (common when files are bundled/extracted).
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "Get-ChildItem -LiteralPath '%~dp0' -Filter 'UnityCaptureFilter*.dll' | Unblock-File -ErrorAction SilentlyContinue" >nul 2>&1
 
-REM 64-bit filter (required on x64 Windows).
-regsvr32 /s "%~dp0UnityCaptureFilter64.dll" "/i:UnityCaptureName=InspireTech Camera"
-if errorlevel 1 exit /b 1
+set "REG64=%SystemRoot%\System32\regsvr32.exe"
+set "REG32=%SystemRoot%\SysWOW64\regsvr32.exe"
+set "DLL64=%~dp0UnityCaptureFilter64.dll"
+set "DLL32=%~dp0UnityCaptureFilter32.dll"
+set "NAME=/i:UnityCaptureName=InspireTech Camera"
 
-REM 32-bit filter (optional — use SysWOW64 regsvr32 on 64-bit OS).
-if exist "%SystemRoot%\SysWOW64\regsvr32.exe" (
-  "%SystemRoot%\SysWOW64\regsvr32.exe" /s "%~dp0UnityCaptureFilter32.dll" "/i:UnityCaptureName=InspireTech Camera"
+REM Clear stale registration before reinstalling.
+"%REG64%" /s /u "%DLL64%" >nul 2>&1
+if exist "%REG32%" if exist "%DLL32%" "%REG32%" /s /u "%DLL32%" >nul 2>&1
+
+REM 64-bit filter (required on x64 Windows).
+"%REG64%" /s "%DLL64%" "%NAME%"
+if errorlevel 1 exit /b %ERRORLEVEL%
+
+REM 32-bit filter (optional — helps 32-bit calling apps).
+if exist "%REG32%" if exist "%DLL32%" (
+  "%REG32%" /s "%DLL32%" "%NAME%"
 )
 
 exit /b 0
