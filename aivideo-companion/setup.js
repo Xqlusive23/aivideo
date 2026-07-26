@@ -80,6 +80,29 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function unblockDriverFiles(dir) {
+  if (!dir || !fs.existsSync(dir)) return;
+  const escaped = dir.replace(/'/g, "''");
+  const script = `
+Get-ChildItem -LiteralPath '${escaped}' -Filter 'UnityCaptureFilter*.dll' -ErrorAction SilentlyContinue | ForEach-Object {
+  Unblock-File -LiteralPath $_.FullName -ErrorAction SilentlyContinue
+  $zone = "$($_.FullName):Zone.Identifier"
+  if (Test-Path -LiteralPath $zone) {
+    Remove-Item -LiteralPath $zone -Force -ErrorAction SilentlyContinue
+  }
+}
+`.trim();
+  try {
+    execFileSync(
+      "powershell.exe",
+      ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
+      { windowsHide: true }
+    );
+  } catch {
+    // Best effort — the elevated installer also clears blocks before regsvr32.
+  }
+}
+
 async function isVirtualCameraInstalled() {
   // DirectShow virtual cameras (Unity Capture) do NOT appear in Get-PnpDevice
   // -Class Camera. Detect COM registration of the filter DLL instead.
@@ -148,6 +171,13 @@ function runElevatedError(exitCode, stepLabel, manualPath = "") {
         (manualPath ? `\n${manualPath}` : "")
     );
   }
+  if (exitCode === 1) {
+    return new Error(
+      `${stepLabel} failed (exit code 1 — Windows may be blocking the driver DLL as downloaded from the internet). ` +
+        `Click Continue again to retry (we unblock automatically). If it still fails, reboot and retry, or run as administrator:` +
+        (manualPath ? `\n${manualPath}` : "")
+    );
+  }
   return new Error(
     `${stepLabel} failed (exit code ${exitCode}). Approve UAC, ensure you have administrator rights, and try again.` +
       (manualPath ? `\nManual install: ${manualPath}` : "")
@@ -201,6 +231,7 @@ async function prepareUnityCaptureStaging() {
   fs.mkdirSync(pendingDir, { recursive: true });
 
   const required = ["UnityCaptureFilter64.dll", "InstallInspireTech.bat"];
+  unblockDriverFiles(bundleDir);
   for (const file of required) {
     const src = path.join(bundleDir, file);
     if (!fs.existsSync(src)) {
@@ -214,21 +245,7 @@ async function prepareUnityCaptureStaging() {
     fs.copyFileSync(dll32, path.join(pendingDir, "UnityCaptureFilter32.dll"));
   }
 
-  try {
-    execFileSync(
-      "powershell.exe",
-      [
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-Command",
-        `Get-ChildItem -LiteralPath '${pendingDir.replace(/'/g, "''")}' -Filter 'UnityCaptureFilter*.dll' | Unblock-File -ErrorAction SilentlyContinue`,
-      ],
-      { windowsHide: true }
-    );
-  } catch {
-    // Unblock is best-effort; the elevated installer also unblocks before regsvr32.
-  }
+  unblockDriverFiles(pendingDir);
 
   return {
     pendingDir,
@@ -249,13 +266,22 @@ $pending = '${pendingDir.replace(/'/g, "''")}'
 $stage = '${stageDir.replace(/'/g, "''")}'
 New-Item -ItemType Directory -Force -Path $stage | Out-Null
 
+function Clear-DriverBlocks([string]$dir) {
+  Get-ChildItem -LiteralPath $dir -Filter 'UnityCaptureFilter*.dll' -ErrorAction SilentlyContinue | ForEach-Object {
+    Unblock-File -LiteralPath $_.FullName -ErrorAction SilentlyContinue
+    $zone = "$($_.FullName):Zone.Identifier"
+    if (Test-Path -LiteralPath $zone) {
+      Remove-Item -LiteralPath $zone -Force -ErrorAction SilentlyContinue
+    }
+  }
+}
+
 $regsvr64 = Join-Path $env:SystemRoot 'System32\\regsvr32.exe'
 $regsvr32 = Join-Path $env:SystemRoot 'SysWOW64\\regsvr32.exe'
 
 function Unregister-Dll($regsvr, $dll) {
   if (-not (Test-Path $regsvr) -or -not (Test-Path $dll)) { return }
-  $p = Start-Process -FilePath $regsvr -ArgumentList @('/s', '/u', $dll) -Wait -PassThru -WindowStyle Hidden
-  if ($null -eq $p) { exit ${UAC_CANCELLED_EXIT_CODE} }
+  & $regsvr /s /u $dll | Out-Null
 }
 
 $old64 = Join-Path $stage 'UnityCaptureFilter64.dll'
@@ -268,15 +294,25 @@ Get-ChildItem -LiteralPath $pending | ForEach-Object {
   Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $stage $_.Name) -Force
 }
 
-$bat = Join-Path $stage 'InstallInspireTech.bat'
-if (-not (Test-Path -LiteralPath $bat)) {
-  Write-Error "Missing InstallInspireTech.bat"
+Clear-DriverBlocks $stage
+Clear-DriverBlocks $pending
+
+$dll64 = Join-Path $stage 'UnityCaptureFilter64.dll'
+$dll32 = Join-Path $stage 'UnityCaptureFilter32.dll'
+if (-not (Test-Path -LiteralPath $dll64)) {
+  Write-Error "Missing UnityCaptureFilter64.dll in $stage"
   exit 1
 }
 
-$p = Start-Process -FilePath $env:ComSpec -ArgumentList @('/c', $bat) -WorkingDirectory $stage -Wait -PassThru -WindowStyle Hidden
-if ($null -eq $p) { exit ${UAC_CANCELLED_EXIT_CODE} }
-exit $p.ExitCode
+Unregister-Dll $regsvr64 $dll64
+Unregister-Dll $regsvr32 $dll32
+
+& $regsvr64 /s $dll64 "/i:UnityCaptureName=InspireTech Camera"
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+if ((Test-Path $regsvr32) -and (Test-Path $dll32)) {
+  & $regsvr32 /s $dll32 "/i:UnityCaptureName=InspireTech Camera"
+}
+exit 0
 `.trim();
 
   fs.writeFileSync(ps1Path, ps1Content, "utf8");

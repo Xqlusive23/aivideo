@@ -4,9 +4,9 @@ REM Must be run elevated — the desktop app launches this via UAC.
 
 CD /D "%~dp0"
 
-REM Remove Mark-of-the-Web (common when files are bundled/extracted).
+REM Remove Mark-of-the-Web (Windows blocks DLLs downloaded/bundled from the internet).
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "Get-ChildItem -LiteralPath '%~dp0' -Filter 'UnityCaptureFilter*.dll' | Unblock-File -ErrorAction SilentlyContinue" >nul 2>&1
+  "Get-ChildItem -LiteralPath '%~dp0' -Filter 'UnityCaptureFilter*.dll' | ForEach-Object { Unblock-File -LiteralPath $_.FullName -ErrorAction SilentlyContinue; $z = ($_.FullName + ':Zone.Identifier'); if (Test-Path -LiteralPath $z) { Remove-Item -LiteralPath $z -Force -ErrorAction SilentlyContinue } }" >nul 2>&1
 
 set "REG64=%SystemRoot%\System32\regsvr32.exe"
 set "REG32=%SystemRoot%\SysWOW64\regsvr32.exe"
