@@ -98,8 +98,8 @@ const VOICE_CHUNK_MS = 500;
 const MOBILE_LAYOUT_MAX_WIDTH = 900;
 const VIRTUAL_CAM_WIDTH = 1280;
 const VIRTUAL_CAM_HEIGHT = 720;
-const PORTRAIT_CAM_WIDTH = 1280;
-const PORTRAIT_CAM_HEIGHT = 720;
+const PORTRAIT_CAM_WIDTH = 720;
+const PORTRAIT_CAM_HEIGHT = 1280;
 const CALL_OUTPUT_LAYOUTS = {
   landscape: {
     label: "Landscape",
@@ -111,7 +111,7 @@ const CALL_OUTPUT_LAYOUTS = {
     label: "Portrait",
     width: PORTRAIT_CAM_WIDTH,
     height: PORTRAIT_CAM_HEIGHT,
-    fit: "portrait-fill",
+    fit: "cover",
   },
 };
 const DEFAULT_CALL_OUTPUT_LAYOUT = "landscape";
@@ -195,7 +195,7 @@ function getCallLayoutNote(layoutKey = DEFAULT_CALL_OUTPUT_LAYOUT) {
     case "landscape":
       return "Standard 1280×720 view for Zoom, Telegram, Discord, and other horizontal calls.";
     case "portrait":
-      return "Portrait crop scaled edge-to-edge at 1280×720 — fills InspireTech Camera for WhatsApp mobile without black bars.";
+      return "Native 720×1280 portrait for WhatsApp mobile. Reinstall InspireTech Camera after updating the desktop app if portrait still letterboxes.";
     default:
       return "";
   }

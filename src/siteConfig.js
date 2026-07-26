@@ -14,7 +14,7 @@ export const WHATSAPP_ACCESS_REQUEST_MESSAGE =
   "Hi, I'd like to request access to InspireTech. Please send me an access token.";
 
 export const WINDOWS_DOWNLOAD_FALLBACK =
-  "https://github.com/Xqlusive23/aivideo/releases/download/v0.3.10/InspireTech-Setup-0.3.10.exe";
+  "https://github.com/Xqlusive23/aivideo/releases/download/v0.3.11/InspireTech-Setup-0.3.11.exe";
 
 // Vercel may still have a stale VITE_WINDOWS_DOWNLOAD_URL — LandingPage resolves latest from GitHub.
 export const WINDOWS_DOWNLOAD_URL =

@@ -1,6 +1,6 @@
 {
   "name": "inspiretech-companion",
-  "version": "0.3.10",
+  "version": "0.3.11",
   "private": true,
   "description": "InspireTech desktop app — virtual camera + virtual audio for calling apps",
   "main": "main.js",
@@ -9,6 +9,7 @@
     "start": "electron .",
     "dev": "cross-env INSPIRETECH_DEV=1 electron .",
     "prepare:drivers": "node scripts/prepare-drivers.js",
+    "build:unity-capture": "node scripts/build-unity-capture.js",
     "clean": "node scripts/clean-dist.js",
     "build:web": "npm run build --prefix .. -- --mode production",
     "build:feeder": "pyinstaller virtualcam-feeder.spec --distpath resources/feeder --workpath build/feeder --noconfirm",
@@ -62,7 +63,7 @@
         "to": "feeder/audio_feeder.exe"
       },
       {
-        "from": "resources/drivers/unity-capture",
+        "from": "resources/drivers/unity-capture-bundle",
         "to": "drivers/unity-capture",
         "filter": ["**/*"]
       },

@@ -29,6 +29,7 @@ aivideo-companion/dist-electron-stale-*/
 aivideo-companion/build/
 aivideo-companion/resources/feeder/
 aivideo-companion/resources/drivers/unity-capture/
+aivideo-companion/resources/drivers/unity-capture-bundle/
 aivideo-companion/resources/drivers/unity-capture-src/
 aivideo-companion/resources/drivers/vb-cable/*.exe
 

@@ -74,6 +74,11 @@ function getAudioFeederCommand() {
 }
 
 function getUnityCaptureInstallDir() {
+  const bundledPortrait = getDriversPath("unity-capture-bundle");
+  if (fs.existsSync(path.join(bundledPortrait, "UnityCaptureFilter64.dll"))) {
+    return bundledPortrait;
+  }
+
   const bundled = getDriversPath("unity-capture");
   if (fs.existsSync(path.join(bundled, "UnityCaptureFilter64.dll"))) {
     return bundled;
