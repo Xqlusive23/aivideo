@@ -195,7 +195,7 @@ function getCallLayoutNote(layoutKey = DEFAULT_CALL_OUTPUT_LAYOUT) {
     case "landscape":
       return "Standard 1280×720 view for Zoom, Telegram, Discord, and other horizontal calls.";
     case "portrait":
-      return "Native 720×1280 portrait for WhatsApp mobile. Reinstall InspireTech Camera after updating the desktop app if portrait still letterboxes.";
+      return "Native 720×1280 portrait for WhatsApp mobile. After updating the app, open Drivers → Reinstall InspireTech Camera once.";
     default:
       return "";
   }
@@ -414,6 +414,7 @@ export default function App() {
   const [gateSetupMessage, setGateSetupMessage] = useState("");
   const [driverSetupFailed, setDriverSetupFailed] = useState(false);
   const [driverSetupBusy, setDriverSetupBusy] = useState(false);
+  const [driverCameraInstalled, setDriverCameraInstalled] = useState(null);
   const [appUpdateOpen, setAppUpdateOpen] = useState(false);
   const [appUpdateInfo, setAppUpdateInfo] = useState(null);
   const [appUpdatePhase, setAppUpdatePhase] = useState("available");
@@ -425,7 +426,7 @@ export default function App() {
 
   const isCompanionApp = () =>
     typeof window !== "undefined" && Boolean(window.inspiretechCompanion?.isDesktop);
-  const useCompanionShell = () => false;
+  const companionShell = isCompanionApp();
 
   const getClientId = () => {
     const storageKey = "inspiretech_client_id";
@@ -735,6 +736,20 @@ export default function App() {
       cancelled = true;
     };
   }, [accessToken, sessionReady]);
+
+  useEffect(() => {
+    if (!isCompanionApp()) return undefined;
+    let cancelled = false;
+    window.inspiretechCompanion
+      ?.getSetupStatus?.()
+      .then((status) => {
+        if (!cancelled && status) setDriverCameraInstalled(status.cameraInstalled);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [driverSetupBusy, driverSetupFailed]);
 
   // Desktop app: check GitHub / electron-updater for a newer shell build.
   useEffect(() => {
@@ -1334,8 +1349,9 @@ export default function App() {
 
     // Gate checkbox is the explicit user choice; saved state only applies on background retries.
     const skipAudio = fromGate ? skipVirtualMic : status.skipVirtualAudio;
-    const needsCamera = !status.cameraInstalled;
-    const needsAudio = status.vbCableBundled && !status.audioInstalled && !skipAudio;
+    const needsCamera = forceReinstall || !status.cameraInstalled;
+    const needsAudio =
+      status.vbCableBundled && !skipAudio && (forceReinstall || !status.audioInstalled);
 
     if (!needsCamera && !needsAudio) {
       if (!status.setupComplete && companion.completeSetup) {
@@ -1372,6 +1388,27 @@ export default function App() {
     try {
       setStatus("RETRYING DRIVER SETUP — APPROVE UAC");
       await runCompanionDriverSetup({ forceReinstall: true, fromGate: false });
+      const status = await window.inspiretechCompanion.getSetupStatus();
+      setDriverCameraInstalled(status?.cameraInstalled ?? null);
+      setStatus("SYSTEM STANDBY");
+    } catch (err) {
+      setDriverSetupFailed(true);
+      setStatus(`DRIVER SETUP FAILED: ${err.message}`);
+    } finally {
+      setDriverSetupBusy(false);
+    }
+  };
+
+  const reinstallCompanionCamera = async () => {
+    if (driverSetupBusy || !isCompanionApp()) return;
+    setDriverSetupBusy(true);
+    setTokenError("");
+    try {
+      setStatus("REINSTALLING CAMERA — APPROVE UAC");
+      await runCompanionDriverSetup({ forceReinstall: true, fromGate: false, skipVirtualMic: true });
+      const status = await window.inspiretechCompanion.getSetupStatus();
+      setDriverCameraInstalled(status?.cameraInstalled ?? null);
+      setDriverSetupFailed(false);
       setStatus("SYSTEM STANDBY");
     } catch (err) {
       setDriverSetupFailed(true);
@@ -2975,7 +3012,6 @@ export default function App() {
 
   const creditPercent = Math.min(100, (credits / 1000) * 100); // 1,000 credits ≈ the smallest top-up tier now
   const isLowCredit = credits <= LOW_CREDIT_THRESHOLD;
-  const companionShell = useCompanionShell();
   const companionSectionClass = (section) =>
     companionShell && companionNavSection !== section ? "itc-companion-hidden" : "";
 
@@ -3508,23 +3544,40 @@ export default function App() {
                   <span>🖥️</span> Virtual drivers
                 </div>
                 <div style={styles.compatNote}>
-                  <strong>Calling app setup:</strong> Camera → <strong>InspireTech Camera</strong>.
+                  <strong>InspireTech Camera</strong>{" "}
+                  {driverCameraInstalled == null
+                    ? "— checking…"
+                    : driverCameraInstalled
+                    ? "is installed"
+                    : "is not installed"}
+                  . Pick it as your camera in calling apps. Portrait mode needs the v0.3.11+ driver — reinstall after updating.
+                </div>
+                <div style={styles.compatNote}>
                   {routeAudioToVirtualCable
-                    ? " Microphone → CABLE Output (VB-Audio Virtual Cable)."
-                    : " Use your physical mic unless VB-CABLE routing is enabled under Devices."}
+                    ? "Microphone → CABLE Output (VB-Audio Virtual Cable)."
+                    : "Use your physical mic unless VB-CABLE routing is enabled under Devices."}
                   {" "}WhatsApp Desktop cannot see InspireTech Camera — use Telegram, Discord, or WhatsApp Web.
                 </div>
-                {driverSetupFailed && (
+                <div style={styles.buttonStack}>
                   <button
                     type="button"
                     className="itc-btn itc-btn-primary"
-                    style={{ marginTop: "12px", width: "100%" }}
                     disabled={driverSetupBusy}
-                    onClick={retryCompanionDriverSetup}
+                    onClick={reinstallCompanionCamera}
                   >
-                    {driverSetupBusy ? "Retrying drivers…" : "Retry driver install"}
+                    {driverSetupBusy ? "Installing camera driver…" : "Reinstall InspireTech Camera"}
                   </button>
-                )}
+                  {driverSetupFailed && (
+                    <button
+                      type="button"
+                      className="itc-btn itc-btn-secondary"
+                      disabled={driverSetupBusy}
+                      onClick={retryCompanionDriverSetup}
+                    >
+                      Retry full driver setup
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
           )}
