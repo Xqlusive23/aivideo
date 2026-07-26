@@ -97,7 +97,7 @@ const formatUsdFromCredits = (creditAmount) =>
 const VOICE_CHUNK_MS = 500;
 const MOBILE_LAYOUT_MAX_WIDTH = 900;
 const DEFAULT_TRANSFORMATION_PROMPT =
-  "Substitute the character in the video with the person in the reference image.";
+  "Substitute the character in the video with the person in the reference image, using their full body, clothing, hair, skin tone, and overall appearance from the reference.";
 const CHARACTER_WITH_REF_PROMPT = DEFAULT_TRANSFORMATION_PROMPT;
 const CHARACTER_SWAP_PATTERN =
   /substitute the character|replace the character|transform into this character|person in the reference image|character from the reference image|with this character/i;
@@ -2269,12 +2269,12 @@ export default function App() {
     }
   };
 
-  const pushDecartBackgroundState = async (session, sourcePrompt) => {
-    const promptText = composeBackgroundOnlyPrompt(sourcePrompt);
+  const pushDecartLayeredState = async (session, sourcePrompt) => {
+    const promptText = composeLayeredPrompt(sourcePrompt, true);
     const useEnhance = getDecartEnhance(sourcePrompt);
     const imagePayload = referenceImageRefId.current || selectedFile;
 
-    console.info("[InspireTech] Decart background prompt →", { promptText, enhance: useEnhance });
+    console.info("[InspireTech] Decart layered prompt →", { promptText, enhance: useEnhance });
 
     await session.set({ prompt: promptText, image: imagePayload, enhance: useEnhance });
   };
@@ -2296,7 +2296,7 @@ export default function App() {
 
   const pushDecartState = async (session, sourcePrompt) => {
     if (hasBackgroundIntent(sourcePrompt) && selectedFile) {
-      await pushDecartBackgroundState(session, sourcePrompt);
+      await pushDecartLayeredState(session, sourcePrompt);
       return;
     }
 
@@ -2335,15 +2335,16 @@ export default function App() {
       tick();
     });
 
-  const applyBackgroundAfterCharacter = async (session, sourcePrompt) => {
+  const applyLayeredSceneAfterCharacter = async (session, sourcePrompt) => {
     if (!hasBackgroundIntent(sourcePrompt)) return;
-    setStatus("APPLYING SCENE BACKGROUND…");
+    setStatus("APPLYING CHARACTER + SCENE…");
     const generating = await waitForDecartGenerating(session);
     if (!generating) {
       await new Promise((resolve) => setTimeout(resolve, 1500));
     }
     if (realtimeClientRef.current !== session || !session.isConnected?.()) return;
-    await pushDecartBackgroundState(session, sourcePrompt);
+    // Layered prompt keeps full reference-body swap while replacing the room.
+    await pushDecartLayeredState(session, sourcePrompt);
   };
 
   const handleDecartSessionFault = (err, label = "Decart session error") => {
@@ -2536,11 +2537,11 @@ export default function App() {
 
       if (wantsBackground) {
         try {
-          await applyBackgroundAfterCharacter(session, sourcePrompt);
-          setPromptApplyNote("Character locked — scene background applied.");
+          await applyLayeredSceneAfterCharacter(session, sourcePrompt);
+          setPromptApplyNote("Full character + scene applied.");
         } catch (err) {
-          console.error("Background apply failed after connect:", err);
-          setPromptApplyNote(err?.message || "Background apply failed — try Apply again.");
+          console.error("Layered scene apply failed after connect:", err);
+          setPromptApplyNote(err?.message || "Scene apply failed — try Apply again.");
         }
       }
 
@@ -2603,7 +2604,7 @@ export default function App() {
           <p className="itc-prompt-dock-subtitle">
             {isMobileLayout
               ? "Set character + scene before Start. While live, open Show setup to edit and Apply."
-              : "Character locks from your reference photo on Start. Pick a scene preset or describe the background — Apply swaps the room without touching your character."}
+              : "Character locks from your reference on Start, then scene + full body apply together. Use presets or type a background, then Apply to switch while live."}
           </p>
         </div>
         <label className="itc-prompt-enhance-toggle">
