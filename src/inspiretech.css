@@ -1995,28 +1995,6 @@ body {
   background: #000 !important;
 }
 
-.itc-app.itc-mobile-theater.itc-call-output-full .itc-fixed-output video {
-  object-fit: cover !important;
-}
-
-.itc-app.itc-mobile-theater.itc-call-output-portrait .itc-fixed-output video {
-  object-fit: cover !important;
-}
-
-.itc-app.itc-mobile-theater.itc-call-output-portrait .itc-fixed-output {
-  width: min(100vw, calc(100dvh * 9 / 16)) !important;
-  height: 100dvh !important;
-  height: 100svh !important;
-  margin: 0 auto;
-}
-
-.itc-call-layout-note {
-  margin: 6px 0 0;
-  font-size: 0.6875rem;
-  line-height: 1.4;
-  color: var(--itc-text-muted);
-}
-
 .itc-mobile-theater-tap-layer {
   display: none;
 }

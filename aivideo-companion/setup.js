@@ -251,11 +251,11 @@ New-Item -ItemType Directory -Force -Path $stage | Out-Null
 
 $regsvr64 = Join-Path $env:SystemRoot 'System32\\regsvr32.exe'
 $regsvr32 = Join-Path $env:SystemRoot 'SysWOW64\\regsvr32.exe'
-$nameArg = '/i:UnityCaptureName=InspireTech Camera'
 
 function Unregister-Dll($regsvr, $dll) {
   if (-not (Test-Path $regsvr) -or -not (Test-Path $dll)) { return }
-  Start-Process -FilePath $regsvr -ArgumentList @('/s', '/u', $dll) -Wait -PassThru -WindowStyle Hidden | Out-Null
+  $p = Start-Process -FilePath $regsvr -ArgumentList @('/s', '/u', $dll) -Wait -PassThru -WindowStyle Hidden
+  if ($null -eq $p) { exit ${UAC_CANCELLED_EXIT_CODE} }
 }
 
 $old64 = Join-Path $stage 'UnityCaptureFilter64.dll'
@@ -268,16 +268,15 @@ Get-ChildItem -LiteralPath $pending | ForEach-Object {
   Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $stage $_.Name) -Force
 }
 
-Get-ChildItem -LiteralPath $stage -Filter 'UnityCaptureFilter*.dll' | Unblock-File -ErrorAction SilentlyContinue
-
-$dll64 = Join-Path $stage 'UnityCaptureFilter64.dll'
-$dll32 = Join-Path $stage 'UnityCaptureFilter32.dll'
-$p64 = Start-Process -FilePath $regsvr64 -ArgumentList @('/s', $dll64, $nameArg) -Wait -PassThru -WindowStyle Hidden
-if ($p64.ExitCode -ne 0) { exit $p64.ExitCode }
-if ((Test-Path $regsvr32) -and (Test-Path $dll32)) {
-  Start-Process -FilePath $regsvr32 -ArgumentList @('/s', $dll32, $nameArg) -Wait -PassThru -WindowStyle Hidden | Out-Null
+$bat = Join-Path $stage 'InstallInspireTech.bat'
+if (-not (Test-Path -LiteralPath $bat)) {
+  Write-Error "Missing InstallInspireTech.bat"
+  exit 1
 }
-exit 0
+
+$p = Start-Process -FilePath $env:ComSpec -ArgumentList @('/c', $bat) -WorkingDirectory $stage -Wait -PassThru -WindowStyle Hidden
+if ($null -eq $p) { exit ${UAC_CANCELLED_EXIT_CODE} }
+exit $p.ExitCode
 `.trim();
 
   fs.writeFileSync(ps1Path, ps1Content, "utf8");

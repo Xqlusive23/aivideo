@@ -98,23 +98,6 @@ const VOICE_CHUNK_MS = 500;
 const MOBILE_LAYOUT_MAX_WIDTH = 900;
 const VIRTUAL_CAM_WIDTH = 1280;
 const VIRTUAL_CAM_HEIGHT = 720;
-const PORTRAIT_CAM_WIDTH = 720;
-const PORTRAIT_CAM_HEIGHT = 1280;
-const CALL_OUTPUT_LAYOUTS = {
-  landscape: {
-    label: "Landscape",
-    width: VIRTUAL_CAM_WIDTH,
-    height: VIRTUAL_CAM_HEIGHT,
-    fit: "contain",
-  },
-  portrait: {
-    label: "Portrait",
-    width: PORTRAIT_CAM_WIDTH,
-    height: PORTRAIT_CAM_HEIGHT,
-    fit: "cover",
-  },
-};
-const DEFAULT_CALL_OUTPUT_LAYOUT = "landscape";
 const COMPANION_TOOLBAR_SECTIONS = [
   { id: "studio", label: "Studio", icon: "🎬" },
   { id: "credits", label: "Credits", icon: "💳" },
@@ -122,12 +105,6 @@ const COMPANION_TOOLBAR_SECTIONS = [
   { id: "account", label: "Account", icon: "⚙️" },
 ];
 const COMPANION_STUDIO_SECTIONS = new Set(["devices", "studio", "voice"]);
-
-function normalizeCallOutputLayout(layoutKey) {
-  if (layoutKey === "landscape" || layoutKey === "portrait") return layoutKey;
-  if (String(layoutKey || "").startsWith("portrait")) return "portrait";
-  return "landscape";
-}
 
 function isMobileUserAgent() {
   if (typeof navigator === "undefined") return false;
@@ -159,15 +136,6 @@ function drawVideoFrame(ctx, video, destWidth, destHeight, fit = "cover") {
 
   if (fit === "stretch") {
     ctx.drawImage(video, 0, 0, destWidth, destHeight);
-    return;
-  }
-
-  if (fit === "portrait-fill") {
-    const cropW = srcH * (9 / 16);
-    const cropH = srcH;
-    const sx = Math.max(0, (srcW - cropW) / 2);
-    const sy = 0;
-    ctx.drawImage(video, sx, sy, cropW, cropH, 0, 0, destWidth, destHeight);
     return;
   }
 
@@ -212,21 +180,6 @@ function drawVideoFrame(ctx, video, destWidth, destHeight, fit = "cover") {
   ctx.drawImage(video, sx, sy, sw, sh, 0, 0, destWidth, destHeight);
 }
 
-function getCallOutputLayoutConfig(layoutKey = DEFAULT_CALL_OUTPUT_LAYOUT) {
-  const key = normalizeCallOutputLayout(layoutKey);
-  return CALL_OUTPUT_LAYOUTS[key];
-}
-
-function getCallLayoutNote(layoutKey = DEFAULT_CALL_OUTPUT_LAYOUT) {
-  switch (normalizeCallOutputLayout(layoutKey)) {
-    case "landscape":
-      return "Standard 1280×720 view for Zoom, Telegram, Discord, and other horizontal calls.";
-    case "portrait":
-      return "Native 720×1280 portrait for WhatsApp mobile. After updating, use the Drivers toolbar tab → Reinstall InspireTech Camera once.";
-    default:
-      return "";
-  }
-}
 const DEFAULT_TRANSFORMATION_PROMPT =
   "Substitute the character in the video with the person in the reference image, matching their full appearance exactly as shown in the reference — including clothing, outfit, hat, hair, skin tone, and body shape.";
 const CHARACTER_WITH_REF_PROMPT = DEFAULT_TRANSFORMATION_PROMPT;
@@ -397,15 +350,6 @@ export default function App() {
       return false;
     }
   });
-  const [callOutputLayout, setCallOutputLayout] = useState(() => {
-    try {
-      const saved = window.localStorage.getItem("inspiretech_call_output_layout");
-      return normalizeCallOutputLayout(saved);
-    } catch {
-      return DEFAULT_CALL_OUTPUT_LAYOUT;
-    }
-  });
-  const callOutputLayoutRef = useRef(callOutputLayout);
   const [cameraActive, setCameraActive] = useState(false);
   const [mirrorLocalPreview, setMirrorLocalPreview] = useState(false);
   const selectedVideoDeviceIdRef = useRef("");
@@ -666,14 +610,7 @@ export default function App() {
     return () => mediaDevices.removeEventListener("devicechange", refreshMediaDevices);
   }, []);
 
-  const applyCallOutputLayout = !isMobileLayout && !isMobileUserAgent();
   const shouldMirrorWebcam = isMobileLayout || isMobileUserAgent();
-
-  useEffect(() => {
-    callOutputLayoutRef.current = applyCallOutputLayout
-      ? callOutputLayout
-      : DEFAULT_CALL_OUTPUT_LAYOUT;
-  }, [callOutputLayout, applyCallOutputLayout]);
 
   useEffect(() => {
     if (!selectedFile) setUseReferenceBackground(false);
@@ -890,8 +827,7 @@ export default function App() {
       if (!outputVideoRef.current || !ctx) return;
       if (now - lastFrameTime >= frameIntervalMs) {
         lastFrameTime = now;
-        const layout = getCallOutputLayoutConfig(callOutputLayoutRef.current);
-        drawVideoFrame(ctx, outputVideoRef.current, canvas.width, canvas.height, layout.fit);
+        drawVideoFrame(ctx, outputVideoRef.current, canvas.width, canvas.height, "cover");
         const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
         window.inspireTechDesktop.sendFrame(imageData.data.buffer);
       }
@@ -901,9 +837,8 @@ export default function App() {
     const startCapture = async () => {
       const video = outputVideoRef.current;
       if (!video) return;
-      const layout = getCallOutputLayoutConfig(callOutputLayoutRef.current);
-      const width = layout.width;
-      const height = layout.height;
+      const width = VIRTUAL_CAM_WIDTH;
+      const height = VIRTUAL_CAM_HEIGHT;
 
       await window.inspireTechDesktop.startVirtualCam(width, height, TARGET_FPS);
 
@@ -930,7 +865,7 @@ export default function App() {
     }
 
     return () => stopCapture();
-  }, [isRunning, callOutputLayout, applyCallOutputLayout]);
+  }, [isRunning]);
 
   // Keep the button label in sync if the user closes the PiP window
   // directly (its own native close control) rather than clicking our button.
@@ -1282,14 +1217,11 @@ export default function App() {
   const COMPANION_CAPTURE_FPS = 20; // must match virtualcam_feeder.py's --fps
   useEffect(() => {
     if (typeof window === "undefined" || !window.inspiretechCompanion?.configureVirtualCam) return;
-    const layout = getCallOutputLayoutConfig(
-      applyCallOutputLayout ? callOutputLayout : DEFAULT_CALL_OUTPUT_LAYOUT
-    );
     void window.inspiretechCompanion.configureVirtualCam({
-      width: layout.width,
-      height: layout.height,
+      width: VIRTUAL_CAM_WIDTH,
+      height: VIRTUAL_CAM_HEIGHT,
     });
-  }, [callOutputLayout, applyCallOutputLayout]);
+  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined" || !window.inspiretechCompanion) return;
@@ -1301,19 +1233,18 @@ export default function App() {
       return;
     }
 
-    const layout = getCallOutputLayoutConfig(callOutputLayoutRef.current);
     const canvas = companionCanvasRef.current || document.createElement("canvas");
     companionCanvasRef.current = canvas;
-    canvas.width = layout.width;
-    canvas.height = layout.height;
+    canvas.width = VIRTUAL_CAM_WIDTH;
+    canvas.height = VIRTUAL_CAM_HEIGHT;
     const ctx = canvas.getContext("2d", { willReadFrequently: true });
     let cancelled = false;
 
     const beginCapture = async () => {
       if (window.inspiretechCompanion.configureVirtualCam) {
         await window.inspiretechCompanion.configureVirtualCam({
-          width: layout.width,
-          height: layout.height,
+          width: VIRTUAL_CAM_WIDTH,
+          height: VIRTUAL_CAM_HEIGHT,
         });
       }
       if (cancelled) return;
@@ -1321,12 +1252,7 @@ export default function App() {
       companionCaptureIntervalRef.current = setInterval(() => {
         const video = outputVideoRef.current;
         if (!video || !video.videoWidth) return;
-        const activeLayout = getCallOutputLayoutConfig(callOutputLayoutRef.current);
-        if (canvas.width !== activeLayout.width || canvas.height !== activeLayout.height) {
-          canvas.width = activeLayout.width;
-          canvas.height = activeLayout.height;
-        }
-        drawVideoFrame(ctx, video, canvas.width, canvas.height, activeLayout.fit);
+        drawVideoFrame(ctx, video, canvas.width, canvas.height, "cover");
         const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
         window.inspiretechCompanion.sendFrame(imageData.data.buffer);
       }, 1000 / COMPANION_CAPTURE_FPS);
@@ -1341,7 +1267,7 @@ export default function App() {
         companionCaptureIntervalRef.current = null;
       }
     };
-  }, [isRunning, callOutputLayout, applyCallOutputLayout]);
+  }, [isRunning]);
 
   // Single place that handles "the server no longer accepts this token" —
   // covers both an invalid token (401) and a revoked one (403). Always safe
@@ -2478,16 +2404,6 @@ export default function App() {
     }
   };
 
-  const handleCallOutputLayoutChange = (layoutKey) => {
-    if (!CALL_OUTPUT_LAYOUTS[layoutKey]) return;
-    setCallOutputLayout(layoutKey);
-    try {
-      window.localStorage.setItem("inspiretech_call_output_layout", layoutKey);
-    } catch {
-      // ignore storage failures
-    }
-  };
-
   const handleRouteVirtualAudioChange = (enabled) => {
     setRouteAudioToVirtualCable(enabled);
     try {
@@ -3112,13 +3028,11 @@ export default function App() {
     );
   }
 
-  const callOutputIsPortrait = applyCallOutputLayout && callOutputLayout === "portrait";
-
   return (
     <>
     <div
       style={styles.appContainer}
-      className={`itc-app${isMobileLayout ? " itc-app-mobile" : ""}${mobileOutputFocus ? " itc-mobile-theater" : ""}${callOutputIsPortrait ? " itc-call-output-full itc-call-output-portrait" : ""}${isMobileLayout && !mobileControlsOpen ? " itc-mobile-sidebar-collapsed" : ""}`}
+      className={`itc-app${isMobileLayout ? " itc-app-mobile" : ""}${mobileOutputFocus ? " itc-mobile-theater" : ""}${isMobileLayout && !mobileControlsOpen ? " itc-mobile-sidebar-collapsed" : ""}`}
     >
       <header className={`itc-top-header${companionToolbar ? " itc-top-header-companion" : ""}`}>
         <div className="itc-header-brand">
@@ -3247,25 +3161,6 @@ export default function App() {
                 ))}
               </select>
             </div>
-            {applyCallOutputLayout && (
-            <div style={styles.voiceSelectGroup}>
-              <label className="itc-studio-label" style={styles.paramLabel}>Call video layout</label>
-              <select
-                value={callOutputLayout}
-                onChange={(e) => handleCallOutputLayoutChange(e.target.value)}
-                disabled={isRunning}
-                style={styles.voiceSelect}
-                className="itc-select"
-              >
-                {Object.entries(CALL_OUTPUT_LAYOUTS).map(([key, layout]) => (
-                  <option key={key} value={key}>
-                    {layout.label}
-                  </option>
-                ))}
-              </select>
-              <p className="itc-call-layout-note">{getCallLayoutNote(callOutputLayout)}</p>
-            </div>
-            )}
             {typeof window !== "undefined" && window.inspiretechCompanion && (
               <div style={styles.parameterRow} className="itc-parameter-row">
                 <label className="itc-studio-label" style={styles.paramLabel}>
@@ -3294,11 +3189,6 @@ export default function App() {
                 {routeAudioToVirtualCable
                   ? " Microphone → CABLE Output (VB-Audio Virtual Cable) when routing voice to calls."
                   : " Use your normal physical microphone in calling apps unless you enable VB-CABLE routing above."}
-                {applyCallOutputLayout && (
-                  <>
-                    {" "}Pick <strong>Portrait</strong> for WhatsApp mobile vertical calls, or <strong>Landscape</strong> for desktop apps.
-                  </>
-                )}
                 {" "}WhatsApp Desktop cannot see InspireTech Camera — use Telegram/Discord or WhatsApp Web.
               </div>
             )}
@@ -3558,7 +3448,7 @@ export default function App() {
                     : driverCameraInstalled
                     ? "is installed"
                     : "is not installed"}
-                  . Pick it as your camera in calling apps. Portrait mode needs the v0.3.11+ driver — reinstall after updating.
+                  . Pick it as your camera in calling apps (Zoom, Telegram, Discord, WhatsApp Web).
                 </div>
                 <div style={styles.compatNote}>
                   {routeAudioToVirtualCable
