@@ -149,12 +149,16 @@ function normalizeBackgroundClause(text) {
   return `Change the background to ${clause}.`;
 }
 
+function composeBackgroundOnlyPrompt(userText) {
+  return normalizeBackgroundClause(userText);
+}
+
 function composeLayeredPrompt(userText, hasReferenceImage = true) {
   const trimmed = String(userText || "").trim();
   if (!hasReferenceImage) return composeTransformationPrompt(trimmed, false);
-  const backgroundClause = normalizeBackgroundClause(trimmed);
-  // Decart Lucy 2.5: one sentence per edit layer — character + background together.
-  return `${CHARACTER_WITH_REF_PROMPT} ${backgroundClause}`;
+  const backgroundClause = composeBackgroundOnlyPrompt(trimmed);
+  // Decart layered edits: background sentence first, then character from reference.
+  return `${backgroundClause} ${CHARACTER_WITH_REF_PROMPT}`;
 }
 
 function composeTransformationPrompt(userText, hasReferenceImage = true) {
@@ -185,12 +189,6 @@ function composeTransformationPrompt(userText, hasReferenceImage = true) {
 function shouldEnhanceDecartPrompt(_userText, enhanceEnabled) {
   // Lucy 2.5 expects enhance on — it rewrites prompts into Decart's structured format.
   return enhanceEnabled !== false;
-}
-
-function shouldDisableDecartSelfAnchor(sourcePrompt, hasReferenceImage) {
-  // Self-anchoring reuses recent generated frames and keeps the old room visible when backgrounds change.
-  // Decart docs: disable it when the scene should change significantly (background swaps).
-  return hasBackgroundIntent(sourcePrompt) || hasReferenceImage;
 }
 
 // Real-time voice conversion server (voice-rt-server on RunPod) — a
@@ -2271,7 +2269,37 @@ export default function App() {
     }
   };
 
+  const pushDecartBackgroundState = async (session, sourcePrompt) => {
+    const promptText = composeBackgroundOnlyPrompt(sourcePrompt);
+    const useEnhance = getDecartEnhance(sourcePrompt);
+    const imagePayload = referenceImageRefId.current || selectedFile;
+
+    console.info("[InspireTech] Decart background prompt →", { promptText, enhance: useEnhance });
+
+    await session.set({ prompt: promptText, image: imagePayload, enhance: useEnhance });
+  };
+
+  const pushDecartCharacterState = async (session, sourcePrompt) => {
+    const hasRef = Boolean(selectedFile);
+    const promptText = CHARACTER_WITH_REF_PROMPT;
+    const useEnhance = getDecartEnhance(sourcePrompt);
+    const imagePayload = referenceImageRefId.current || selectedFile;
+
+    console.info("[InspireTech] Decart character prompt →", { promptText, enhance: useEnhance });
+
+    if (hasRef) {
+      await session.set({ prompt: promptText, image: imagePayload, enhance: useEnhance });
+    } else {
+      await session.set({ prompt: promptText, enhance: useEnhance });
+    }
+  };
+
   const pushDecartState = async (session, sourcePrompt) => {
+    if (hasBackgroundIntent(sourcePrompt) && selectedFile) {
+      await pushDecartBackgroundState(session, sourcePrompt);
+      return;
+    }
+
     const hasRef = Boolean(selectedFile);
     const promptText = composeTransformationPrompt(sourcePrompt, hasRef);
     const useEnhance = getDecartEnhance(sourcePrompt);
@@ -2284,6 +2312,38 @@ export default function App() {
     } else {
       await session.set({ prompt: promptText, enhance: useEnhance });
     }
+  };
+
+  const waitForDecartGenerating = (session, timeoutMs = 8000) =>
+    new Promise((resolve) => {
+      const started = Date.now();
+      const tick = () => {
+        if (!session?.isConnected?.()) {
+          resolve(false);
+          return;
+        }
+        if (session.getConnectionState?.() === "generating") {
+          resolve(true);
+          return;
+        }
+        if (Date.now() - started >= timeoutMs) {
+          resolve(false);
+          return;
+        }
+        setTimeout(tick, 250);
+      };
+      tick();
+    });
+
+  const applyBackgroundAfterCharacter = async (session, sourcePrompt) => {
+    if (!hasBackgroundIntent(sourcePrompt)) return;
+    setStatus("APPLYING SCENE BACKGROUND…");
+    const generating = await waitForDecartGenerating(session);
+    if (!generating) {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+    }
+    if (realtimeClientRef.current !== session || !session.isConnected?.()) return;
+    await pushDecartBackgroundState(session, sourcePrompt);
   };
 
   const handleDecartSessionFault = (err, label = "Decart session error") => {
@@ -2420,23 +2480,22 @@ export default function App() {
       const client = createDecartClient({ apiKey: MY_DECART_KEY });
       const realtimeModel = getRealtimeModel();
       const sourcePrompt = getPromptText();
-      const connectPrompt = composeTransformationPrompt(sourcePrompt, true);
+      const wantsBackground = hasBackgroundIntent(sourcePrompt);
+      const connectPrompt = wantsBackground ? CHARACTER_WITH_REF_PROMPT : composeTransformationPrompt(sourcePrompt, true);
       const connectEnhance = getDecartEnhance(sourcePrompt);
-      const disableSelfAnchor = shouldDisableDecartSelfAnchor(sourcePrompt, true);
       const referenceImage = await resolveReferenceImage(client);
 
       console.info("[InspireTech] Decart connect →", {
         connectPrompt,
         enhance: connectEnhance,
-        selfAnchor: disableSelfAnchor ? "false" : "default",
-        hasBackground: hasBackgroundIntent(sourcePrompt),
+        wantsBackground,
+        strategy: wantsBackground ? "character-first then background-only set()" : "single prompt",
       });
 
       const session = await client.realtime.connect(streamForDecart, {
         model: realtimeModel,
         mirror: "auto",
         resolution: "720p",
-        ...(disableSelfAnchor ? { queryParams: { self_anchor: "false" } } : {}),
         onRemoteStream: (remoteStream) => {
           const video = outputVideoRef.current;
           if (!video) return;
@@ -2473,6 +2532,16 @@ export default function App() {
         setIsRunning(false);
         stopActiveVoicePipeline();
         return;
+      }
+
+      if (wantsBackground) {
+        try {
+          await applyBackgroundAfterCharacter(session, sourcePrompt);
+          setPromptApplyNote("Character locked — scene background applied.");
+        } catch (err) {
+          console.error("Background apply failed after connect:", err);
+          setPromptApplyNote(err?.message || "Background apply failed — try Apply again.");
+        }
       }
 
       setStatus("COMPUTE LINK ONLINE // REALTIME TRANSFORMATION TERMINAL");
@@ -2534,7 +2603,7 @@ export default function App() {
           <p className="itc-prompt-dock-subtitle">
             {isMobileLayout
               ? "Set character + scene before Start. While live, open Show setup to edit and Apply."
-              : "Character and background apply together on Start (Decart Lucy 2.5). Use presets or type a scene, then Apply to switch while live."}
+              : "Character locks from your reference photo on Start. Pick a scene preset or describe the background — Apply swaps the room without touching your character."}
           </p>
         </div>
         <label className="itc-prompt-enhance-toggle">
