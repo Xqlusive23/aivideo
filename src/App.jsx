@@ -100,13 +100,11 @@ const DEFAULT_TRANSFORMATION_PROMPT =
   "Substitute the character in the video with the person in the reference image.";
 const CHARACTER_WITH_REF_PROMPT = DEFAULT_TRANSFORMATION_PROMPT;
 const CHARACTER_SWAP_PATTERN =
-  /substitute the character|transform into this character|person in the reference image|character from the reference image|with this character/i;
+  /substitute the character|replace the character|transform into this character|person in the reference image|character from the reference image|with this character/i;
 const BACKGROUND_INTENT_PATTERN =
   /background|office|beach|studio|city|skyline|environment|room|setting|scene|backdrop|interior|outdoor|setup/i;
 const DEFAULT_BACKGROUND_PROMPT =
-  "Change the background to a bright modern office with desk, chair, window light, and soft afternoon shadows, with coworkers passing in the background and sunlight on the floor, filling every pixel behind and around the person including frame edges and corners.";
-const BACKGROUND_COMPLETION_SUFFIX =
-  "with soft natural lighting integrated into the scene, filling every pixel behind and around the person including frame edges and corners";
+  "Change the background to a bright modern office with desk, chair, window light, soft afternoon shadows, coworkers passing in the background, and sunlight on the floor.";
 const PROMPT_PRESETS = [
   {
     label: "Office",
@@ -146,20 +144,16 @@ function normalizeBackgroundClause(text) {
 
   if (!clause) return DEFAULT_BACKGROUND_PROMPT;
   if (/^change the background to/i.test(clause)) {
-    const base = clause.endsWith(".") ? clause.slice(0, -1) : clause;
-    if (/filling every pixel/i.test(base)) return `${base}.`;
-    return `${base}, ${BACKGROUND_COMPLETION_SUFFIX}.`;
+    return clause.endsWith(".") ? clause : `${clause}.`;
   }
-  return `Change the background to ${clause}, ${BACKGROUND_COMPLETION_SUFFIX}.`;
+  return `Change the background to ${clause}.`;
 }
 
 function composeLayeredPrompt(userText, hasReferenceImage = true) {
   const trimmed = String(userText || "").trim();
-  const wantsBackground = hasBackgroundIntent(trimmed);
   if (!hasReferenceImage) return composeTransformationPrompt(trimmed, false);
-  if (!wantsBackground) return CHARACTER_WITH_REF_PROMPT;
   const backgroundClause = normalizeBackgroundClause(trimmed);
-  // Character identity first, then full-scene background replacement.
+  // Decart Lucy 2.5: one sentence per edit layer — character + background together.
   return `${CHARACTER_WITH_REF_PROMPT} ${backgroundClause}`;
 }
 
@@ -168,13 +162,13 @@ function composeTransformationPrompt(userText, hasReferenceImage = true) {
   const wantsBackground = hasBackgroundIntent(trimmed);
 
   if (!hasReferenceImage) {
-    if (!trimmed) return DEFAULT_TRANSFORMATION_PROMPT;
+    if (!trimmed) return DEFAULT_BACKGROUND_PROMPT;
     if (wantsBackground) return normalizeBackgroundClause(trimmed);
     return trimmed;
   }
 
   if (!trimmed || trimmed === DEFAULT_TRANSFORMATION_PROMPT) {
-    return CHARACTER_WITH_REF_PROMPT;
+    return wantsBackground ? composeLayeredPrompt(trimmed || DEFAULT_BACKGROUND_PROMPT, true) : CHARACTER_WITH_REF_PROMPT;
   }
 
   if (wantsBackground) {
@@ -182,26 +176,21 @@ function composeTransformationPrompt(userText, hasReferenceImage = true) {
   }
 
   if (CHARACTER_SWAP_PATTERN.test(trimmed)) {
-    return trimmed;
+    return trimmed.endsWith(".") ? trimmed : `${trimmed}.`;
   }
 
   return `${CHARACTER_WITH_REF_PROMPT} ${trimmed.endsWith(".") ? trimmed : `${trimmed}.`}`;
 }
 
-function getConnectPrompt(hasReferenceImage) {
-  if (hasReferenceImage) return CHARACTER_WITH_REF_PROMPT;
-  return composeTransformationPrompt("", false);
+function shouldEnhanceDecartPrompt(_userText, enhanceEnabled) {
+  // Lucy 2.5 expects enhance on — it rewrites prompts into Decart's structured format.
+  return enhanceEnabled !== false;
 }
 
-function shouldEnhanceDecartPrompt(userText, enhanceEnabled) {
-  if (enhanceEnabled) return true;
-  const trimmed = String(userText || "").trim();
-  // Lucy 2.5 rewrites prompts (and reference context) into its structured format.
-  if (hasBackgroundIntent(trimmed)) return true;
-  if (!trimmed || trimmed === DEFAULT_TRANSFORMATION_PROMPT || CHARACTER_SWAP_PATTERN.test(trimmed)) {
-    return true;
-  }
-  return false;
+function shouldDisableDecartSelfAnchor(sourcePrompt, hasReferenceImage) {
+  // Self-anchoring reuses recent generated frames and keeps the old room visible when backgrounds change.
+  // Decart docs: disable it when the scene should change significantly (background swaps).
+  return hasBackgroundIntent(sourcePrompt) || hasReferenceImage;
 }
 
 // Real-time voice conversion server (voice-rt-server on RunPod) — a
@@ -223,7 +212,7 @@ export default function App() {
 
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
 
-  const [enhanceMask, setEnhanceMask] = useState(false);
+  const [enhanceMask, setEnhanceMask] = useState(true);
   const [transformationPrompt, setTransformationPrompt] = useState(DEFAULT_TRANSFORMATION_PROMPT);
   const [promptApplyBusy, setPromptApplyBusy] = useState(false);
   const [promptApplyNote, setPromptApplyNote] = useState("");
@@ -383,6 +372,8 @@ export default function App() {
   const fileInputRef = useRef(null);
   const localStreamRef = useRef(null);
   const realtimeClientRef = useRef(null);
+  const referenceImageRefId = useRef(null);
+  const referenceImageSourceRef = useRef(null);
   const fpsIntervalRef = useRef(null);
   const clockTimerRef = useRef(null); // the local 5-min UX countdown (not billing)
   const heartbeatTimerRef = useRef(null); // the real billing tick, talking to the server
@@ -2248,6 +2239,8 @@ export default function App() {
 
   const handleFileChange = (file) => {
     if (!file) return;
+    referenceImageRefId.current = null;
+    referenceImageSourceRef.current = file;
     setSelectedFile(file);
     const previewUrl = URL.createObjectURL(file);
     setImagePreview(previewUrl);
@@ -2261,48 +2254,36 @@ export default function App() {
   const getDecartEnhance = (sourcePrompt = getPromptText()) =>
     shouldEnhanceDecartPrompt(sourcePrompt, enhanceMask);
 
-  const waitForDecartGenerating = (session, timeoutMs = 6000) =>
-    new Promise((resolve) => {
-      const started = Date.now();
-      const tick = () => {
-        if (!session?.isConnected?.()) {
-          resolve(false);
-          return;
-        }
-        const state = session.getConnectionState?.();
-        if (state === "generating") {
-          resolve(true);
-          return;
-        }
-        if (Date.now() - started >= timeoutMs) {
-          resolve(false);
-          return;
-        }
-        setTimeout(tick, 250);
-      };
-      tick();
-    });
+  const resolveReferenceImage = async (client) => {
+    if (!selectedFile) return null;
+    if (referenceImageSourceRef.current !== selectedFile) {
+      referenceImageRefId.current = null;
+      referenceImageSourceRef.current = selectedFile;
+    }
+    if (referenceImageRefId.current) return referenceImageRefId.current;
+    try {
+      const uploaded = await client.files.upload(selectedFile, { ttlSeconds: "persistent" });
+      referenceImageRefId.current = uploaded.id;
+      return uploaded.id;
+    } catch (err) {
+      console.warn("[InspireTech] Reference image upload failed — using inline bytes", err);
+      return selectedFile;
+    }
+  };
 
   const pushDecartState = async (session, sourcePrompt) => {
     const hasRef = Boolean(selectedFile);
     const promptText = composeTransformationPrompt(sourcePrompt, hasRef);
-    const useEnhance = shouldEnhanceDecartPrompt(sourcePrompt, enhanceMask);
+    const useEnhance = getDecartEnhance(sourcePrompt);
+    const imagePayload = hasRef ? referenceImageRefId.current || selectedFile : null;
 
-    console.info("[InspireTech] Decart prompt →", { promptText, enhance: useEnhance });
+    console.info("[InspireTech] Decart prompt →", { promptText, enhance: useEnhance, hasRef });
 
     if (hasRef) {
-      await session.set({ prompt: promptText, image: selectedFile, enhance: useEnhance });
+      await session.set({ prompt: promptText, image: imagePayload, enhance: useEnhance });
     } else {
-      await session.setPrompt(promptText, { enhance: useEnhance });
+      await session.set({ prompt: promptText, enhance: useEnhance });
     }
-  };
-
-  const reinforceBackgroundPrompt = async (session, sourcePrompt) => {
-    if (!hasBackgroundIntent(sourcePrompt)) return;
-    await pushDecartState(session, sourcePrompt);
-    await new Promise((resolve) => setTimeout(resolve, 3500));
-    if (realtimeClientRef.current !== session || !session.isConnected?.()) return;
-    await pushDecartState(session, sourcePrompt);
   };
 
   const handleDecartSessionFault = (err, label = "Decart session error") => {
@@ -2329,11 +2310,7 @@ export default function App() {
     setPromptApplyBusy(true);
     setPromptApplyNote("");
     try {
-      if (hasBackgroundIntent(sourcePrompt)) {
-        await reinforceBackgroundPrompt(session, sourcePrompt);
-      } else {
-        await pushDecartState(session, sourcePrompt);
-      }
+      await pushDecartState(session, sourcePrompt);
       setPromptApplyNote("Prompt applied to the live stream.");
       setStatus("PROMPT UPDATED // LIVE TRANSFORMATION");
     } catch (err) {
@@ -2443,18 +2420,23 @@ export default function App() {
       const client = createDecartClient({ apiKey: MY_DECART_KEY });
       const realtimeModel = getRealtimeModel();
       const sourcePrompt = getPromptText();
-      const connectPrompt = getConnectPrompt(Boolean(selectedFile));
-      const connectEnhance = getDecartEnhance(CHARACTER_WITH_REF_PROMPT);
-      console.info("[InspireTech] Decart connect prompt →", {
+      const connectPrompt = composeTransformationPrompt(sourcePrompt, true);
+      const connectEnhance = getDecartEnhance(sourcePrompt);
+      const disableSelfAnchor = shouldDisableDecartSelfAnchor(sourcePrompt, true);
+      const referenceImage = await resolveReferenceImage(client);
+
+      console.info("[InspireTech] Decart connect →", {
         connectPrompt,
         enhance: connectEnhance,
-        pendingBackground: hasBackgroundIntent(sourcePrompt),
+        selfAnchor: disableSelfAnchor ? "false" : "default",
+        hasBackground: hasBackgroundIntent(sourcePrompt),
       });
 
       const session = await client.realtime.connect(streamForDecart, {
         model: realtimeModel,
-        mirror: "auto", // Decart's current docs recommend this over a hardcoded false/true
+        mirror: "auto",
         resolution: "720p",
+        ...(disableSelfAnchor ? { queryParams: { self_anchor: "false" } } : {}),
         onRemoteStream: (remoteStream) => {
           const video = outputVideoRef.current;
           if (!video) return;
@@ -2467,7 +2449,8 @@ export default function App() {
             text: connectPrompt,
             enhance: connectEnhance,
           },
-          image: selectedFile,
+          image: referenceImage,
+          passthrough: false,
         },
       });
 
@@ -2490,21 +2473,6 @@ export default function App() {
         setIsRunning(false);
         stopActiveVoicePipeline();
         return;
-      }
-
-      if (hasBackgroundIntent(sourcePrompt)) {
-        setStatus("ESTABLISHING CHARACTER, THEN BACKGROUND…");
-        const generating = await waitForDecartGenerating(session);
-        if (!generating) {
-          await new Promise((resolve) => setTimeout(resolve, 2000));
-        }
-        try {
-          await reinforceBackgroundPrompt(session, sourcePrompt);
-          setPromptApplyNote("Character + background prompt applied.");
-        } catch (err) {
-          console.error("Failed to apply layered prompt after connect:", err);
-          setPromptApplyNote(err?.message || "Layered prompt failed — try Apply again.");
-        }
       }
 
       setStatus("COMPUTE LINK ONLINE // REALTIME TRANSFORMATION TERMINAL");
@@ -2565,8 +2533,8 @@ export default function App() {
           <h3 className="itc-prompt-dock-title">Transformation prompt</h3>
           <p className="itc-prompt-dock-subtitle">
             {isMobileLayout
-              ? "Set a scene before Start. While live, open Show setup to edit and Apply."
-              : "Character loads first on Start; background presets apply once live. Both stay active together — click Apply to switch scenes."}
+              ? "Set character + scene before Start. While live, open Show setup to edit and Apply."
+              : "Character and background apply together on Start (Decart Lucy 2.5). Use presets or type a scene, then Apply to switch while live."}
           </p>
         </div>
         <label className="itc-prompt-enhance-toggle">
@@ -2577,7 +2545,7 @@ export default function App() {
             disabled={promptApplyBusy}
             className="itc-checkbox"
           />
-          <span>Enhance prompt (optional)</span>
+          <span>Enhance prompt (recommended)</span>
         </label>
       </div>
       <textarea
