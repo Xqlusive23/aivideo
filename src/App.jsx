@@ -101,32 +101,26 @@ const VIRTUAL_CAM_HEIGHT = 720;
 const PORTRAIT_CAM_WIDTH = 720;
 const PORTRAIT_CAM_HEIGHT = 1280;
 const CALL_OUTPUT_LAYOUTS = {
-  "landscape-full": {
-    label: "Landscape full screen (Zoom, Telegram desktop)",
-    width: VIRTUAL_CAM_WIDTH,
-    height: VIRTUAL_CAM_HEIGHT,
-    fit: "cover",
-  },
-  "landscape-fit": {
-    label: "Landscape fit (show entire frame, may letterbox)",
+  landscape: {
+    label: "Landscape",
     width: VIRTUAL_CAM_WIDTH,
     height: VIRTUAL_CAM_HEIGHT,
     fit: "contain",
   },
-  "portrait-full": {
-    label: "Portrait full screen (WhatsApp mobile, vertical calls)",
+  portrait: {
+    label: "Portrait",
     width: PORTRAIT_CAM_WIDTH,
     height: PORTRAIT_CAM_HEIGHT,
     fit: "cover",
-  },
-  "portrait-fit": {
-    label: "Portrait fit (show entire frame, may letterbox)",
-    width: PORTRAIT_CAM_WIDTH,
-    height: PORTRAIT_CAM_HEIGHT,
-    fit: "contain",
   },
 };
-const DEFAULT_CALL_OUTPUT_LAYOUT = "landscape-full";
+const DEFAULT_CALL_OUTPUT_LAYOUT = "landscape";
+
+function normalizeCallOutputLayout(layoutKey) {
+  if (layoutKey === "landscape" || layoutKey === "portrait") return layoutKey;
+  if (String(layoutKey || "").startsWith("portrait")) return "portrait";
+  return "landscape";
+}
 
 function drawVideoFrame(ctx, video, destWidth, destHeight, fit = "cover") {
   const srcW = video.videoWidth;
@@ -183,19 +177,16 @@ function drawVideoFrame(ctx, video, destWidth, destHeight, fit = "cover") {
 }
 
 function getCallOutputLayoutConfig(layoutKey = DEFAULT_CALL_OUTPUT_LAYOUT) {
-  return CALL_OUTPUT_LAYOUTS[layoutKey] || CALL_OUTPUT_LAYOUTS[DEFAULT_CALL_OUTPUT_LAYOUT];
+  const key = normalizeCallOutputLayout(layoutKey);
+  return CALL_OUTPUT_LAYOUTS[key];
 }
 
 function getCallLayoutNote(layoutKey = DEFAULT_CALL_OUTPUT_LAYOUT) {
-  switch (layoutKey) {
-    case "landscape-full":
-      return "Fills 16:9 edge to edge — best for Zoom, Telegram desktop, and horizontal calls.";
-    case "landscape-fit":
-      return "Shows the full Lucy frame in 16:9; calling apps may add black bars on the sides.";
-    case "portrait-full":
-      return "Fills 9:16 edge to edge — best for WhatsApp mobile and other vertical video calls.";
-    case "portrait-fit":
-      return "Shows the full Lucy frame in 9:16; calling apps may add black bars top and bottom.";
+  switch (normalizeCallOutputLayout(layoutKey)) {
+    case "landscape":
+      return "Standard 1280×720 view for Zoom, Telegram, Discord, and other horizontal calls.";
+    case "portrait":
+      return "Full-screen 720×1280 with no letterbox — best for WhatsApp mobile and vertical video calls.";
     default:
       return "";
   }
@@ -373,7 +364,7 @@ export default function App() {
   const [callOutputLayout, setCallOutputLayout] = useState(() => {
     try {
       const saved = window.localStorage.getItem("inspiretech_call_output_layout");
-      return saved && CALL_OUTPUT_LAYOUTS[saved] ? saved : DEFAULT_CALL_OUTPUT_LAYOUT;
+      return normalizeCallOutputLayout(saved);
     } catch {
       return DEFAULT_CALL_OUTPUT_LAYOUT;
     }
@@ -2996,14 +2987,13 @@ export default function App() {
     );
   }
 
-  const callOutputFillsScreen = callOutputLayout.endsWith("-full");
-  const callOutputIsPortrait = callOutputLayout.startsWith("portrait");
+  const callOutputIsPortrait = callOutputLayout === "portrait";
 
   return (
     <>
     <div
       style={styles.appContainer}
-      className={`itc-app${companionShell ? " itc-app-companion" : ""}${isMobileLayout ? " itc-app-mobile" : ""}${mobileOutputFocus ? " itc-mobile-theater" : ""}${callOutputFillsScreen ? " itc-call-output-full" : ""}${callOutputIsPortrait ? " itc-call-output-portrait" : ""}${isMobileLayout && !mobileControlsOpen ? " itc-mobile-sidebar-collapsed" : ""}`}
+      className={`itc-app${companionShell ? " itc-app-companion" : ""}${isMobileLayout ? " itc-app-mobile" : ""}${mobileOutputFocus ? " itc-mobile-theater" : ""}${callOutputIsPortrait ? " itc-call-output-full itc-call-output-portrait" : ""}${isMobileLayout && !mobileControlsOpen ? " itc-mobile-sidebar-collapsed" : ""}`}
     >
       {companionShell ? (
         <header className="itc-companion-topbar">
@@ -3246,7 +3236,7 @@ export default function App() {
                 {routeAudioToVirtualCable
                   ? " Microphone → CABLE Output (VB-Audio Virtual Cable) when routing voice to calls."
                   : " Use your normal physical microphone in calling apps unless you enable VB-CABLE routing above."}
-                {" "}Pick <strong>Portrait full screen</strong> for WhatsApp mobile vertical calls, or <strong>Landscape full screen</strong> for desktop apps.
+                {" "}Pick <strong>Portrait</strong> for WhatsApp mobile vertical calls, or <strong>Landscape</strong> for desktop apps.
                 {" "}WhatsApp Desktop cannot see InspireTech Camera — use Telegram/Discord or WhatsApp Web.
               </div>
             )}
