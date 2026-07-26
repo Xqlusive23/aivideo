@@ -117,12 +117,11 @@ const CALL_OUTPUT_LAYOUTS = {
 const DEFAULT_CALL_OUTPUT_LAYOUT = "landscape";
 const COMPANION_TOOLBAR_SECTIONS = [
   { id: "studio", label: "Studio", icon: "🎬" },
-  { id: "devices", label: "Devices", icon: "📹" },
-  { id: "voice", label: "Voice", icon: "🎙️" },
   { id: "credits", label: "Credits", icon: "💳" },
   { id: "drivers", label: "Drivers", icon: "🖥️" },
   { id: "account", label: "Account", icon: "⚙️" },
 ];
+const COMPANION_STUDIO_SECTIONS = new Set(["devices", "studio", "voice"]);
 
 function normalizeCallOutputLayout(layoutKey) {
   if (layoutKey === "landscape" || layoutKey === "portrait") return layoutKey;
@@ -3020,8 +3019,48 @@ export default function App() {
 
   const creditPercent = Math.min(100, (credits / 1000) * 100); // 1,000 credits ≈ the smallest top-up tier now
   const isLowCredit = credits <= LOW_CREDIT_THRESHOLD;
-  const companionSectionClass = (section) =>
-    companionToolbar && companionNavSection !== section ? "itc-companion-hidden" : "";
+  const companionSectionClass = (section) => {
+    if (!companionToolbar) return "";
+    if (COMPANION_STUDIO_SECTIONS.has(section)) {
+      return companionNavSection === "studio" ? "" : "itc-companion-hidden";
+    }
+    return companionNavSection === section ? "" : "itc-companion-hidden";
+  };
+
+  const renderStatusRibbon = () => (
+    <div className="itc-status-ribbon">
+      <div className="itc-status-chip">
+        <span className="itc-status-chip-label">Status</span>
+        <span className={`itc-status-chip-value${isRunning ? " is-live" : ""}`} style={!isRunning ? { color: c.amber } : undefined}>
+          {formatStatusDisplay(status)}
+        </span>
+      </div>
+      <div className="itc-status-chip">
+        <span className="itc-status-chip-label">FPS</span>
+        <span className="itc-status-chip-value itc-mono">{fps || "—"}</span>
+      </div>
+      <div className="itc-status-chip">
+        <span className="itc-status-chip-label">Latency</span>
+        <span className="itc-status-chip-value itc-mono">{latency}</span>
+      </div>
+      <div className="itc-status-chip">
+        <span className="itc-status-chip-label">Session</span>
+        <span className="itc-status-chip-value itc-mono">
+          {isRunning ? formatTime(elapsedSeconds) : "00:00"}
+        </span>
+      </div>
+      <div className="itc-status-chip">
+        <span className="itc-status-chip-label">Credits</span>
+        <span
+          className={`itc-status-chip-value itc-mono${isLowCredit ? " is-danger" : ""}`}
+          style={{ animation: isLowCredit && isRunning ? "creditPulse 1s infinite" : "none" }}
+        >
+          {creditsLoaded ? credits : "…"}
+          {creditsLoaded && <span style={styles.creditsDollar}> ({formatUsdFromCredits(credits)})</span>}
+        </span>
+      </div>
+    </div>
+  );
 
   // No access token yet — show sign-in gate (landing page lives at /).
   if (!accessToken || !sessionReady) {
@@ -3048,7 +3087,7 @@ export default function App() {
       style={styles.appContainer}
       className={`itc-app${isMobileLayout ? " itc-app-mobile" : ""}${mobileOutputFocus ? " itc-mobile-theater" : ""}${callOutputIsPortrait ? " itc-call-output-full itc-call-output-portrait" : ""}${isMobileLayout && !mobileControlsOpen ? " itc-mobile-sidebar-collapsed" : ""}`}
     >
-      <header className="itc-top-header">
+      <header className={`itc-top-header${companionToolbar ? " itc-top-header-companion" : ""}`}>
         <div className="itc-header-brand">
           <div className="itc-header-brand-id">
             <LogoLockup size="md" />
@@ -3095,59 +3134,31 @@ export default function App() {
           </div>
         </div>
 
-        {companionToolbar && (
-          <nav className="itc-desktop-toolbar" aria-label="Studio sections">
-            {COMPANION_TOOLBAR_SECTIONS.map((section) => (
-              <button
-                key={section.id}
-                type="button"
-                className={`itc-desktop-toolbar-item${companionNavSection === section.id ? " is-active" : ""}`}
-                onClick={() => setCompanionNavSection(section.id)}
-              >
-                <span className="itc-desktop-toolbar-icon" aria-hidden="true">
-                  {section.icon}
-                </span>
-                <span>{section.label}</span>
-                {section.id === "drivers" && driverSetupFailed && (
-                  <span className="itc-desktop-toolbar-badge" aria-label="Driver setup needs attention" />
-                )}
-              </button>
-            ))}
-          </nav>
+        {companionToolbar ? (
+          <div className="itc-header-companion-bar">
+            <nav className="itc-desktop-toolbar" aria-label="Studio sections">
+              {COMPANION_TOOLBAR_SECTIONS.map((section) => (
+                <button
+                  key={section.id}
+                  type="button"
+                  className={`itc-desktop-toolbar-item${companionNavSection === section.id ? " is-active" : ""}`}
+                  onClick={() => setCompanionNavSection(section.id)}
+                >
+                  <span className="itc-desktop-toolbar-icon" aria-hidden="true">
+                    {section.icon}
+                  </span>
+                  <span>{section.label}</span>
+                  {section.id === "drivers" && driverSetupFailed && (
+                    <span className="itc-desktop-toolbar-badge" aria-label="Driver setup needs attention" />
+                  )}
+                </button>
+              ))}
+            </nav>
+            {renderStatusRibbon()}
+          </div>
+        ) : (
+          renderStatusRibbon()
         )}
-
-        <div className="itc-status-ribbon">
-          <div className="itc-status-chip">
-            <span className="itc-status-chip-label">Status</span>
-            <span className={`itc-status-chip-value${isRunning ? " is-live" : ""}`} style={!isRunning ? { color: c.amber } : undefined}>
-              {formatStatusDisplay(status)}
-            </span>
-          </div>
-          <div className="itc-status-chip">
-            <span className="itc-status-chip-label">FPS</span>
-            <span className="itc-status-chip-value itc-mono">{fps || "—"}</span>
-          </div>
-          <div className="itc-status-chip">
-            <span className="itc-status-chip-label">Latency</span>
-            <span className="itc-status-chip-value itc-mono">{latency}</span>
-          </div>
-          <div className="itc-status-chip">
-            <span className="itc-status-chip-label">Session</span>
-            <span className="itc-status-chip-value itc-mono">
-              {isRunning ? formatTime(elapsedSeconds) : "00:00"}
-            </span>
-          </div>
-          <div className="itc-status-chip">
-            <span className="itc-status-chip-label">Credits</span>
-            <span
-              className={`itc-status-chip-value itc-mono${isLowCredit ? " is-danger" : ""}`}
-              style={{ animation: isLowCredit && isRunning ? "creditPulse 1s infinite" : "none" }}
-            >
-              {creditsLoaded ? credits : "…"}
-              {creditsLoaded && <span style={styles.creditsDollar}> ({formatUsdFromCredits(credits)})</span>}
-            </span>
-          </div>
-        </div>
       </header>
 
       <div

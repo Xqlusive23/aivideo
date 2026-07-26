@@ -1031,12 +1031,12 @@ body {
 }
 
 .itc-desktop-toolbar {
-  flex: 1 1 100%;
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 6px;
-  padding: 2px 0 6px;
+  padding: 0;
+  flex: 0 0 auto;
 }
 
 .itc-desktop-toolbar-item {
@@ -1081,8 +1081,35 @@ body {
   box-shadow: 0 0 0 2px rgba(11, 16, 32, 0.9);
 }
 
-.itc-top-header:has(.itc-desktop-toolbar) .itc-status-ribbon {
-  flex: 1 1 100%;
+.itc-top-header-companion {
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 12px 16px;
+}
+
+.itc-header-companion-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.itc-top-header-companion .itc-header-brand {
+  flex: 0 0 auto;
+}
+
+.itc-top-header-companion .itc-status-ribbon {
+  flex: 1 1 auto;
+  justify-content: flex-end;
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+
+.itc-top-header-companion .itc-status-chip {
+  min-width: 0;
+  padding: 5px 10px;
 }
 
 .itc-status-ribbon {
