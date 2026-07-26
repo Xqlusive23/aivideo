@@ -97,7 +97,7 @@ const formatUsdFromCredits = (creditAmount) =>
 const VOICE_CHUNK_MS = 500;
 const MOBILE_LAYOUT_MAX_WIDTH = 900;
 const DEFAULT_TRANSFORMATION_PROMPT =
-  "Substitute the character in the video with the person in the reference image, using their full body, clothing, hair, skin tone, and overall appearance from the reference.";
+  "Substitute the character in the video with the person in the reference image, matching their full appearance exactly as shown in the reference — including clothing, outfit, hat, hair, skin tone, and body shape.";
 const CHARACTER_WITH_REF_PROMPT = DEFAULT_TRANSFORMATION_PROMPT;
 const CHARACTER_SWAP_PATTERN =
   /substitute the character|replace the character|transform into this character|person in the reference image|character from the reference image|with this character/i;
@@ -157,8 +157,8 @@ function composeLayeredPrompt(userText, hasReferenceImage = true) {
   const trimmed = String(userText || "").trim();
   if (!hasReferenceImage) return composeTransformationPrompt(trimmed, false);
   const backgroundClause = composeBackgroundOnlyPrompt(trimmed);
-  // Decart layered edits: background sentence first, then character from reference.
-  return `${backgroundClause} ${CHARACTER_WITH_REF_PROMPT}`;
+  // Character FIRST — background-first makes Lucy keep the live webcam body/clothes.
+  return `${CHARACTER_WITH_REF_PROMPT} ${backgroundClause}`;
 }
 
 function composeTransformationPrompt(userText, hasReferenceImage = true) {
@@ -2335,17 +2335,31 @@ export default function App() {
       tick();
     });
 
-  const applyLayeredSceneAfterCharacter = async (session, sourcePrompt) => {
-    if (!hasBackgroundIntent(sourcePrompt)) return;
-    setStatus("APPLYING CHARACTER + SCENE…");
-    const generating = await waitForDecartGenerating(session);
-    if (!generating) {
-      await new Promise((resolve) => setTimeout(resolve, 1500));
+  const applyCharacterThenLayeredScene = async (session, sourcePrompt, { waitForLive = false } = {}) => {
+    if (!hasBackgroundIntent(sourcePrompt) || !selectedFile) return;
+
+    if (waitForLive) {
+      setStatus("LOCKING CHARACTER FROM REFERENCE…");
+      const generating = await waitForDecartGenerating(session);
+      if (!generating) {
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+      }
+    } else {
+      setStatus("REINFORCING CHARACTER FROM REFERENCE…");
     }
+
     if (realtimeClientRef.current !== session || !session.isConnected?.()) return;
-    // Layered prompt keeps full reference-body swap while replacing the room.
+    await pushDecartCharacterState(session, sourcePrompt);
+
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+    if (realtimeClientRef.current !== session || !session.isConnected?.()) return;
+
+    setStatus("APPLYING CHARACTER + SCENE…");
     await pushDecartLayeredState(session, sourcePrompt);
   };
+
+  const applyLayeredSceneAfterCharacter = (session, sourcePrompt) =>
+    applyCharacterThenLayeredScene(session, sourcePrompt, { waitForLive: true });
 
   const handleDecartSessionFault = (err, label = "Decart session error") => {
     console.error(label, err);
@@ -2371,7 +2385,11 @@ export default function App() {
     setPromptApplyBusy(true);
     setPromptApplyNote("");
     try {
-      await pushDecartState(session, sourcePrompt);
+      if (hasBackgroundIntent(sourcePrompt) && selectedFile) {
+        await applyCharacterThenLayeredScene(session, sourcePrompt);
+      } else {
+        await pushDecartState(session, sourcePrompt);
+      }
       setPromptApplyNote("Prompt applied to the live stream.");
       setStatus("PROMPT UPDATED // LIVE TRANSFORMATION");
     } catch (err) {
@@ -2604,7 +2622,7 @@ export default function App() {
           <p className="itc-prompt-dock-subtitle">
             {isMobileLayout
               ? "Set character + scene before Start. While live, open Show setup to edit and Apply."
-              : "Character locks from your reference on Start, then scene + full body apply together. Use presets or type a background, then Apply to switch while live."}
+              : "Reference photo should show the full outfit you want. Character locks first, then scene — wait ~5s after Start."}
           </p>
         </div>
         <label className="itc-prompt-enhance-toggle">
@@ -2626,7 +2644,7 @@ export default function App() {
           if (promptApplyNote) setPromptApplyNote("");
         }}
         rows={2}
-        placeholder="e.g. Change the background to a modern office with desk, chair, and window light"
+        placeholder="e.g. Change the background to a modern office… (character swap always uses your reference photo)"
         onKeyDown={(e) => {
           if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
             e.preventDefault();
