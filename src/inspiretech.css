@@ -1392,6 +1392,14 @@ body {
   margin-bottom: 8px;
 }
 
+.itc-prompt-dock-toggles {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
 .itc-prompt-dock-title {
   margin: 0 0 2px;
   font-size: 0.8125rem;
@@ -1438,6 +1446,50 @@ body {
   box-shadow: 0 0 0 3px rgba(129, 140, 248, 0.15);
 }
 
+.itc-prompt-input:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.itc-prompt-ref-scene-panel {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(129, 140, 248, 0.25);
+  background: rgba(129, 140, 248, 0.06);
+}
+
+.itc-prompt-ref-scene-thumb {
+  width: 72px;
+  height: 72px;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid var(--itc-border);
+  flex-shrink: 0;
+}
+
+.itc-prompt-ref-scene-copy {
+  min-width: 0;
+}
+
+.itc-prompt-ref-scene-copy p {
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  color: var(--itc-text);
+}
+
+.itc-prompt-ref-scene-copy p + p {
+  margin-top: 6px;
+}
+
+.itc-prompt-ref-scene-hint {
+  color: var(--itc-text-muted) !important;
+  font-size: 0.6875rem !important;
+}
+
 .itc-prompt-presets {
   display: flex;
   flex-wrap: wrap;
@@ -1461,6 +1513,17 @@ body {
   color: var(--itc-text);
   border-color: rgba(129, 140, 248, 0.45);
   background: rgba(129, 140, 248, 0.08);
+}
+
+.itc-prompt-preset:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.itc-prompt-preset:disabled:hover {
+  color: var(--itc-text-muted);
+  border-color: var(--itc-border);
+  background: rgba(255, 255, 255, 0.03);
 }
 
 .itc-prompt-actions {
@@ -1848,6 +1911,28 @@ body {
   height: 100% !important;
   object-fit: contain !important;
   background: #000 !important;
+}
+
+.itc-app.itc-mobile-theater.itc-call-output-full .itc-fixed-output video {
+  object-fit: cover !important;
+}
+
+.itc-app.itc-mobile-theater.itc-call-output-portrait .itc-fixed-output video {
+  object-fit: cover !important;
+}
+
+.itc-app.itc-mobile-theater.itc-call-output-portrait .itc-fixed-output {
+  width: min(100vw, calc(100dvh * 9 / 16)) !important;
+  height: 100dvh !important;
+  height: 100svh !important;
+  margin: 0 auto;
+}
+
+.itc-call-layout-note {
+  margin: 6px 0 0;
+  font-size: 0.6875rem;
+  line-height: 1.4;
+  color: var(--itc-text-muted);
 }
 
 .itc-mobile-theater-tap-layer {

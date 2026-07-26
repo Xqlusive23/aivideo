@@ -1,17 +1,17 @@
 const { spawn } = require("child_process");
 const { VIRTUAL_CAMERA_NAME, getFeederCommand } = require("./paths");
 
-const FRAME_WIDTH = 1280;
-const FRAME_HEIGHT = 720;
+const DEFAULT_WIDTH = 1280;
+const DEFAULT_HEIGHT = 720;
 const FRAME_FPS = 20;
 
 let pythonFeeder = null;
+let frameWidth = DEFAULT_WIDTH;
+let frameHeight = DEFAULT_HEIGHT;
 
-function startFeeder() {
-  if (pythonFeeder && !pythonFeeder.killed) {
-    return true;
-  }
-
+function startFeeder(width = frameWidth, height = frameHeight) {
+  frameWidth = width;
+  frameHeight = height;
   stopFeeder();
 
   const feeder = getFeederCommand();
@@ -25,9 +25,9 @@ function startFeeder() {
   const args = [
     ...feeder.args,
     "--width",
-    String(FRAME_WIDTH),
+    String(frameWidth),
     "--height",
-    String(FRAME_HEIGHT),
+    String(frameHeight),
     "--fps",
     String(FRAME_FPS),
     "--device",
@@ -53,7 +53,22 @@ function startFeeder() {
     }
   });
 
+  console.log(`[feeder] Virtual camera started at ${frameWidth}x${frameHeight}@${FRAME_FPS}fps`);
   return true;
+}
+
+function configureFeeder(width, height) {
+  const nextWidth = Number(width) || DEFAULT_WIDTH;
+  const nextHeight = Number(height) || DEFAULT_HEIGHT;
+  if (
+    pythonFeeder &&
+    !pythonFeeder.killed &&
+    nextWidth === frameWidth &&
+    nextHeight === frameHeight
+  ) {
+    return true;
+  }
+  return startFeeder(nextWidth, nextHeight);
 }
 
 function sendFrameToFeeder(buffer) {
@@ -71,8 +86,14 @@ function stopFeeder() {
   }
 }
 
+function getFeederDimensions() {
+  return { width: frameWidth, height: frameHeight };
+}
+
 module.exports = {
   startFeeder,
+  configureFeeder,
   sendFrameToFeeder,
   stopFeeder,
+  getFeederDimensions,
 };

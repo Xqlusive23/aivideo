@@ -22,6 +22,8 @@ contextBridge.exposeInMainWorld("inspiretechCompanion", {
   sendFrame: (arrayBuffer) => {
     ipcRenderer.send("inspiretech:frame", arrayBuffer);
   },
+  configureVirtualCam: ({ width, height }) =>
+    ipcRenderer.invoke("inspiretech:feeder:configure", { width, height }),
   startAudio: (sampleRate) => {
     ipcRenderer.send("inspiretech:audio-start", sampleRate);
   },

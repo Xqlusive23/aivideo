@@ -22,7 +22,7 @@ const {
   scheduleUpdateCheck,
 } = require("./updater");
 const { getAppUrl } = require("./paths");
-const { startFeeder, sendFrameToFeeder, stopFeeder } = require("./feeder");
+const { startFeeder, configureFeeder, sendFrameToFeeder, stopFeeder } = require("./feeder");
 const {
   startAudioFeeder,
   sendAudioToFeeder,
@@ -65,6 +65,10 @@ function createMainWindow() {
 
 ipcMain.on("inspiretech:frame", (_event, arrayBuffer) => {
   sendFrameToFeeder(Buffer.from(arrayBuffer));
+});
+
+ipcMain.handle("inspiretech:feeder:configure", (_event, { width, height } = {}) => {
+  return configureFeeder(width, height);
 });
 
 ipcMain.on("inspiretech:audio-start", (_event, sampleRate) => {

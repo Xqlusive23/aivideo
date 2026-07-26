@@ -96,6 +96,110 @@ const formatUsdFromCredits = (creditAmount) =>
 // context conversion; longer chunks = smoother conversion but more delay.
 const VOICE_CHUNK_MS = 500;
 const MOBILE_LAYOUT_MAX_WIDTH = 900;
+const VIRTUAL_CAM_WIDTH = 1280;
+const VIRTUAL_CAM_HEIGHT = 720;
+const PORTRAIT_CAM_WIDTH = 720;
+const PORTRAIT_CAM_HEIGHT = 1280;
+const CALL_OUTPUT_LAYOUTS = {
+  "landscape-full": {
+    label: "Landscape full screen (Zoom, Telegram desktop)",
+    width: VIRTUAL_CAM_WIDTH,
+    height: VIRTUAL_CAM_HEIGHT,
+    fit: "cover",
+  },
+  "landscape-fit": {
+    label: "Landscape fit (show entire frame, may letterbox)",
+    width: VIRTUAL_CAM_WIDTH,
+    height: VIRTUAL_CAM_HEIGHT,
+    fit: "contain",
+  },
+  "portrait-full": {
+    label: "Portrait full screen (WhatsApp mobile, vertical calls)",
+    width: PORTRAIT_CAM_WIDTH,
+    height: PORTRAIT_CAM_HEIGHT,
+    fit: "cover",
+  },
+  "portrait-fit": {
+    label: "Portrait fit (show entire frame, may letterbox)",
+    width: PORTRAIT_CAM_WIDTH,
+    height: PORTRAIT_CAM_HEIGHT,
+    fit: "contain",
+  },
+};
+const DEFAULT_CALL_OUTPUT_LAYOUT = "landscape-full";
+
+function drawVideoFrame(ctx, video, destWidth, destHeight, fit = "cover") {
+  const srcW = video.videoWidth;
+  const srcH = video.videoHeight;
+  if (!srcW || !srcH) return;
+
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0, 0, destWidth, destHeight);
+
+  if (fit === "stretch") {
+    ctx.drawImage(video, 0, 0, destWidth, destHeight);
+    return;
+  }
+
+  const srcAspect = srcW / srcH;
+  const dstAspect = destWidth / destHeight;
+
+  if (fit === "contain") {
+    let dw;
+    let dh;
+    let dx;
+    let dy;
+    if (srcAspect > dstAspect) {
+      dw = destWidth;
+      dh = destWidth / srcAspect;
+      dx = 0;
+      dy = (destHeight - dh) / 2;
+    } else {
+      dh = destHeight;
+      dw = destHeight * srcAspect;
+      dx = (destWidth - dw) / 2;
+      dy = 0;
+    }
+    ctx.drawImage(video, dx, dy, dw, dh);
+    return;
+  }
+
+  let sx;
+  let sy;
+  let sw;
+  let sh;
+  if (srcAspect > dstAspect) {
+    sh = srcH;
+    sw = srcH * dstAspect;
+    sx = (srcW - sw) / 2;
+    sy = 0;
+  } else {
+    sw = srcW;
+    sh = srcW / dstAspect;
+    sx = 0;
+    sy = (srcH - sh) / 2;
+  }
+  ctx.drawImage(video, sx, sy, sw, sh, 0, 0, destWidth, destHeight);
+}
+
+function getCallOutputLayoutConfig(layoutKey = DEFAULT_CALL_OUTPUT_LAYOUT) {
+  return CALL_OUTPUT_LAYOUTS[layoutKey] || CALL_OUTPUT_LAYOUTS[DEFAULT_CALL_OUTPUT_LAYOUT];
+}
+
+function getCallLayoutNote(layoutKey = DEFAULT_CALL_OUTPUT_LAYOUT) {
+  switch (layoutKey) {
+    case "landscape-full":
+      return "Fills 16:9 edge to edge — best for Zoom, Telegram desktop, and horizontal calls.";
+    case "landscape-fit":
+      return "Shows the full Lucy frame in 16:9; calling apps may add black bars on the sides.";
+    case "portrait-full":
+      return "Fills 9:16 edge to edge — best for WhatsApp mobile and other vertical video calls.";
+    case "portrait-fit":
+      return "Shows the full Lucy frame in 9:16; calling apps may add black bars top and bottom.";
+    default:
+      return "";
+  }
+}
 const DEFAULT_TRANSFORMATION_PROMPT =
   "Substitute the character in the video with the person in the reference image, matching their full appearance exactly as shown in the reference — including clothing, outfit, hat, hair, skin tone, and body shape.";
 const CHARACTER_WITH_REF_PROMPT = DEFAULT_TRANSFORMATION_PROMPT;
@@ -105,6 +209,10 @@ const BACKGROUND_INTENT_PATTERN =
   /background|office|beach|studio|city|skyline|environment|room|setting|scene|backdrop|interior|outdoor|setup/i;
 const DEFAULT_BACKGROUND_PROMPT =
   "Change the background to a bright modern office with desk, chair, window light, soft afternoon shadows, coworkers passing in the background, and sunlight on the floor.";
+const REFERENCE_BACKGROUND_PROMPT =
+  "Change the background to fully recreate the complete environment shown in the reference image — all walls, floors, ceilings, furniture, props, colors, materials, depth, shadows, and lighting with sharp photorealistic detail filling every pixel edge to edge behind the person; completely remove and replace the entire original webcam room with zero visible bleed-through, ghosting, edges, or leftover walls, furniture, or lighting from the live camera feed.";
+const REFERENCE_BACKGROUND_ENHANCE_SUFFIX =
+  " Enhance environmental clarity with rich textures, crisp depth, accurate colors, fine surface detail, and consistent ambient lighting matching the reference scene.";
 const PROMPT_PRESETS = [
   {
     label: "Office",
@@ -144,26 +252,37 @@ function normalizeBackgroundClause(text) {
 
   if (!clause) return DEFAULT_BACKGROUND_PROMPT;
   if (/^change the background to/i.test(clause)) {
-    return clause.endsWith(".") ? clause : `${clause}.`;
+    const base = clause.endsWith(".") ? clause.slice(0, -1) : clause;
+    return `${base}, completely replacing the entire frame behind the person edge to edge with the new environment and erasing every pixel of the original webcam room, walls, furniture, and ambient lighting with no bleed-through or ghosting.`;
   }
-  return `Change the background to ${clause}.`;
+  return `Change the background to ${clause}, completely replacing the entire frame behind the person edge to edge with the new environment and erasing every pixel of the original webcam room, walls, furniture, and ambient lighting with no bleed-through or ghosting.`;
 }
 
 function composeBackgroundOnlyPrompt(userText) {
+  // Pure scene swap — no "keep person unchanged" clause (that anchors to the live webcam body).
   return normalizeBackgroundClause(userText);
 }
 
-function composeLayeredPrompt(userText, hasReferenceImage = true) {
-  const trimmed = String(userText || "").trim();
-  if (!hasReferenceImage) return composeTransformationPrompt(trimmed, false);
-  const backgroundClause = composeBackgroundOnlyPrompt(trimmed);
-  // Character FIRST — background-first makes Lucy keep the live webcam body/clothes.
-  return `${CHARACTER_WITH_REF_PROMPT} ${backgroundClause}`;
+function composeReferenceBackgroundPrompt() {
+  return `${REFERENCE_BACKGROUND_PROMPT}${REFERENCE_BACKGROUND_ENHANCE_SUFFIX}`;
 }
 
-function composeTransformationPrompt(userText, hasReferenceImage = true) {
+function composeLayeredPrompt(userText, hasReferenceImage = true, options = {}) {
+  const { useReferenceBackground = false } = options;
   const trimmed = String(userText || "").trim();
-  const wantsBackground = hasBackgroundIntent(trimmed);
+  if (!hasReferenceImage) return composeTransformationPrompt(trimmed, false, options);
+  const backgroundClause = useReferenceBackground
+    ? composeReferenceBackgroundPrompt(options)
+    : composeBackgroundOnlyPrompt(trimmed || DEFAULT_BACKGROUND_PROMPT);
+  // Decart layered edits: one sentence per edit type (see lucy-2.5-prompting guide).
+  return `${backgroundClause} ${CHARACTER_WITH_REF_PROMPT}`;
+}
+
+function composeTransformationPrompt(userText, hasReferenceImage = true, options = {}) {
+  const { useReferenceBackground = false } = options;
+  const trimmed = String(userText || "").trim();
+  const refBackground = useReferenceBackground && hasReferenceImage;
+  const wantsBackground = refBackground || hasBackgroundIntent(trimmed);
 
   if (!hasReferenceImage) {
     if (!trimmed) return DEFAULT_BACKGROUND_PROMPT;
@@ -171,12 +290,16 @@ function composeTransformationPrompt(userText, hasReferenceImage = true) {
     return trimmed;
   }
 
+  if (refBackground) {
+    return composeLayeredPrompt(trimmed, true, options);
+  }
+
   if (!trimmed || trimmed === DEFAULT_TRANSFORMATION_PROMPT) {
-    return wantsBackground ? composeLayeredPrompt(trimmed || DEFAULT_BACKGROUND_PROMPT, true) : CHARACTER_WITH_REF_PROMPT;
+    return wantsBackground ? composeLayeredPrompt(trimmed || DEFAULT_BACKGROUND_PROMPT, true, options) : CHARACTER_WITH_REF_PROMPT;
   }
 
   if (wantsBackground) {
-    return composeLayeredPrompt(trimmed, true);
+    return composeLayeredPrompt(trimmed, true, options);
   }
 
   if (CHARACTER_SWAP_PATTERN.test(trimmed)) {
@@ -211,6 +334,7 @@ export default function App() {
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
 
   const [enhanceMask, setEnhanceMask] = useState(true);
+  const [useReferenceBackground, setUseReferenceBackground] = useState(false);
   const [transformationPrompt, setTransformationPrompt] = useState(DEFAULT_TRANSFORMATION_PROMPT);
   const [promptApplyBusy, setPromptApplyBusy] = useState(false);
   const [promptApplyNote, setPromptApplyNote] = useState("");
@@ -246,6 +370,15 @@ export default function App() {
       return false;
     }
   });
+  const [callOutputLayout, setCallOutputLayout] = useState(() => {
+    try {
+      const saved = window.localStorage.getItem("inspiretech_call_output_layout");
+      return saved && CALL_OUTPUT_LAYOUTS[saved] ? saved : DEFAULT_CALL_OUTPUT_LAYOUT;
+    } catch {
+      return DEFAULT_CALL_OUTPUT_LAYOUT;
+    }
+  });
+  const callOutputLayoutRef = useRef(callOutputLayout);
   const [cameraActive, setCameraActive] = useState(false);
   const selectedVideoDeviceIdRef = useRef("");
   const selectedVideoDeviceLabelRef = useRef("");
@@ -372,6 +505,9 @@ export default function App() {
   const realtimeClientRef = useRef(null);
   const referenceImageRefId = useRef(null);
   const referenceImageSourceRef = useRef(null);
+  const activeScenePromptRef = useRef(null);
+  const activeSceneUseRefBackgroundRef = useRef(false);
+  const decartSetGuardRef = useRef({ inFlight: false, lastKey: "", lastAt: 0, reconnectAt: 0 });
   const fpsIntervalRef = useRef(null);
   const clockTimerRef = useRef(null); // the local 5-min UX countdown (not billing)
   const heartbeatTimerRef = useRef(null); // the real billing tick, talking to the server
@@ -497,6 +633,14 @@ export default function App() {
     mediaDevices.addEventListener("devicechange", refreshMediaDevices);
     return () => mediaDevices.removeEventListener("devicechange", refreshMediaDevices);
   }, []);
+
+  useEffect(() => {
+    callOutputLayoutRef.current = callOutputLayout;
+  }, [callOutputLayout]);
+
+  useEffect(() => {
+    if (!selectedFile) setUseReferenceBackground(false);
+  }, [selectedFile]);
 
   const stopLocalVideoStream = () => {
     if (localStreamRef.current) {
@@ -694,7 +838,8 @@ export default function App() {
       if (!outputVideoRef.current || !ctx) return;
       if (now - lastFrameTime >= frameIntervalMs) {
         lastFrameTime = now;
-        ctx.drawImage(outputVideoRef.current, 0, 0, canvas.width, canvas.height);
+        const layout = getCallOutputLayoutConfig(callOutputLayoutRef.current);
+        drawVideoFrame(ctx, outputVideoRef.current, canvas.width, canvas.height, layout.fit);
         const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
         window.inspireTechDesktop.sendFrame(imageData.data.buffer);
       }
@@ -704,8 +849,9 @@ export default function App() {
     const startCapture = async () => {
       const video = outputVideoRef.current;
       if (!video) return;
-      const width = video.videoWidth || 1280;
-      const height = video.videoHeight || 720;
+      const layout = getCallOutputLayoutConfig(callOutputLayoutRef.current);
+      const width = layout.width;
+      const height = layout.height;
 
       await window.inspireTechDesktop.startVirtualCam(width, height, TARGET_FPS);
 
@@ -732,7 +878,7 @@ export default function App() {
     }
 
     return () => stopCapture();
-  }, [isRunning]);
+  }, [isRunning, callOutputLayout]);
 
   // Keep the button label in sync if the user closes the PiP window
   // directly (its own native close control) rather than clicking our button.
@@ -1083,6 +1229,15 @@ export default function App() {
   // affects regular web use at all.
   const COMPANION_CAPTURE_FPS = 20; // must match virtualcam_feeder.py's --fps
   useEffect(() => {
+    if (typeof window === "undefined" || !window.inspiretechCompanion?.configureVirtualCam) return;
+    const layout = getCallOutputLayoutConfig(callOutputLayout);
+    void window.inspiretechCompanion.configureVirtualCam({
+      width: layout.width,
+      height: layout.height,
+    });
+  }, [callOutputLayout]);
+
+  useEffect(() => {
     if (typeof window === "undefined" || !window.inspiretechCompanion) return;
     if (!isRunning) {
       if (companionCaptureIntervalRef.current) {
@@ -1092,27 +1247,47 @@ export default function App() {
       return;
     }
 
+    const layout = getCallOutputLayoutConfig(callOutputLayoutRef.current);
     const canvas = companionCanvasRef.current || document.createElement("canvas");
     companionCanvasRef.current = canvas;
-    canvas.width = 1280;
-    canvas.height = 720;
+    canvas.width = layout.width;
+    canvas.height = layout.height;
     const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    let cancelled = false;
 
-    companionCaptureIntervalRef.current = setInterval(() => {
-      const video = outputVideoRef.current;
-      if (!video || !video.videoWidth) return;
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      window.inspiretechCompanion.sendFrame(imageData.data.buffer);
-    }, 1000 / COMPANION_CAPTURE_FPS);
+    const beginCapture = async () => {
+      if (window.inspiretechCompanion.configureVirtualCam) {
+        await window.inspiretechCompanion.configureVirtualCam({
+          width: layout.width,
+          height: layout.height,
+        });
+      }
+      if (cancelled) return;
+
+      companionCaptureIntervalRef.current = setInterval(() => {
+        const video = outputVideoRef.current;
+        if (!video || !video.videoWidth) return;
+        const activeLayout = getCallOutputLayoutConfig(callOutputLayoutRef.current);
+        if (canvas.width !== activeLayout.width || canvas.height !== activeLayout.height) {
+          canvas.width = activeLayout.width;
+          canvas.height = activeLayout.height;
+        }
+        drawVideoFrame(ctx, video, canvas.width, canvas.height, activeLayout.fit);
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        window.inspiretechCompanion.sendFrame(imageData.data.buffer);
+      }, 1000 / COMPANION_CAPTURE_FPS);
+    };
+
+    void beginCapture();
 
     return () => {
+      cancelled = true;
       if (companionCaptureIntervalRef.current) {
         clearInterval(companionCaptureIntervalRef.current);
         companionCaptureIntervalRef.current = null;
       }
     };
-  }, [isRunning]);
+  }, [isRunning, callOutputLayout]);
 
   // Single place that handles "the server no longer accepts this token" —
   // covers both an invalid token (401) and a revoked one (403). Always safe
@@ -2226,6 +2401,16 @@ export default function App() {
     }
   };
 
+  const handleCallOutputLayoutChange = (layoutKey) => {
+    if (!CALL_OUTPUT_LAYOUTS[layoutKey]) return;
+    setCallOutputLayout(layoutKey);
+    try {
+      window.localStorage.setItem("inspiretech_call_output_layout", layoutKey);
+    } catch {
+      // ignore storage failures
+    }
+  };
+
   const handleRouteVirtualAudioChange = (enabled) => {
     setRouteAudioToVirtualCable(enabled);
     try {
@@ -2245,12 +2430,23 @@ export default function App() {
     setStatus("PAYLOAD READY FOR TRANSMISSION");
   };
 
-  const getPromptText = () => transformationPrompt.trim() || DEFAULT_TRANSFORMATION_PROMPT;
+  const getPromptComposeOptions = () => ({
+    useReferenceBackground: useReferenceBackground && Boolean(selectedFile),
+  });
 
-  const getDecartPrompt = () => composeTransformationPrompt(getPromptText(), Boolean(selectedFile));
+  const getPromptText = () => {
+    if (useReferenceBackground && selectedFile) return "";
+    return transformationPrompt.trim() || DEFAULT_TRANSFORMATION_PROMPT;
+  };
 
-  const getDecartEnhance = (sourcePrompt = getPromptText()) =>
-    shouldEnhanceDecartPrompt(sourcePrompt, enhanceMask);
+  const getDecartPrompt = () =>
+    composeTransformationPrompt(getPromptText(), Boolean(selectedFile), getPromptComposeOptions());
+
+  const getDecartEnhance = (sourcePrompt = getPromptText()) => {
+    const composeOptions = getPromptComposeOptions();
+    if (composeOptions.useReferenceBackground) return true;
+    return shouldEnhanceDecartPrompt(sourcePrompt, enhanceMask);
+  };
 
   const resolveReferenceImage = async (client) => {
     if (!selectedFile) return null;
@@ -2269,103 +2465,105 @@ export default function App() {
     }
   };
 
-  const pushDecartBackgroundState = async (session, sourcePrompt) => {
-    const promptText = composeBackgroundOnlyPrompt(sourcePrompt);
-    const useEnhance = getDecartEnhance(sourcePrompt);
-    const imagePayload = referenceImageRefId.current || selectedFile;
-
-    console.info("[InspireTech] Decart background prompt →", { promptText, enhance: useEnhance });
-
-    await session.set({ prompt: promptText, image: imagePayload, enhance: useEnhance });
-  };
-
-  const pushDecartCharacterState = async (session, sourcePrompt) => {
-    const hasRef = Boolean(selectedFile);
-    const promptText = CHARACTER_WITH_REF_PROMPT;
-    const useEnhance = getDecartEnhance(sourcePrompt);
-    const imagePayload = referenceImageRefId.current || selectedFile;
-
-    console.info("[InspireTech] Decart character prompt →", { promptText, enhance: useEnhance });
-
-    if (hasRef) {
-      await session.set({ prompt: promptText, image: imagePayload, enhance: useEnhance });
-    } else {
-      await session.set({ prompt: promptText, enhance: useEnhance });
-    }
-  };
-
-  const pushDecartState = async (session, sourcePrompt) => {
-    if (hasBackgroundIntent(sourcePrompt) && selectedFile) {
-      await applyCharacterThenBackgroundScene(session, sourcePrompt);
-      return;
-    }
+  const pushDecartState = async (session, sourcePrompt, { force = false } = {}) => {
+    if (!session?.isConnected?.()) return;
 
     const hasRef = Boolean(selectedFile);
-    const promptText = composeTransformationPrompt(sourcePrompt, hasRef);
+    const composeOptions = getPromptComposeOptions();
+    const promptText = composeTransformationPrompt(sourcePrompt, hasRef, composeOptions);
     const useEnhance = getDecartEnhance(sourcePrompt);
     const imagePayload = hasRef ? referenceImageRefId.current || selectedFile : null;
+    const setKey = `${promptText}|${Boolean(imagePayload)}|${useEnhance}|${composeOptions.useReferenceBackground}`;
+    const now = Date.now();
 
-    console.info("[InspireTech] Decart prompt →", { promptText, enhance: useEnhance, hasRef });
-
-    if (hasRef) {
-      await session.set({ prompt: promptText, image: imagePayload, enhance: useEnhance });
-    } else {
-      await session.set({ prompt: promptText, enhance: useEnhance });
+    if (!force) {
+      if (decartSetGuardRef.current.inFlight) {
+        console.info("[InspireTech] Decart set skipped (already in flight)");
+        return;
+      }
+      if (
+        decartSetGuardRef.current.lastKey === setKey &&
+        now - decartSetGuardRef.current.lastAt < 4000
+      ) {
+        console.info("[InspireTech] Decart set skipped (duplicate within 4s)");
+        return;
+      }
     }
-  };
 
-  const waitForDecartGenerating = (session, timeoutMs = 8000) =>
-    new Promise((resolve) => {
-      const started = Date.now();
-      const tick = () => {
-        if (!session?.isConnected?.()) {
-          resolve(false);
-          return;
-        }
-        if (session.getConnectionState?.() === "generating") {
-          resolve(true);
-          return;
-        }
-        if (Date.now() - started >= timeoutMs) {
-          resolve(false);
-          return;
-        }
-        setTimeout(tick, 250);
-      };
-      tick();
+    decartSetGuardRef.current.inFlight = true;
+    console.info("[InspireTech] Decart set →", {
+      promptText,
+      enhance: useEnhance,
+      hasRef,
+      useReferenceBackground: composeOptions.useReferenceBackground,
+      force,
     });
 
-  const applyCharacterThenBackgroundScene = async (session, sourcePrompt, { waitForLive = false } = {}) => {
-    if (!hasBackgroundIntent(sourcePrompt) || !selectedFile) return;
-
-    if (waitForLive) {
-      setStatus("LOCKING CHARACTER FROM REFERENCE…");
-      const generating = await waitForDecartGenerating(session);
-      if (!generating) {
-        await new Promise((resolve) => setTimeout(resolve, 1500));
+    try {
+      if (hasRef) {
+        await session.set({ prompt: promptText, image: imagePayload, enhance: useEnhance });
+      } else {
+        await session.set({ prompt: promptText, enhance: useEnhance });
       }
-    } else {
-      setStatus("REINFORCING CHARACTER FROM REFERENCE…");
+      decartSetGuardRef.current.lastKey = setKey;
+      decartSetGuardRef.current.lastAt = Date.now();
+    } finally {
+      decartSetGuardRef.current.inFlight = false;
     }
-
-    if (realtimeClientRef.current !== session || !session.isConnected?.()) return;
-    await pushDecartCharacterState(session, sourcePrompt);
-
-    await new Promise((resolve) => setTimeout(resolve, 2500));
-    if (realtimeClientRef.current !== session || !session.isConnected?.()) return;
-
-    // Second character lock so a background-only set() does not collapse to face-swap.
-    await pushDecartCharacterState(session, sourcePrompt);
-
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-    if (realtimeClientRef.current !== session || !session.isConnected?.()) return;
-
-    setStatus("APPLYING SCENE BACKGROUND…");
-    await pushDecartBackgroundState(session, sourcePrompt);
   };
 
-  const applyLayeredSceneAfterCharacter = (session, sourcePrompt) =>
-    applyCharacterThenBackgroundScene(session, sourcePrompt, { waitForLive: true });
+  const needsSceneBackground = (sourcePrompt = getPromptText()) =>
+    Boolean(selectedFile) &&
+    (getPromptComposeOptions().useReferenceBackground || hasBackgroundIntent(sourcePrompt));
+
+  const reapplyDecartScene = async (session, sourcePrompt) => {
+    if (!session?.isConnected?.()) return;
+    if (!sourcePrompt && !activeSceneUseRefBackgroundRef.current) return;
+    await pushDecartState(session, sourcePrompt, { force: true });
+  };
+
+  const wireDecartSession = (session) => {
+    let lastState = session.getConnectionState?.() || "connecting";
+
+    session.on("error", (err) => {
+      // Non-fatal SDK/server errors during prompt updates should not tear down a recoverable session.
+      console.error("[InspireTech] Decart session error:", err);
+      setPromptApplyNote(err?.message || "Decart warning — retry Apply if output looks wrong.");
+    });
+
+    session.on("connectionChange", (state) => {
+      const prev = lastState;
+      lastState = state;
+
+      if (state === "reconnecting") {
+        setStatus("DECART RECONNECTING…");
+        return;
+      }
+
+      if (
+        (state === "connected" || state === "generating") &&
+        prev === "reconnecting"
+      ) {
+        const scenePrompt = activeScenePromptRef.current;
+        const now = Date.now();
+        if (
+          realtimeClientRef.current === session &&
+          (scenePrompt || activeSceneUseRefBackgroundRef.current) &&
+          now - decartSetGuardRef.current.reconnectAt >= 8000
+        ) {
+          decartSetGuardRef.current.reconnectAt = now;
+          void reapplyDecartScene(session, scenePrompt).catch((err) => {
+            console.warn("[InspireTech] Scene reapply after reconnect failed:", err);
+          });
+        }
+        return;
+      }
+
+      if (state !== "disconnected") return;
+      if (realtimeClientRef.current !== session) return;
+      handleDecartSessionFault(new Error("Decart session disconnected"), "Decart disconnected");
+    });
+  };
 
   const handleDecartSessionFault = (err, label = "Decart session error") => {
     console.error(label, err);
@@ -2391,11 +2589,10 @@ export default function App() {
     setPromptApplyBusy(true);
     setPromptApplyNote("");
     try {
-      if (hasBackgroundIntent(sourcePrompt) && selectedFile) {
-        await applyCharacterThenBackgroundScene(session, sourcePrompt);
-      } else {
-        await pushDecartState(session, sourcePrompt);
-      }
+      const composeOptions = getPromptComposeOptions();
+      activeScenePromptRef.current = sourcePrompt;
+      activeSceneUseRefBackgroundRef.current = composeOptions.useReferenceBackground;
+      await pushDecartState(session, sourcePrompt);
       setPromptApplyNote("Prompt applied to the live stream.");
       setStatus("PROMPT UPDATED // LIVE TRANSFORMATION");
     } catch (err) {
@@ -2505,16 +2702,29 @@ export default function App() {
       const client = createDecartClient({ apiKey: MY_DECART_KEY });
       const realtimeModel = getRealtimeModel();
       const sourcePrompt = getPromptText();
-      const wantsBackground = hasBackgroundIntent(sourcePrompt);
-      const connectPrompt = wantsBackground ? CHARACTER_WITH_REF_PROMPT : composeTransformationPrompt(sourcePrompt, true);
+      const composeOptions = getPromptComposeOptions();
+      const wantsScene = needsSceneBackground(sourcePrompt);
+      // Decart: one atomic initialState (prompt + image together) — avoid follow-up set() spam on connect.
+      const connectPrompt = wantsScene
+        ? composeLayeredPrompt(sourcePrompt, true, composeOptions)
+        : composeTransformationPrompt(sourcePrompt, Boolean(selectedFile), composeOptions);
       const connectEnhance = getDecartEnhance(sourcePrompt);
-      const referenceImage = await resolveReferenceImage(client);
+      const referenceImage = selectedFile ? await resolveReferenceImage(client) : null;
+      activeScenePromptRef.current = sourcePrompt;
+      activeSceneUseRefBackgroundRef.current = composeOptions.useReferenceBackground;
+      decartSetGuardRef.current = { inFlight: false, lastKey: "", lastAt: 0, reconnectAt: 0 };
 
       console.info("[InspireTech] Decart connect →", {
         connectPrompt,
         enhance: connectEnhance,
-        wantsBackground,
-        strategy: wantsBackground ? "character lock x2 then background-only set()" : "single prompt",
+        hasReference: Boolean(selectedFile),
+        useReferenceBackground: composeOptions.useReferenceBackground,
+        wantsScene,
+        strategy: wantsScene
+          ? composeOptions.useReferenceBackground
+            ? "reference scene + character in initialState"
+            : "layered prompt + image in initialState only"
+          : "single set",
       });
 
       const session = await client.realtime.connect(streamForDecart, {
@@ -2533,17 +2743,12 @@ export default function App() {
             text: connectPrompt,
             enhance: connectEnhance,
           },
-          image: referenceImage,
+          ...(referenceImage ? { image: referenceImage } : {}),
           passthrough: false,
         },
       });
 
-      session.on("error", (err) => handleDecartSessionFault(err));
-      session.on("connectionChange", (state) => {
-        if (state !== "disconnected") return;
-        if (realtimeClientRef.current !== session) return;
-        handleDecartSessionFault(new Error("Decart session disconnected"), "Decart disconnected");
-      });
+      wireDecartSession(session);
 
       realtimeClientRef.current = session;
       const billingOk = await beginBillingSession();
@@ -2554,19 +2759,11 @@ export default function App() {
           // already disconnected
         }
         realtimeClientRef.current = null;
+        activeScenePromptRef.current = null;
+        activeSceneUseRefBackgroundRef.current = false;
         setIsRunning(false);
         stopActiveVoicePipeline();
         return;
-      }
-
-      if (wantsBackground) {
-        try {
-          await applyLayeredSceneAfterCharacter(session, sourcePrompt);
-          setPromptApplyNote("Character locked — scene background applied.");
-        } catch (err) {
-          console.error("Layered scene apply failed after connect:", err);
-          setPromptApplyNote(err?.message || "Scene apply failed — try Apply again.");
-        }
       }
 
       setStatus("COMPUTE LINK ONLINE // REALTIME TRANSFORMATION TERMINAL");
@@ -2597,6 +2794,9 @@ export default function App() {
   };
 
   const stopTransformation = () => {
+    activeScenePromptRef.current = null;
+    activeSceneUseRefBackgroundRef.current = false;
+    decartSetGuardRef.current = { inFlight: false, lastKey: "", lastAt: 0, reconnectAt: 0 };
     const session = realtimeClientRef.current;
     realtimeClientRef.current = null;
     if (session) {
@@ -2620,75 +2820,125 @@ export default function App() {
     if (outputVideoRef.current) outputVideoRef.current.srcObject = null;
   };
 
-  const renderPromptDock = () => (
+  const renderPromptDock = () => {
+    const refBackgroundActive = useReferenceBackground && Boolean(selectedFile);
+    const sceneSubtitle = refBackgroundActive
+      ? "Scene is copied from your reference photo — enhanced automatically. Turn off to pick a different background with a prompt."
+      : isMobileLayout
+        ? "Optional: describe a different background, or leave blank for character-only. Apply while live."
+        : "Want a different room? Leave reference background off and use a preset or prompt below.";
+
+    const handleReferenceBackgroundToggle = (enabled) => {
+      setUseReferenceBackground(enabled);
+      setPromptApplyNote("");
+      if (isRunning) {
+        void applyTransformationPrompt();
+      }
+    };
+
+    return (
     <div className="itc-prompt-dock">
       <div className="itc-prompt-dock-header">
         <div>
-          <h3 className="itc-prompt-dock-title">Transformation prompt</h3>
-          <p className="itc-prompt-dock-subtitle">
-            {isMobileLayout
-              ? "Set character + scene before Start. While live, open Show setup to edit and Apply."
-              : "Character locks first (reference outfit), then the room swaps. Wait ~6s after Start — presets change the background."}
-          </p>
+          <h3 className="itc-prompt-dock-title">
+            {refBackgroundActive ? "Reference scene mode" : "Custom background (optional)"}
+          </h3>
+          <p className="itc-prompt-dock-subtitle">{sceneSubtitle}</p>
         </div>
-        <label className="itc-prompt-enhance-toggle">
-          <input
-            type="checkbox"
-            checked={enhanceMask}
-            onChange={(e) => setEnhanceMask(e.target.checked)}
-            disabled={promptApplyBusy}
-            className="itc-checkbox"
-          />
-          <span>Enhance prompt (recommended)</span>
-        </label>
+        <div className="itc-prompt-dock-toggles">
+          <label className="itc-prompt-enhance-toggle" title={selectedFile ? undefined : "Upload a reference photo first"}>
+            <input
+              type="checkbox"
+              checked={refBackgroundActive}
+              onChange={(e) => handleReferenceBackgroundToggle(e.target.checked)}
+              disabled={promptApplyBusy || !selectedFile}
+              className="itc-checkbox"
+            />
+            <span>Use reference photo background</span>
+          </label>
+          {!refBackgroundActive && (
+            <label className="itc-prompt-enhance-toggle">
+              <input
+                type="checkbox"
+                checked={enhanceMask}
+                onChange={(e) => setEnhanceMask(e.target.checked)}
+                disabled={promptApplyBusy}
+                className="itc-checkbox"
+              />
+              <span>Enhance prompt (recommended)</span>
+            </label>
+          )}
+        </div>
       </div>
-      <textarea
-        className="itc-prompt-input"
-        value={transformationPrompt}
-        onChange={(e) => {
-          setTransformationPrompt(e.target.value);
-          if (promptApplyNote) setPromptApplyNote("");
-        }}
-        rows={2}
-        placeholder="e.g. Change the background to a modern office… (character swap always uses your reference photo)"
-        onKeyDown={(e) => {
-          if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
-            e.preventDefault();
-            void applyTransformationPrompt();
-          }
-        }}
-      />
-      <div className="itc-prompt-presets" aria-label="Prompt presets">
-        {PROMPT_PRESETS.map((preset) => (
-          <button
-            key={preset.label}
-            type="button"
-            className="itc-prompt-preset"
-            onClick={() => {
-              setTransformationPrompt(preset.text);
-              setPromptApplyNote("");
-              if (isRunning) {
-                void applyTransformationPrompt(preset.text);
+      {refBackgroundActive ? (
+        <div className="itc-prompt-ref-scene-panel">
+          {imagePreview ? (
+            <img src={imagePreview} alt="" className="itc-prompt-ref-scene-thumb" />
+          ) : null}
+          <div className="itc-prompt-ref-scene-copy">
+            <p>
+              Lucy matches the <strong>environment in your photo</strong> and swaps your character — fully enhanced,
+              no extra steps. Your webcam room is replaced edge to edge.
+            </p>
+            <p className="itc-prompt-ref-scene-hint">
+              For a different scene (office, beach, etc.), turn off this option and use the prompt below instead.
+            </p>
+          </div>
+        </div>
+      ) : (
+        <>
+          <textarea
+            className="itc-prompt-input"
+            value={transformationPrompt}
+            onChange={(e) => {
+              setTransformationPrompt(e.target.value);
+              if (promptApplyNote) setPromptApplyNote("");
+            }}
+            rows={2}
+            placeholder="Describe a different background, e.g. Change the background to a modern office… (character always uses your reference photo)"
+            onKeyDown={(e) => {
+              if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+                e.preventDefault();
+                void applyTransformationPrompt();
               }
             }}
-          >
-            {preset.label}
-          </button>
-        ))}
-      </div>
+          />
+          <div className="itc-prompt-presets" aria-label="Prompt presets">
+            {PROMPT_PRESETS.map((preset) => (
+              <button
+                key={preset.label}
+                type="button"
+                className="itc-prompt-preset"
+                onClick={() => {
+                  setTransformationPrompt(preset.text);
+                  setPromptApplyNote("");
+                  if (isRunning) {
+                    void applyTransformationPrompt(preset.text);
+                  }
+                }}
+              >
+                {preset.label}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
       <div className="itc-prompt-actions">
-        <button
-          type="button"
-          className="itc-btn itc-btn-primary"
-          onClick={() => void applyTransformationPrompt()}
-          disabled={promptApplyBusy}
-        >
-          {promptApplyBusy ? "Applying…" : isRunning ? "Apply to live stream" : "Save prompt"}
-        </button>
+        {(!refBackgroundActive || isRunning) && (
+          <button
+            type="button"
+            className="itc-btn itc-btn-primary"
+            onClick={() => void applyTransformationPrompt()}
+            disabled={promptApplyBusy}
+          >
+            {promptApplyBusy ? "Applying…" : isRunning ? "Apply to live stream" : "Save prompt"}
+          </button>
+        )}
         {promptApplyNote && <span className="itc-prompt-note">{promptApplyNote}</span>}
       </div>
     </div>
-  );
+    );
+  };
 
   const showPromptBelowOutput = !isMobileLayout || !isRunning;
   const showPromptInSidebar = isMobileLayout && isRunning;
@@ -2746,11 +2996,14 @@ export default function App() {
     );
   }
 
+  const callOutputFillsScreen = callOutputLayout.endsWith("-full");
+  const callOutputIsPortrait = callOutputLayout.startsWith("portrait");
+
   return (
     <>
     <div
       style={styles.appContainer}
-      className={`itc-app${companionShell ? " itc-app-companion" : ""}${isMobileLayout ? " itc-app-mobile" : ""}${mobileOutputFocus ? " itc-mobile-theater" : ""}${isMobileLayout && !mobileControlsOpen ? " itc-mobile-sidebar-collapsed" : ""}`}
+      className={`itc-app${companionShell ? " itc-app-companion" : ""}${isMobileLayout ? " itc-app-mobile" : ""}${mobileOutputFocus ? " itc-mobile-theater" : ""}${callOutputFillsScreen ? " itc-call-output-full" : ""}${callOutputIsPortrait ? " itc-call-output-portrait" : ""}${isMobileLayout && !mobileControlsOpen ? " itc-mobile-sidebar-collapsed" : ""}`}
     >
       {companionShell ? (
         <header className="itc-companion-topbar">
@@ -2948,6 +3201,23 @@ export default function App() {
                 ))}
               </select>
             </div>
+            <div style={styles.voiceSelectGroup}>
+              <label className="itc-studio-label" style={styles.paramLabel}>Call video layout</label>
+              <select
+                value={callOutputLayout}
+                onChange={(e) => handleCallOutputLayoutChange(e.target.value)}
+                disabled={isRunning}
+                style={styles.voiceSelect}
+                className="itc-select"
+              >
+                {Object.entries(CALL_OUTPUT_LAYOUTS).map(([key, layout]) => (
+                  <option key={key} value={key}>
+                    {layout.label}
+                  </option>
+                ))}
+              </select>
+              <p className="itc-call-layout-note">{getCallLayoutNote(callOutputLayout)}</p>
+            </div>
             {typeof window !== "undefined" && window.inspiretechCompanion && (
               <div style={styles.parameterRow} className="itc-parameter-row">
                 <label className="itc-studio-label" style={styles.paramLabel}>
@@ -2976,6 +3246,7 @@ export default function App() {
                 {routeAudioToVirtualCable
                   ? " Microphone → CABLE Output (VB-Audio Virtual Cable) when routing voice to calls."
                   : " Use your normal physical microphone in calling apps unless you enable VB-CABLE routing above."}
+                {" "}Pick <strong>Portrait full screen</strong> for WhatsApp mobile vertical calls, or <strong>Landscape full screen</strong> for desktop apps.
                 {" "}WhatsApp Desktop cannot see InspireTech Camera — use Telegram/Discord or WhatsApp Web.
               </div>
             )}
