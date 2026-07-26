@@ -115,6 +115,14 @@ const CALL_OUTPUT_LAYOUTS = {
   },
 };
 const DEFAULT_CALL_OUTPUT_LAYOUT = "landscape";
+const COMPANION_TOOLBAR_SECTIONS = [
+  { id: "studio", label: "Studio", icon: "🎬" },
+  { id: "devices", label: "Devices", icon: "📹" },
+  { id: "voice", label: "Voice", icon: "🎙️" },
+  { id: "credits", label: "Credits", icon: "💳" },
+  { id: "drivers", label: "Drivers", icon: "🖥️" },
+  { id: "account", label: "Account", icon: "⚙️" },
+];
 
 function normalizeCallOutputLayout(layoutKey) {
   if (layoutKey === "landscape" || layoutKey === "portrait") return layoutKey;
@@ -195,7 +203,7 @@ function getCallLayoutNote(layoutKey = DEFAULT_CALL_OUTPUT_LAYOUT) {
     case "landscape":
       return "Standard 1280×720 view for Zoom, Telegram, Discord, and other horizontal calls.";
     case "portrait":
-      return "Native 720×1280 portrait for WhatsApp mobile. After updating the app, open Drivers → Reinstall InspireTech Camera once.";
+      return "Native 720×1280 portrait for WhatsApp mobile. After updating, use the Drivers toolbar tab → Reinstall InspireTech Camera once.";
     default:
       return "";
   }
@@ -426,7 +434,7 @@ export default function App() {
 
   const isCompanionApp = () =>
     typeof window !== "undefined" && Boolean(window.inspiretechCompanion?.isDesktop);
-  const companionShell = isCompanionApp();
+  const companionToolbar = isCompanionApp();
 
   const getClientId = () => {
     const storageKey = "inspiretech_client_id";
@@ -3013,7 +3021,7 @@ export default function App() {
   const creditPercent = Math.min(100, (credits / 1000) * 100); // 1,000 credits ≈ the smallest top-up tier now
   const isLowCredit = credits <= LOW_CREDIT_THRESHOLD;
   const companionSectionClass = (section) =>
-    companionShell && companionNavSection !== section ? "itc-companion-hidden" : "";
+    companionToolbar && companionNavSection !== section ? "itc-companion-hidden" : "";
 
   // No access token yet — show sign-in gate (landing page lives at /).
   if (!accessToken || !sessionReady) {
@@ -3038,39 +3046,8 @@ export default function App() {
     <>
     <div
       style={styles.appContainer}
-      className={`itc-app${companionShell ? " itc-app-companion" : ""}${isMobileLayout ? " itc-app-mobile" : ""}${mobileOutputFocus ? " itc-mobile-theater" : ""}${callOutputIsPortrait ? " itc-call-output-full itc-call-output-portrait" : ""}${isMobileLayout && !mobileControlsOpen ? " itc-mobile-sidebar-collapsed" : ""}`}
+      className={`itc-app${isMobileLayout ? " itc-app-mobile" : ""}${mobileOutputFocus ? " itc-mobile-theater" : ""}${callOutputIsPortrait ? " itc-call-output-full itc-call-output-portrait" : ""}${isMobileLayout && !mobileControlsOpen ? " itc-mobile-sidebar-collapsed" : ""}`}
     >
-      {companionShell ? (
-        <header className="itc-companion-topbar">
-          <div className="itc-companion-topbar-left">
-            <LogoLockup size="sm" />
-            <div className="itc-companion-topbar-title">
-              <span className="itc-companion-page-title">
-                {companionNavSection.charAt(0).toUpperCase() + companionNavSection.slice(1)}
-              </span>
-              <span className={`itc-companion-status-line${isRunning ? " is-live" : ""}`}>
-                {formatStatusDisplay(status)}
-              </span>
-            </div>
-          </div>
-          <div className="itc-companion-topbar-right">
-            <div className={`itc-companion-pill${isRunning ? " is-live" : ""}`}>
-              <span className="itc-companion-pill-label">Status</span>
-              <span className="itc-companion-pill-value">{formatStatusDisplay(status)}</span>
-            </div>
-            <div className={`itc-companion-pill itc-companion-pill-credits${isLowCredit ? " is-danger" : ""}`}>
-              <span className="itc-companion-pill-icon">⚡</span>
-              <span className="itc-companion-pill-value">{creditsLoaded ? credits : "…"}</span>
-              {creditsLoaded && <span className="itc-companion-pill-sub">{formatUsdFromCredits(credits)}</span>}
-            </div>
-            {desktopAppVersion && (
-              <div className="itc-companion-pill itc-companion-pill-version">
-                <span className="itc-companion-pill-value">v{desktopAppVersion}</span>
-              </div>
-            )}
-          </div>
-        </header>
-      ) : (
       <header className="itc-top-header">
         <div className="itc-header-brand">
           <div className="itc-header-brand-id">
@@ -3088,7 +3065,7 @@ export default function App() {
             >
               Switch token
             </button>
-            {isCompanionApp() && driverSetupFailed && (
+            {companionToolbar && driverSetupFailed && (
               <button
                 type="button"
                 className="itc-header-link"
@@ -3098,10 +3075,10 @@ export default function App() {
                 {driverSetupBusy ? "Retrying drivers…" : "Retry driver install"}
               </button>
             )}
-            {isCompanionApp() && desktopAppVersion && (
+            {companionToolbar && desktopAppVersion && (
               <span className="itc-header-version">Desktop v{desktopAppVersion}</span>
             )}
-            {isCompanionApp() && (
+            {companionToolbar && (
               <button
                 type="button"
                 className="itc-header-link"
@@ -3110,13 +3087,34 @@ export default function App() {
                 Check for updates
               </button>
             )}
-            {!isCompanionApp() && (
+            {!companionToolbar && (
               <Link to="/" className="itc-header-link">
                 Home
               </Link>
             )}
           </div>
         </div>
+
+        {companionToolbar && (
+          <nav className="itc-desktop-toolbar" aria-label="Studio sections">
+            {COMPANION_TOOLBAR_SECTIONS.map((section) => (
+              <button
+                key={section.id}
+                type="button"
+                className={`itc-desktop-toolbar-item${companionNavSection === section.id ? " is-active" : ""}`}
+                onClick={() => setCompanionNavSection(section.id)}
+              >
+                <span className="itc-desktop-toolbar-icon" aria-hidden="true">
+                  {section.icon}
+                </span>
+                <span>{section.label}</span>
+                {section.id === "drivers" && driverSetupFailed && (
+                  <span className="itc-desktop-toolbar-badge" aria-label="Driver setup needs attention" />
+                )}
+              </button>
+            ))}
+          </nav>
+        )}
 
         <div className="itc-status-ribbon">
           <div className="itc-status-chip">
@@ -3151,46 +3149,15 @@ export default function App() {
           </div>
         </div>
       </header>
-      )}
 
       <div
         style={styles.mainWorkspace}
-        className={companionShell ? "itc-companion-body" : "itc-main-workspace"}
+        className="itc-main-workspace"
       >
-        {companionShell && (
-          <nav className="itc-companion-nav" aria-label="Studio navigation">
-            <div className="itc-companion-nav-brand">INSPIRE_TECH</div>
-            <div className="itc-companion-nav-items">
-              {[
-                { id: "studio", label: "Studio", icon: "🎬" },
-                { id: "devices", label: "Devices", icon: "📹" },
-                { id: "voice", label: "Voice", icon: "🎙️" },
-                { id: "credits", label: "Credits", icon: "💳" },
-                { id: "drivers", label: "Drivers", icon: "🖥️" },
-                { id: "account", label: "Account", icon: "⚙️" },
-              ].map((section) => (
-                <button
-                  key={section.id}
-                  type="button"
-                  className={`itc-companion-nav-item${companionNavSection === section.id ? " is-active" : ""}`}
-                  onClick={() => setCompanionNavSection(section.id)}
-                >
-                  <span className="itc-companion-nav-icon" aria-hidden="true">
-                    {section.icon}
-                  </span>
-                  <span className="itc-companion-nav-label">{section.label}</span>
-                  {section.id === "drivers" && driverSetupFailed && (
-                    <span className="itc-companion-nav-badge" aria-label="Driver setup needs attention" />
-                  )}
-                </button>
-              ))}
-            </div>
-          </nav>
-        )}
 
         <aside
-          style={companionShell ? undefined : styles.controlSidebar}
-          className={companionShell ? "itc-companion-panel" : "itc-sidebar"}
+          style={styles.controlSidebar}
+          className="itc-sidebar"
         >
 
           <div className={`${companionSectionClass("devices")} itc-sidebar-section itc-sidebar-section-devices`}>
@@ -3275,7 +3242,7 @@ export default function App() {
                 ? "Change the dropdowns to switch camera or mic instantly."
                 : "Pick devices, then click Start Hardware Camera. Names appear after permission is granted."}
             </div>
-            {typeof window !== "undefined" && window.inspiretechCompanion && !companionShell && (
+            {typeof window !== "undefined" && window.inspiretechCompanion && (
               <div style={styles.compatNote}>
                 <strong>Calling app setup:</strong> Camera → <strong>InspireTech Camera</strong>.
                 {routeAudioToVirtualCable
@@ -3285,7 +3252,6 @@ export default function App() {
                 {" "}WhatsApp Desktop cannot see InspireTech Camera — use Telegram/Discord or WhatsApp Web.
               </div>
             )}
-            {!companionShell && (
             <div style={styles.buttonStack}>
               <button style={styles.primaryButton} className="itc-btn itc-btn-primary" onClick={() => startCamera()} disabled={isRunning}>
                 {cameraActive ? "Restart Hardware Camera" : "Start Hardware Camera"}
@@ -3295,7 +3261,6 @@ export default function App() {
               </button>
               <input type="file" ref={fileInputRef} accept="image/*" style={{ display: "none" }} onChange={(e) => handleFileChange(e.target.files?.[0])} />
             </div>
-            )}
           </div>
           </div>
 
@@ -3489,23 +3454,6 @@ export default function App() {
               <video ref={localVideoRef} autoPlay playsInline muted style={styles.localPreviewVideo} className="itc-local-video" />
             </div>
           </div>
-
-          {companionShell && (
-            <div style={styles.sectionCard} className="itc-card itc-section-card">
-              <div className="itc-studio-card-title">
-                <span>🚀</span> Quick actions
-              </div>
-              <div style={styles.buttonStack}>
-                <button style={styles.primaryButton} className="itc-btn itc-btn-primary" onClick={() => startCamera()} disabled={isRunning}>
-                  {cameraActive ? "Restart Hardware Camera" : "Start Hardware Camera"}
-                </button>
-                <button style={styles.secondaryButton} className="itc-btn itc-btn-secondary" onClick={() => fileInputRef.current?.click()}>
-                  Upload Reference Image
-                </button>
-                <input type="file" ref={fileInputRef} accept="image/*" style={{ display: "none" }} onChange={(e) => handleFileChange(e.target.files?.[0])} />
-              </div>
-            </div>
-          )}
           </div>
 
           <div className={`${companionSectionClass("credits")} itc-sidebar-section itc-sidebar-section-topup`}>
@@ -3537,7 +3485,7 @@ export default function App() {
           </div>
           </div>
 
-          {companionShell && (
+          {companionToolbar && (
             <div className={companionSectionClass("drivers")}>
               <div style={styles.sectionCard} className="itc-card itc-section-card">
                 <div className="itc-studio-card-title">
@@ -3582,7 +3530,7 @@ export default function App() {
             </div>
           )}
 
-          {companionShell && (
+          {companionToolbar && (
             <div className={companionSectionClass("account")}>
               <div style={styles.sectionCard} className="itc-card itc-section-card">
                 <div className="itc-studio-card-title">
@@ -3618,7 +3566,7 @@ export default function App() {
           )}
         </aside>
 
-        <div className={companionShell ? "itc-companion-stage" : "itc-studio-stage"}>
+        <div className="itc-studio-stage">
         <main style={styles.outputCanvas} className="itc-output-canvas">
           <div style={styles.canvasControlBar} className="itc-canvas-control-bar">
             <div style={styles.canvasTitleGroup} className="itc-canvas-title-group">
