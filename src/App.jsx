@@ -2269,12 +2269,12 @@ export default function App() {
     }
   };
 
-  const pushDecartLayeredState = async (session, sourcePrompt) => {
-    const promptText = composeLayeredPrompt(sourcePrompt, true);
+  const pushDecartBackgroundState = async (session, sourcePrompt) => {
+    const promptText = composeBackgroundOnlyPrompt(sourcePrompt);
     const useEnhance = getDecartEnhance(sourcePrompt);
     const imagePayload = referenceImageRefId.current || selectedFile;
 
-    console.info("[InspireTech] Decart layered prompt →", { promptText, enhance: useEnhance });
+    console.info("[InspireTech] Decart background prompt →", { promptText, enhance: useEnhance });
 
     await session.set({ prompt: promptText, image: imagePayload, enhance: useEnhance });
   };
@@ -2296,7 +2296,7 @@ export default function App() {
 
   const pushDecartState = async (session, sourcePrompt) => {
     if (hasBackgroundIntent(sourcePrompt) && selectedFile) {
-      await pushDecartLayeredState(session, sourcePrompt);
+      await applyCharacterThenBackgroundScene(session, sourcePrompt);
       return;
     }
 
@@ -2335,7 +2335,7 @@ export default function App() {
       tick();
     });
 
-  const applyCharacterThenLayeredScene = async (session, sourcePrompt, { waitForLive = false } = {}) => {
+  const applyCharacterThenBackgroundScene = async (session, sourcePrompt, { waitForLive = false } = {}) => {
     if (!hasBackgroundIntent(sourcePrompt) || !selectedFile) return;
 
     if (waitForLive) {
@@ -2354,12 +2354,18 @@ export default function App() {
     await new Promise((resolve) => setTimeout(resolve, 2500));
     if (realtimeClientRef.current !== session || !session.isConnected?.()) return;
 
-    setStatus("APPLYING CHARACTER + SCENE…");
-    await pushDecartLayeredState(session, sourcePrompt);
+    // Second character lock so a background-only set() does not collapse to face-swap.
+    await pushDecartCharacterState(session, sourcePrompt);
+
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    if (realtimeClientRef.current !== session || !session.isConnected?.()) return;
+
+    setStatus("APPLYING SCENE BACKGROUND…");
+    await pushDecartBackgroundState(session, sourcePrompt);
   };
 
   const applyLayeredSceneAfterCharacter = (session, sourcePrompt) =>
-    applyCharacterThenLayeredScene(session, sourcePrompt, { waitForLive: true });
+    applyCharacterThenBackgroundScene(session, sourcePrompt, { waitForLive: true });
 
   const handleDecartSessionFault = (err, label = "Decart session error") => {
     console.error(label, err);
@@ -2386,7 +2392,7 @@ export default function App() {
     setPromptApplyNote("");
     try {
       if (hasBackgroundIntent(sourcePrompt) && selectedFile) {
-        await applyCharacterThenLayeredScene(session, sourcePrompt);
+        await applyCharacterThenBackgroundScene(session, sourcePrompt);
       } else {
         await pushDecartState(session, sourcePrompt);
       }
@@ -2508,7 +2514,7 @@ export default function App() {
         connectPrompt,
         enhance: connectEnhance,
         wantsBackground,
-        strategy: wantsBackground ? "character-first then background-only set()" : "single prompt",
+        strategy: wantsBackground ? "character lock x2 then background-only set()" : "single prompt",
       });
 
       const session = await client.realtime.connect(streamForDecart, {
@@ -2556,7 +2562,7 @@ export default function App() {
       if (wantsBackground) {
         try {
           await applyLayeredSceneAfterCharacter(session, sourcePrompt);
-          setPromptApplyNote("Full character + scene applied.");
+          setPromptApplyNote("Character locked — scene background applied.");
         } catch (err) {
           console.error("Layered scene apply failed after connect:", err);
           setPromptApplyNote(err?.message || "Scene apply failed — try Apply again.");
@@ -2622,7 +2628,7 @@ export default function App() {
           <p className="itc-prompt-dock-subtitle">
             {isMobileLayout
               ? "Set character + scene before Start. While live, open Show setup to edit and Apply."
-              : "Reference photo should show the full outfit you want. Character locks first, then scene — wait ~5s after Start."}
+              : "Character locks first (reference outfit), then the room swaps. Wait ~6s after Start — presets change the background."}
           </p>
         </div>
         <label className="itc-prompt-enhance-toggle">
