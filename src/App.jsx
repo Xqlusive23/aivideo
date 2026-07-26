@@ -129,6 +129,26 @@ function normalizeCallOutputLayout(layoutKey) {
   return "landscape";
 }
 
+function isMobileUserAgent() {
+  if (typeof navigator === "undefined") return false;
+  return /iPhone|iPad|iPod|Android|Mobile/i.test(navigator.userAgent || "");
+}
+
+function resolveDecartMirrorMode(stream, mobileSession) {
+  if (!mobileSession) return false;
+  const facingMode = stream?.getVideoTracks?.()[0]?.getSettings?.()?.facingMode;
+  if (facingMode === "environment") return false;
+  if (facingMode === "user") return "auto";
+  return true;
+}
+
+function resolveLocalPreviewMirror(stream, mobileSession) {
+  if (!mobileSession) return false;
+  const facingMode = stream?.getVideoTracks?.()[0]?.getSettings?.()?.facingMode;
+  if (facingMode === "environment") return false;
+  return true;
+}
+
 function drawVideoFrame(ctx, video, destWidth, destHeight, fit = "cover") {
   const srcW = video.videoWidth;
   const srcH = video.videoHeight;
@@ -387,6 +407,7 @@ export default function App() {
   });
   const callOutputLayoutRef = useRef(callOutputLayout);
   const [cameraActive, setCameraActive] = useState(false);
+  const [mirrorLocalPreview, setMirrorLocalPreview] = useState(false);
   const selectedVideoDeviceIdRef = useRef("");
   const selectedVideoDeviceLabelRef = useRef("");
   const selectedAudioDeviceIdRef = useRef("");
@@ -550,6 +571,9 @@ export default function App() {
       width: { ideal: relaxed ? 640 : model.width },
       height: { ideal: relaxed ? 480 : model.height },
     };
+    if ((isMobileLayout || isMobileUserAgent()) && !deviceId) {
+      constraints.facingMode = "user";
+    }
     if (deviceId) {
       constraints.deviceId = strictDevice ? { exact: deviceId } : { ideal: deviceId };
     }
@@ -642,9 +666,14 @@ export default function App() {
     return () => mediaDevices.removeEventListener("devicechange", refreshMediaDevices);
   }, []);
 
+  const applyCallOutputLayout = !isMobileLayout && !isMobileUserAgent();
+  const shouldMirrorWebcam = isMobileLayout || isMobileUserAgent();
+
   useEffect(() => {
-    callOutputLayoutRef.current = callOutputLayout;
-  }, [callOutputLayout]);
+    callOutputLayoutRef.current = applyCallOutputLayout
+      ? callOutputLayout
+      : DEFAULT_CALL_OUTPUT_LAYOUT;
+  }, [callOutputLayout, applyCallOutputLayout]);
 
   useEffect(() => {
     if (!selectedFile) setUseReferenceBackground(false);
@@ -659,6 +688,7 @@ export default function App() {
       localVideoRef.current.srcObject = null;
     }
     setCameraActive(false);
+    setMirrorLocalPreview(false);
   };
 
   // --- Fetch the real balance on load, and handle returning from Paystack Checkout ---
@@ -900,7 +930,7 @@ export default function App() {
     }
 
     return () => stopCapture();
-  }, [isRunning, callOutputLayout]);
+  }, [isRunning, callOutputLayout, applyCallOutputLayout]);
 
   // Keep the button label in sync if the user closes the PiP window
   // directly (its own native close control) rather than clicking our button.
@@ -1252,12 +1282,14 @@ export default function App() {
   const COMPANION_CAPTURE_FPS = 20; // must match virtualcam_feeder.py's --fps
   useEffect(() => {
     if (typeof window === "undefined" || !window.inspiretechCompanion?.configureVirtualCam) return;
-    const layout = getCallOutputLayoutConfig(callOutputLayout);
+    const layout = getCallOutputLayoutConfig(
+      applyCallOutputLayout ? callOutputLayout : DEFAULT_CALL_OUTPUT_LAYOUT
+    );
     void window.inspiretechCompanion.configureVirtualCam({
       width: layout.width,
       height: layout.height,
     });
-  }, [callOutputLayout]);
+  }, [callOutputLayout, applyCallOutputLayout]);
 
   useEffect(() => {
     if (typeof window === "undefined" || !window.inspiretechCompanion) return;
@@ -1309,7 +1341,7 @@ export default function App() {
         companionCaptureIntervalRef.current = null;
       }
     };
-  }, [isRunning, callOutputLayout]);
+  }, [isRunning, callOutputLayout, applyCallOutputLayout]);
 
   // Single place that handles "the server no longer accepts this token" —
   // covers both an invalid token (401) and a revoked one (403). Always safe
@@ -2403,6 +2435,7 @@ export default function App() {
 
       localStreamRef.current = stream;
       if (localVideoRef.current) localVideoRef.current.srcObject = stream;
+      setMirrorLocalPreview(resolveLocalPreviewMirror(stream, isMobileLayout || isMobileUserAgent()));
 
       if (activeDeviceId) {
         selectedVideoDeviceIdRef.current = activeDeviceId;
@@ -2773,7 +2806,7 @@ export default function App() {
 
       const session = await client.realtime.connect(streamForDecart, {
         model: realtimeModel,
-        mirror: "auto",
+        mirror: resolveDecartMirrorMode(streamForDecart, shouldMirrorWebcam),
         resolution: "720p",
         onRemoteStream: (remoteStream) => {
           const video = outputVideoRef.current;
@@ -3079,7 +3112,7 @@ export default function App() {
     );
   }
 
-  const callOutputIsPortrait = callOutputLayout === "portrait";
+  const callOutputIsPortrait = applyCallOutputLayout && callOutputLayout === "portrait";
 
   return (
     <>
@@ -3214,6 +3247,7 @@ export default function App() {
                 ))}
               </select>
             </div>
+            {applyCallOutputLayout && (
             <div style={styles.voiceSelectGroup}>
               <label className="itc-studio-label" style={styles.paramLabel}>Call video layout</label>
               <select
@@ -3231,6 +3265,7 @@ export default function App() {
               </select>
               <p className="itc-call-layout-note">{getCallLayoutNote(callOutputLayout)}</p>
             </div>
+            )}
             {typeof window !== "undefined" && window.inspiretechCompanion && (
               <div style={styles.parameterRow} className="itc-parameter-row">
                 <label className="itc-studio-label" style={styles.paramLabel}>
@@ -3259,7 +3294,11 @@ export default function App() {
                 {routeAudioToVirtualCable
                   ? " Microphone → CABLE Output (VB-Audio Virtual Cable) when routing voice to calls."
                   : " Use your normal physical microphone in calling apps unless you enable VB-CABLE routing above."}
-                {" "}Pick <strong>Portrait</strong> for WhatsApp mobile vertical calls, or <strong>Landscape</strong> for desktop apps.
+                {applyCallOutputLayout && (
+                  <>
+                    {" "}Pick <strong>Portrait</strong> for WhatsApp mobile vertical calls, or <strong>Landscape</strong> for desktop apps.
+                  </>
+                )}
                 {" "}WhatsApp Desktop cannot see InspireTech Camera — use Telegram/Discord or WhatsApp Web.
               </div>
             )}
@@ -3462,7 +3501,17 @@ export default function App() {
               <span>👁️</span> Local preview
             </div>
             <div style={styles.sidebarVideoWrapper} className="itc-local-video-wrapper">
-              <video ref={localVideoRef} autoPlay playsInline muted style={styles.localPreviewVideo} className="itc-local-video" />
+              <video
+                ref={localVideoRef}
+                autoPlay
+                playsInline
+                muted
+                style={{
+                  ...styles.localPreviewVideo,
+                  ...(mirrorLocalPreview ? { transform: "scaleX(-1)" } : {}),
+                }}
+                className="itc-local-video"
+              />
             </div>
           </div>
           </div>
@@ -3630,7 +3679,7 @@ export default function App() {
                 </div>
               )}
               <div style={styles.fixedOutputContainer} className={`itc-fixed-output${isRunning ? " itc-live" : ""}`}>
-                <video ref={outputVideoRef} autoPlay playsInline style={styles.mirroredVideo} />
+                <video ref={outputVideoRef} autoPlay playsInline style={styles.outputVideo} />
                 {!isRunning && (
                   <div style={styles.canvasOverlay}>
                     <div style={styles.overlayPingWrap}>
@@ -3750,7 +3799,7 @@ const styles = {
   imageBox: { height: "auto", backgroundColor: c.bg, borderRadius: r.sm, border: `1px dashed ${c.border}`, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", minHeight: "64px" },
   emptyBoxPlaceholder: { fontSize: "0.75rem", color: c.textDim },
   sidebarVideoWrapper: { position: "relative", width: "100%", aspectRatio: "16/9", backgroundColor: c.bg, borderRadius: r.sm, overflow: "hidden", border: `1px solid ${c.border}` },
-  localPreviewVideo: { position: "absolute", inset: 0, display: "block", width: "100%", height: "100%", objectFit: "contain", objectPosition: "center", transform: "scaleX(-1)", backgroundColor: c.bg },
+  localPreviewVideo: { position: "absolute", inset: 0, display: "block", width: "100%", height: "100%", objectFit: "contain", objectPosition: "center", backgroundColor: c.bg },
   parameterRow: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px", fontSize: "0.8125rem" },
   paramLabel: { color: c.textMuted, fontWeight: "500", fontSize: "0.75rem" },
   paramSliderGroup: { display: "flex", alignItems: "center", gap: "8px" },
@@ -3800,7 +3849,7 @@ const styles = {
   timerBadgeRow: { display: "flex", gap: "8px", flexWrap: "wrap", justifyContent: "center" },
   timerBadgeOutside: { backgroundColor: c.surface, border: `1px solid ${c.border}`, borderRadius: r.sm, padding: "4px 12px", fontSize: "11px", fontWeight: "700", color: c.primary, letterSpacing: "0.08em" },
   fixedOutputContainer: { backgroundColor: "#000", borderRadius: r.md, border: `1px solid ${c.border}`, position: "relative", overflow: "hidden", boxShadow: `0 24px 48px -20px rgba(0,0,0,0.8), 0 0 0 1px rgba(129,140,248,0.08)` },
-  mirroredVideo: { width: "100%", height: "100%", objectFit: "cover", transform: "scaleX(-1)" },
+  outputVideo: { width: "100%", height: "100%", objectFit: "cover" },
   fittedImage: { width: "100%", height: "100%", objectFit: "contain" },
   canvasOverlay: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", backgroundColor: "rgba(11, 16, 32, 0.94)" },
   overlayPingWrap: { position: "relative", width: "24px", height: "24px", marginBottom: "16px", display: "flex", alignItems: "center", justifyContent: "center" },

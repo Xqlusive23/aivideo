@@ -88,13 +88,13 @@ async function launchApp() {
   initUpdater();
   registerUpdaterIpc();
   registerSetupIpc();
-  startFeeder();
 
   if (await needsFirstRunSetup()) {
     await showSetupWizard();
   }
 
   createMainWindow();
+  startFeeder();
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
