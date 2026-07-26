@@ -39,6 +39,9 @@ function ensureUnityCapture() {
   console.log("[prepare-drivers] Copying Unity Capture install files...");
   copyDir(UNITY_SRC, UNITY_DEST);
 
+  const { patchUnityCapturePortrait } = require("./patch-unity-capture-portrait");
+  patchUnityCapturePortrait();
+
   const templateInstaller = path.join(ROOT, "scripts", "templates", "InstallInspireTech.bat");
   fs.copyFileSync(templateInstaller, path.join(UNITY_DEST, "InstallInspireTech.bat"));
 

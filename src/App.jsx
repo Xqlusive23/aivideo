@@ -98,8 +98,8 @@ const VOICE_CHUNK_MS = 500;
 const MOBILE_LAYOUT_MAX_WIDTH = 900;
 const VIRTUAL_CAM_WIDTH = 1280;
 const VIRTUAL_CAM_HEIGHT = 720;
-const PORTRAIT_CAM_WIDTH = 720;
-const PORTRAIT_CAM_HEIGHT = 1280;
+const PORTRAIT_CAM_WIDTH = 1280;
+const PORTRAIT_CAM_HEIGHT = 720;
 const CALL_OUTPUT_LAYOUTS = {
   landscape: {
     label: "Landscape",
@@ -111,7 +111,7 @@ const CALL_OUTPUT_LAYOUTS = {
     label: "Portrait",
     width: PORTRAIT_CAM_WIDTH,
     height: PORTRAIT_CAM_HEIGHT,
-    fit: "cover",
+    fit: "portrait-fill",
   },
 };
 const DEFAULT_CALL_OUTPUT_LAYOUT = "landscape";
@@ -132,6 +132,15 @@ function drawVideoFrame(ctx, video, destWidth, destHeight, fit = "cover") {
 
   if (fit === "stretch") {
     ctx.drawImage(video, 0, 0, destWidth, destHeight);
+    return;
+  }
+
+  if (fit === "portrait-fill") {
+    const cropW = srcH * (9 / 16);
+    const cropH = srcH;
+    const sx = Math.max(0, (srcW - cropW) / 2);
+    const sy = 0;
+    ctx.drawImage(video, sx, sy, cropW, cropH, 0, 0, destWidth, destHeight);
     return;
   }
 
@@ -186,7 +195,7 @@ function getCallLayoutNote(layoutKey = DEFAULT_CALL_OUTPUT_LAYOUT) {
     case "landscape":
       return "Standard 1280×720 view for Zoom, Telegram, Discord, and other horizontal calls.";
     case "portrait":
-      return "Full-screen 720×1280 with no letterbox — best for WhatsApp mobile and vertical video calls.";
+      return "Portrait crop scaled edge-to-edge at 1280×720 — fills InspireTech Camera for WhatsApp mobile without black bars.";
     default:
       return "";
   }
