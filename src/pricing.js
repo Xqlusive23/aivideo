@@ -9,7 +9,9 @@ export const LOW_CREDIT_THRESHOLD = 40;
 export const HEARTBEAT_INTERVAL_MS = 1000;
 
 export const TOP_UP_OPTIONS = [
+  { naira: 11200, credits: 500 },
   { naira: 22400, credits: 1000 },
+  { naira: 44800, credits: 2000 },
   { naira: 112000, credits: 5000 },
   { naira: 224000, credits: 10000, popular: true },
   { naira: 1120000, credits: 50000 },

@@ -787,7 +787,9 @@ app.get("/api/voice/rtc-preview/:voiceId", requireToken, async (req, res) => {
 // Amounts are in KOBO (Paystack's subunit for NGN — 1 naira = 100 kobo).
 const NAIRA_PER_DOLLAR = 1600;
 const TIERS = {
+  500: 7 * NAIRA_PER_DOLLAR * 100,     // $7   -> ₦11,200   -> 500 credits
   1000: 14 * NAIRA_PER_DOLLAR * 100,   // $14  -> ₦22,400   -> 1,000 credits
+  2000: 28 * NAIRA_PER_DOLLAR * 100,   // $28  -> ₦44,800   -> 2,000 credits
   5000: 70 * NAIRA_PER_DOLLAR * 100,   // $70  -> ₦112,000  -> 5,000 credits
   10000: 140 * NAIRA_PER_DOLLAR * 100, // $140 -> ₦224,000  -> 10,000 credits
   50000: 700 * NAIRA_PER_DOLLAR * 100, // $700 -> ₦1,120,000 -> 50,000 credits

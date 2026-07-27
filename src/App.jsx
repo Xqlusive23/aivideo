@@ -18,6 +18,7 @@ import {
   TOP_UP_OPTIONS,
   formatUsdFromCredits,
   formatUsdFromNaira,
+  formatLiveTimeFromCredits,
 } from "./pricing.js";
 
 const { colors: c, gradients: g, fonts: f, radius: r, shadow: s } = theme;
@@ -2955,7 +2956,7 @@ export default function App() {
     }
   };
 
-  const creditPercent = Math.min(100, (credits / 1000) * 100); // 1,000 credits ≈ the smallest top-up tier now
+  const creditPercent = Math.min(100, (credits / 500) * 100);
   const isLowCredit = credits <= LOW_CREDIT_THRESHOLD;
   const companionSectionClass = (section) => {
     if (!companionToolbar) return "";
@@ -3403,11 +3404,11 @@ export default function App() {
             <p style={styles.modalSubtitle}>You can purchase more Credits to start generating</p>
             <div style={styles.creditCardGrid} className="itc-credit-grid">
               {TOP_UP_OPTIONS.map((opt) => (
-                <div key={opt.naira} style={{...styles.creditCard, ...(opt.popular ? styles.creditCardPopular : {})}}>
+                <div key={opt.credits} style={{...styles.creditCard, ...(opt.popular ? styles.creditCardPopular : {})}}>
                   {opt.popular && <div style={styles.popularBadge}>Popular</div>}
                   <div style={{...styles.creditCardIcon, ...(opt.popular ? styles.creditCardIconPopular : {})}}>⚡</div>
                   <div style={styles.creditCardAmount}>{opt.credits.toLocaleString()}</div>
-                  <div style={styles.creditCardLabel}>Credits</div>
+                  <div style={styles.creditCardLabel}>Credits · {formatLiveTimeFromCredits(opt.credits)} live</div>
                   <button
                     style={{...styles.creditCardBuyBtn, ...(opt.popular ? styles.creditCardBuyBtnPopular : {})}}
                     className="itc-btn itc-btn-topup"
