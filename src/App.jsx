@@ -13,6 +13,7 @@ import {
 import {
   DISPLAY_CREDITS_PER_SECOND,
   DISPLAY_NAIRA_PER_USD,
+  EFFECTIVE_CREDITS_PER_SECOND,
   HEARTBEAT_INTERVAL_MS,
   LOW_CREDIT_THRESHOLD,
   BACKGROUND_MIN_PURCHASE_CREDITS,
@@ -56,7 +57,7 @@ function formatStatusDisplay(raw) {
   return raw;
 }
 
-// From project root .env — VITE_DECART_API_KEY=your_key_here (never commit .env or hardcode keys here).
+// Dev-only fallback when ledger Decart token mint is unavailable locally.
 const MY_DECART_KEY = (import.meta.env?.VITE_DECART_API_KEY || "").trim();
 
 // How long a live transformation session is allowed to run before auto-stopping.
@@ -98,19 +99,21 @@ function isMobileUserAgent() {
   return /iPhone|iPad|iPod|Android|Mobile/i.test(navigator.userAgent || "");
 }
 
-function resolveDecartMirrorMode(stream, mobileSession) {
-  if (!mobileSession) return false;
-  const facingMode = stream?.getVideoTracks?.()[0]?.getSettings?.()?.facingMode;
+function getStreamFacingMode(stream) {
+  return stream?.getVideoTracks?.()[0]?.getSettings?.()?.facingMode || "";
+}
+
+// Decart pre-flips the input so movement matches what you see (raise right hand → right on screen).
+// Desktop webcams usually omit facingMode, so default to true per Decart docs.
+function resolveDecartMirrorMode(stream) {
+  const facingMode = getStreamFacingMode(stream);
   if (facingMode === "environment") return false;
   if (facingMode === "user") return "auto";
   return true;
 }
 
-function resolveLocalPreviewMirror(stream, mobileSession) {
-  if (!mobileSession) return false;
-  const facingMode = stream?.getVideoTracks?.()[0]?.getSettings?.()?.facingMode;
-  if (facingMode === "environment") return false;
-  return true;
+function resolveLocalPreviewMirror(stream) {
+  return resolveDecartMirrorMode(stream) !== false;
 }
 
 function drawVideoFrame(ctx, video, destWidth, destHeight, fit = "cover") {
@@ -486,6 +489,10 @@ export default function App() {
   const clockTimerRef = useRef(null); // the local 5-min UX countdown (not billing)
   const heartbeatTimerRef = useRef(null); // the real billing tick, talking to the server
   const billingSessionIdRef = useRef(null);
+  const billingCreditsStartRef = useRef(0);
+  const creditsRef = useRef(0);
+  const heartbeatFailCountRef = useRef(0);
+  const decartGenerationSecondsRef = useRef(0);
   const theaterControlsTimerRef = useRef(null);
   const creditSectionRef = useRef(null);
   const startInProgressRef = useRef(false);
@@ -610,8 +617,6 @@ export default function App() {
     mediaDevices.addEventListener("devicechange", refreshMediaDevices);
     return () => mediaDevices.removeEventListener("devicechange", refreshMediaDevices);
   }, []);
-
-  const shouldMirrorWebcam = isMobileLayout || isMobileUserAgent();
 
   useEffect(() => {
     if (!selectedFile) setUseReferenceBackground(false);
@@ -916,6 +921,47 @@ export default function App() {
       window.removeEventListener("focus", checkAccess);
     };
   }, [accessToken, sessionReady]);
+
+  useEffect(() => {
+    creditsRef.current = credits;
+  }, [credits]);
+
+  // Closing the tab/window without Stop leaves Decart billing your API key while
+  // the ledger stops deducting — end the session and disconnect on page hide.
+  useEffect(() => {
+    const cleanupLiveSession = () => {
+      const sessionId = billingSessionIdRef.current;
+      const token = accessToken;
+      if (sessionId && token) {
+        fetch(`${LEDGER_URL}/api/sessions/${sessionId}/end`, {
+          method: "POST",
+          headers: {
+            "X-Access-Token": token,
+            "X-Client-Platform": getClientPlatform(),
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            clientId: getClientId(),
+            platform: getClientPlatform(),
+          }),
+          keepalive: true,
+        }).catch(() => {});
+        billingSessionIdRef.current = null;
+      }
+      const decartSession = realtimeClientRef.current;
+      if (decartSession) {
+        realtimeClientRef.current = null;
+        try {
+          decartSession.disconnect();
+        } catch {
+          // ignore
+        }
+      }
+    };
+
+    window.addEventListener("pagehide", cleanupLiveSession);
+    return () => window.removeEventListener("pagehide", cleanupLiveSession);
+  }, [accessToken]);
 
   // --- Electron desktop shell integration (no-op in the normal web app) ---
   // window.inspireTechDesktop only exists when this page is running inside
@@ -2522,6 +2568,9 @@ export default function App() {
         return false;
       }
       billingSessionIdRef.current = data.sessionId;
+      billingCreditsStartRef.current = data.credits;
+      heartbeatFailCountRef.current = 0;
+      decartGenerationSecondsRef.current = 0;
       setCredits(data.credits);
       startClockTimer();
       startHeartbeat(data.sessionId);
@@ -2565,6 +2614,7 @@ export default function App() {
           return;
         }
         if (!res.ok) throw new Error(`Heartbeat failed with ${res.status}`);
+        heartbeatFailCountRef.current = 0;
         const data = await res.json();
         setCredits(data.credits);
         setSessionCreditsUsed(Math.max(0, startedAtCredits - data.credits));
@@ -2577,6 +2627,11 @@ export default function App() {
         }
       } catch (err) {
         console.error("Heartbeat error:", err);
+        heartbeatFailCountRef.current += 1;
+        if (heartbeatFailCountRef.current >= 3) {
+          setStatus("LEDGER UNREACHABLE — STOPPING LIVE SESSION");
+          stopTransformation();
+        }
       }
     };
 
@@ -2628,7 +2683,7 @@ export default function App() {
 
       localStreamRef.current = stream;
       if (localVideoRef.current) localVideoRef.current.srcObject = stream;
-      setMirrorLocalPreview(resolveLocalPreviewMirror(stream, isMobileLayout || isMobileUserAgent()));
+      setMirrorLocalPreview(resolveLocalPreviewMirror(stream));
 
       if (activeDeviceId) {
         selectedVideoDeviceIdRef.current = activeDeviceId;
@@ -2794,6 +2849,20 @@ export default function App() {
       setPromptApplyNote(err?.message || "Decart warning — retry Apply if output looks wrong.");
     });
 
+    session.on("generationTick", ({ seconds }) => {
+      decartGenerationSecondsRef.current = seconds;
+      const ledgerCreditsUsed = Math.max(0, billingCreditsStartRef.current - creditsRef.current);
+      const ledgerSeconds = ledgerCreditsUsed / EFFECTIVE_CREDITS_PER_SECOND;
+      // Ledger bills faster than Decart API cost — stop if Decart still runs ahead.
+      if (seconds > ledgerSeconds + 5) {
+        console.warn(
+          `[InspireTech] Decart generation (${seconds}s) ahead of ledger (~${ledgerSeconds.toFixed(0)}s) — stopping`
+        );
+        setStatus("BILLING SYNC LOST — LIVE SESSION STOPPED");
+        stopTransformation();
+      }
+    });
+
     session.on("connectionChange", (state) => {
       const prev = lastState;
       lastState = state;
@@ -2834,6 +2903,15 @@ export default function App() {
     setIsRunning(false);
     clearClockTimer();
     clearHeartbeat();
+    const decartSession = realtimeClientRef.current;
+    realtimeClientRef.current = null;
+    if (decartSession) {
+      try {
+        decartSession.disconnect();
+      } catch {
+        // ignore
+      }
+    }
     const sid = billingSessionIdRef.current;
     billingSessionIdRef.current = null;
     endBillingSession(sid);
@@ -2874,6 +2952,46 @@ export default function App() {
     }
   };
 
+  const fetchDecartRealtimeCredentials = async (modelId) => {
+    try {
+      const res = await fetch(`${LEDGER_URL}/api/decart/realtime-token`, {
+        method: "POST",
+        headers: { ...authHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ modelId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 401) {
+        handleTokenRejected("Your access token was rejected. Please re-enter it.");
+        return null;
+      }
+      if (res.status === 403) {
+        handleTokenRejected(
+          await readRejectedMessage(
+            res,
+            "Your access has been revoked. If you think this is a mistake, message us on WhatsApp below."
+          )
+        );
+        return null;
+      }
+      if (res.status === 402) {
+        setCredits(data.credits ?? 0);
+        setStatus("OUT OF CREDITS — ADD MORE TO CONTINUE");
+        setShowAddCredits(true);
+        return null;
+      }
+      if (!res.ok) {
+        throw new Error(data.error || `Decart token request failed (${res.status})`);
+      }
+      return data;
+    } catch (err) {
+      if (MY_DECART_KEY && import.meta.env.DEV) {
+        console.warn("[InspireTech] Using local VITE_DECART_API_KEY fallback for dev");
+        return { apiKey: MY_DECART_KEY, fallback: true };
+      }
+      throw err;
+    }
+  };
+
   const startTransformation = async () => {
     // isRunning is React state — it doesn't update synchronously, so a fast
     // double-click can fire this twice before the Start button visually
@@ -2889,11 +3007,6 @@ export default function App() {
     }
     if (ledgerUnreachable) {
       setStatus("LEDGER BACKEND UNREACHABLE — CHECK IT'S RUNNING");
-      startInProgressRef.current = false;
-      return;
-    }
-    if (!MY_DECART_KEY) {
-      setStatus("VITE_DECART_API_KEY is not set — add it to your project .env and restart npm run dev");
       startInProgressRef.current = false;
       return;
     }
@@ -2972,7 +3085,14 @@ export default function App() {
     }
 
     try {
-      const client = createDecartClient({ apiKey: MY_DECART_KEY });
+      const modelId = getModelId();
+      const decartAuth = await fetchDecartRealtimeCredentials(modelId);
+      if (!decartAuth?.apiKey) {
+        setIsRunning(false);
+        return;
+      }
+
+      const client = createDecartClient({ apiKey: decartAuth.apiKey });
       const realtimeModel = getRealtimeModel();
       const sourcePrompt = getPromptText();
       const composeOptions = getPromptComposeOptions();
@@ -3002,7 +3122,7 @@ export default function App() {
 
       const session = await client.realtime.connect(streamForDecart, {
         model: realtimeModel,
-        mirror: resolveDecartMirrorMode(streamForDecart, shouldMirrorWebcam),
+        mirror: resolveDecartMirrorMode(streamForDecart),
         resolution: "720p",
         onRemoteStream: (remoteStream) => {
           const video = outputVideoRef.current;
@@ -3082,6 +3202,9 @@ export default function App() {
 
     const sessionId = billingSessionIdRef.current;
     billingSessionIdRef.current = null;
+    billingCreditsStartRef.current = 0;
+    heartbeatFailCountRef.current = 0;
+    decartGenerationSecondsRef.current = 0;
     endBillingSession(sessionId);
 
     setIsRunning(false);

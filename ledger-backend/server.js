@@ -21,6 +21,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "crypto";
+import { createDecartClient } from "@decartai/sdk";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -36,10 +37,18 @@ const ALLOWED_ORIGINS = new Set(
   ].filter(Boolean)
 );
 const CREDITS_PER_SECOND = Number(process.env.CREDITS_PER_SECOND || 2);
+// Bill users faster than Decart's per-second API cost so your Decart balance
+// is never drained ahead of the user's InspireTech ledger.
+const BILLING_MULTIPLIER = Number(process.env.BILLING_MULTIPLIER || 1.35);
 const MAX_HEARTBEAT_GAP_SECONDS = 10; // caps deduction if a heartbeat is late/missed
 const PRESENCE_ACTIVE_SECONDS = 90; // admin "online now" window
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY || "";
 const ADMIN_SECRET = process.env.ADMIN_SECRET || "";
+const DECART_API_KEY = process.env.DECART_API_KEY || "";
+
+if (!DECART_API_KEY) {
+  console.warn("\n⚠️  DECART_API_KEY is not set — live transformation tokens cannot be minted until you add it to .env\n");
+}
 
 // --- Voice changer (ElevenLabs Speech-to-Speech / Voice Changer API) --------
 // This converts recorded audio into a different voice while preserving the
@@ -233,6 +242,26 @@ function adjustBalance(token, delta) {
   const next = Math.max(0, current + delta);
   db.prepare("UPDATE users SET credits = ? WHERE token = ?").run(next, token);
   return next;
+}
+
+function effectiveCreditsPerSecond() {
+  return CREDITS_PER_SECOND * BILLING_MULTIPLIER;
+}
+
+function creditsForElapsedSeconds(elapsedSeconds) {
+  return Math.ceil(Math.max(0, elapsedSeconds) * effectiveCreditsPerSecond());
+}
+
+function maxLiveSecondsForCredits(credits) {
+  return Math.floor(Math.max(0, credits) / effectiveCreditsPerSecond());
+}
+
+function billingPayload() {
+  return {
+    creditsPerSecond: CREDITS_PER_SECOND,
+    billingMultiplier: BILLING_MULTIPLIER,
+    billingCreditsPerSecond: effectiveCreditsPerSecond(),
+  };
 }
 
 function recordTransaction({ token, type, credits, amount_ngn = null, provider_reference = null }) {
@@ -650,12 +679,13 @@ app.get("/api/access-check", requireToken, (req, res) => {
     platform: req.clientPlatform,
     credits: getBalance(req.token),
     ...tierPayload(req.token),
+    ...billingPayload(),
   });
 });
 
 // --- Balance ----------------------------------------------------------------
 app.get("/api/credits", requireToken, (req, res) => {
-  res.json({ credits: getBalance(req.token), ...tierPayload(req.token) });
+  res.json({ credits: getBalance(req.token), ...tierPayload(req.token), ...billingPayload() });
 });
 
 app.get("/api/transactions", requireToken, (req, res) => {
@@ -960,7 +990,7 @@ app.post("/api/sessions/start", requireToken, (req, res) => {
     const now = new Date();
     const last = new Date(session.last_heartbeat_at);
     const elapsedSeconds = Math.min(MAX_HEARTBEAT_GAP_SECONDS, Math.max(0, (now - last) / 1000));
-    const creditsToDeduct = Math.round(elapsedSeconds * CREDITS_PER_SECOND);
+    const creditsToDeduct = creditsForElapsedSeconds(elapsedSeconds);
     adjustBalance(req.token, -creditsToDeduct);
     if (creditsToDeduct > 0) {
       recordTransaction({ token: req.token, type: "usage", credits: -creditsToDeduct });
@@ -1005,7 +1035,7 @@ app.post("/api/sessions/:id/heartbeat", requireToken, (req, res) => {
   const now = new Date();
   const last = new Date(session.last_heartbeat_at);
   const elapsedSeconds = Math.min(MAX_HEARTBEAT_GAP_SECONDS, Math.max(0, (now - last) / 1000));
-  const creditsToDeduct = Math.round(elapsedSeconds * CREDITS_PER_SECOND);
+  const creditsToDeduct = creditsForElapsedSeconds(elapsedSeconds);
 
   const remaining = adjustBalance(req.token, -creditsToDeduct);
   if (creditsToDeduct > 0) {
@@ -1039,7 +1069,7 @@ app.post("/api/sessions/:id/end", requireToken, (req, res) => {
   const now = new Date();
   const last = new Date(session.last_heartbeat_at);
   const elapsedSeconds = Math.min(MAX_HEARTBEAT_GAP_SECONDS, Math.max(0, (now - last) / 1000));
-  const creditsToDeduct = Math.round(elapsedSeconds * CREDITS_PER_SECOND);
+  const creditsToDeduct = creditsForElapsedSeconds(elapsedSeconds);
   const remaining = adjustBalance(req.token, -creditsToDeduct);
   if (creditsToDeduct > 0) {
     recordTransaction({ token: req.token, type: "usage", credits: -creditsToDeduct });
@@ -1062,6 +1092,69 @@ app.post("/api/sessions/:id/end", requireToken, (req, res) => {
   }
 
   res.json({ credits: remaining });
+});
+
+// --- Decart realtime (short-lived client tokens) -----------------------------
+const DECART_ALLOWED_ORIGINS = [
+  "https://www.inspirestream.xyz",
+  "https://inspirestream.xyz",
+  FRONTEND_URL,
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+].filter(Boolean);
+
+let decartAdminClient = null;
+
+function getDecartAdminClient() {
+  if (!DECART_API_KEY) return null;
+  if (!decartAdminClient) {
+    decartAdminClient = createDecartClient({ apiKey: DECART_API_KEY });
+  }
+  return decartAdminClient;
+}
+
+app.post("/api/decart/realtime-token", requireToken, async (req, res) => {
+  const decartClient = getDecartAdminClient();
+  if (!decartClient) {
+    return res.status(503).json({ error: "Decart is not configured on this server." });
+  }
+
+  const credits = getBalance(req.token);
+  if (credits <= 0) {
+    return res.status(402).json({ error: "Out of credits", credits });
+  }
+
+  const modelId = String(req.body?.modelId || "lucy-2.5").trim();
+  const maxSeconds = maxLiveSecondsForCredits(credits);
+  const maxSessionDuration = Math.max(60, Math.min(maxSeconds, 7200));
+  const expiresIn = Math.min(600, Math.max(120, maxSessionDuration + 60));
+
+  const tokenOptions = {
+    expiresIn,
+    allowedModels: [modelId],
+    constraints: {
+      realtime: { maxSessionDuration: Math.max(10, maxSessionDuration) },
+    },
+    metadata: { inspiretechToken: req.token.slice(0, 8) },
+  };
+
+  if (DECART_ALLOWED_ORIGINS.length > 0 && req.clientPlatform !== "windows-app") {
+    tokenOptions.allowedOrigins = [...new Set(DECART_ALLOWED_ORIGINS)];
+  }
+
+  try {
+    const token = await decartClient.tokens.create(tokenOptions);
+    res.json({
+      apiKey: token.apiKey,
+      expiresAt: token.expiresAt,
+      maxSessionDuration,
+      credits,
+      ...billingPayload(),
+    });
+  } catch (err) {
+    console.error("Decart token mint failed:", err);
+    res.status(500).json({ error: "Could not create Decart session token." });
+  }
 });
 
 app.listen(PORT, () => {

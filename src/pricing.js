@@ -1,10 +1,13 @@
-// Shared pricing — must stay in sync with ledger-backend/server.js TIERS + CREDITS_PER_SECOND.
+// Shared pricing — must stay in sync with ledger-backend/server.js TIERS + billing rates.
 
 export const CREDITS_PER_DOLLAR = 100;
 export const NAIRA_PER_USD = 1600;
 export const NAIRA_PER_CREDIT = (14 * NAIRA_PER_USD) / 1000;
 export const DISPLAY_NAIRA_PER_USD = Number(import.meta.env?.VITE_NAIRA_PER_USD) || NAIRA_PER_USD;
-export const DISPLAY_CREDITS_PER_SECOND = 2;
+export const BASE_CREDITS_PER_SECOND = 2;
+export const BILLING_MULTIPLIER = 1.35;
+export const EFFECTIVE_CREDITS_PER_SECOND = BASE_CREDITS_PER_SECOND * BILLING_MULTIPLIER;
+export const DISPLAY_CREDITS_PER_SECOND = Math.ceil(EFFECTIVE_CREDITS_PER_SECOND);
 export const LOW_CREDIT_THRESHOLD = 40;
 export const HEARTBEAT_INTERVAL_MS = 1000;
 
@@ -46,9 +49,9 @@ export function formatCredits(credits) {
   return credits.toLocaleString();
 }
 
-/** Live transformation time billed at DISPLAY_CREDITS_PER_SECOND while the session is running. */
+/** Live transformation time billed at EFFECTIVE_CREDITS_PER_SECOND while the session is running. */
 export function formatLiveTimeFromCredits(credits) {
-  const totalSeconds = credits / DISPLAY_CREDITS_PER_SECOND;
+  const totalSeconds = credits / EFFECTIVE_CREDITS_PER_SECOND;
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.round((totalSeconds % 3600) / 60);
 
