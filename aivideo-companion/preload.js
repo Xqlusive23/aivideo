@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld("inspiretechCompanion", {
   getSetupStatus: () => ipcRenderer.invoke("inspiretech:setup:status"),
   resetDriverSetup: (options) => ipcRenderer.invoke("inspiretech:setup:reset-for-install", options),
   installDrivers: (options) => ipcRenderer.invoke("inspiretech:setup:install-all", options),
+  installAudioDriver: (options) => ipcRenderer.invoke("inspiretech:setup:install-audio", options),
   setSkipAudio: (skipAudio) => ipcRenderer.invoke("inspiretech:setup:set-skip-audio", skipAudio),
   completeSetup: () => ipcRenderer.invoke("inspiretech:setup:complete"),
   sendFrame: (arrayBuffer) => {

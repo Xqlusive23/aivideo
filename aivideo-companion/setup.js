@@ -231,9 +231,13 @@ function parseRegDefaultPath(regOutput) {
 async function isVirtualAudioInstalled() {
   try {
     const result = await runPowerShell(`
-      $names = Get-CimInstance Win32_PnPEntity -ErrorAction SilentlyContinue |
-        ForEach-Object { $_.Name }
-      if ($names -match 'VB-Audio|CABLE Input|CABLE Output|Virtual Cable') { 'true' } else { 'false' }
+      $names = @(
+        Get-CimInstance Win32_PnPEntity -ErrorAction SilentlyContinue | ForEach-Object { $_.Name }
+      )
+      if ($names -match 'VB-Audio|CABLE Input|CABLE Output|Virtual Cable') { 'true'; exit }
+      $media = Get-PnpDevice -Class Media -ErrorAction SilentlyContinue |
+        ForEach-Object { $_.FriendlyName }
+      if ($media -match 'VB-Audio|CABLE') { 'true' } else { 'false' }
     `);
     return result.includes("true");
   } catch {
@@ -339,6 +343,29 @@ function runElevatedViaVbs(cmdLine, cwd, options = {}) {
         );
       }
     }, 400);
+  });
+}
+
+function launchElevatedVisible(exePath, cwd) {
+  const vbsPath = path.join(app.getPath("temp"), `inspiretech-vb-${Date.now()}.vbs`);
+  const workDir = (cwd || path.dirname(exePath)).replace(/\\/g, "\\\\");
+  const escapedExe = exePath.replace(/"/g, '""');
+  const vbs = [
+    'Set shell = CreateObject("Shell.Application")',
+    `shell.ShellExecute "${escapedExe}", "", "${workDir}", "runas", 1`,
+  ].join("\r\n");
+  fs.writeFileSync(vbsPath, vbs, "utf8");
+
+  return new Promise((resolve, reject) => {
+    execFile("wscript.exe", ["//Nologo", vbsPath], { windowsHide: true }, (err) => {
+      try {
+        fs.unlinkSync(vbsPath);
+      } catch {
+        // ignore
+      }
+      if (err) reject(err);
+      else resolve();
+    });
   });
 }
 
@@ -505,36 +532,50 @@ async function prepareVbCableStaging() {
   return { stagingDir, installer };
 }
 
-async function installVirtualAudio() {
+async function installVirtualAudio(options = {}) {
+  const { forceReinstall = false } = options;
   const stepLabel = "VB-Audio Virtual Cable";
-  const { stagingDir, installer } = await prepareVbCableStaging();
-  const runOptions = { allowedExitCodes: VB_CABLE_SUCCESS_EXIT_CODES };
 
+  if (!forceReinstall && (await isVirtualAudioInstalled())) {
+    return true;
+  }
+
+  const { stagingDir, installer } = await prepareVbCableStaging();
+  const runOptions = { allowedExitCodes: VB_CABLE_SUCCESS_EXIT_CODES, timeoutMs: 180000 };
+
+  let installed = false;
   try {
     try {
       await runElevated(installer, ["-i", "-h"], stagingDir, runOptions);
+      installed = await waitForDetection(isVirtualAudioInstalled, 10, 1000);
     } catch {
-      // Silent flags are unreliable on fresh PCs — fall back to the official installer UI.
-      await runElevated(installer, [], stagingDir, runOptions);
+      // Silent install often fails on fresh PCs — fall back to the official UI wizard.
+    }
+
+    if (!installed) {
+      await launchElevatedVisible(installer, stagingDir);
+      installed = await waitForDetection(isVirtualAudioInstalled, 120, 3000);
     }
   } catch (error) {
     throw runElevatedError(
       error.code || 1,
       stepLabel,
-      `${installer}\nRun from an extracted folder (not directly from a ZIP). Reboot if the installer asks.`
+      `${installer}\nApprove UAC, complete the VB-CABLE wizard, then reboot if prompted.`
     );
   } finally {
-    try {
-      fs.rmSync(stagingDir, { recursive: true, force: true });
-    } catch {
-      // ignore cleanup failures
+    if (installed) {
+      try {
+        fs.rmSync(stagingDir, { recursive: true, force: true });
+      } catch {
+        // ignore cleanup failures
+      }
     }
   }
 
-  const installed = await waitForDetection(isVirtualAudioInstalled, 12, 1000);
   if (!installed) {
     throw new Error(
-      `${stepLabel} was not detected after install. Complete the installer if it is still open, reboot Windows, then try again.`
+      `${stepLabel} was not detected after install. If the installer window is still open, finish it and reboot Windows. ` +
+        `Manual install:\n${installer}`
     );
   }
   return true;
@@ -572,6 +613,7 @@ async function getSetupStatus() {
     unityCaptureBundled,
     virtualCameraName: VIRTUAL_CAMERA_NAME,
     manualCameraInstallBat: path.join(getStagedUnityCaptureDir(), "InstallInspireTech.bat"),
+    manualVbCableInstaller: getVbCableInstaller(getVbCableBundleDir()),
   };
 }
 
@@ -616,8 +658,10 @@ function registerSetupIpc() {
     return getSetupStatus();
   });
 
-  ipcMain.handle(`${SETUP_CHANNEL}:install-audio`, async () => {
-    await installVirtualAudio();
+  ipcMain.handle(`${SETUP_CHANNEL}:install-audio`, async (_event, options = {}) => {
+    const state = readSetupState();
+    writeSetupState({ ...state, skipVirtualAudio: false });
+    await installVirtualAudio({ forceReinstall: Boolean(options.forceReinstall) });
     return getSetupStatus();
   });
 

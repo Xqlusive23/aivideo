@@ -376,6 +376,8 @@ export default function App() {
   const [driverSetupFailed, setDriverSetupFailed] = useState(false);
   const [driverSetupBusy, setDriverSetupBusy] = useState(false);
   const [driverCameraInstalled, setDriverCameraInstalled] = useState(null);
+  const [driverAudioInstalled, setDriverAudioInstalled] = useState(null);
+  const [vbCableBundled, setVbCableBundled] = useState(null);
   const [appUpdateOpen, setAppUpdateOpen] = useState(false);
   const [appUpdateInfo, setAppUpdateInfo] = useState(null);
   const [appUpdatePhase, setAppUpdatePhase] = useState("available");
@@ -707,13 +709,20 @@ export default function App() {
     };
   }, [accessToken, sessionReady]);
 
+  const syncCompanionDriverStatus = (status) => {
+    if (!status) return;
+    setDriverCameraInstalled(status.cameraInstalled ?? null);
+    setDriverAudioInstalled(status.audioInstalled ?? null);
+    setVbCableBundled(status.vbCableBundled ?? null);
+  };
+
   useEffect(() => {
     if (!isCompanionApp()) return undefined;
     let cancelled = false;
     window.inspiretechCompanion
       ?.getSetupStatus?.()
       .then((status) => {
-        if (!cancelled && status) setDriverCameraInstalled(status.cameraInstalled);
+        if (!cancelled) syncCompanionDriverStatus(status);
       })
       .catch(() => {});
     return () => {
@@ -1395,7 +1404,45 @@ export default function App() {
       setStatus("RETRYING DRIVER SETUP — APPROVE UAC");
       await runCompanionDriverSetup({ forceReinstall: true, fromGate: false });
       const status = await window.inspiretechCompanion.getSetupStatus();
-      setDriverCameraInstalled(status?.cameraInstalled ?? null);
+      syncCompanionDriverStatus(status);
+      setStatus("SYSTEM STANDBY");
+    } catch (err) {
+      setDriverSetupFailed(true);
+      setStatus(`DRIVER SETUP FAILED: ${err.message}`);
+    } finally {
+      setDriverSetupBusy(false);
+    }
+  };
+
+  const installCompanionVbCable = async ({ forceReinstall = false } = {}) => {
+    if (driverSetupBusy || !isCompanionApp()) return;
+    const companion = window.inspiretechCompanion;
+    if (!companion?.installAudioDriver) {
+      setStatus("DRIVER SETUP FAILED: Desktop driver bridge unavailable.");
+      return;
+    }
+
+    setDriverSetupBusy(true);
+    setTokenError("");
+    try {
+      const before = await companion.getSetupStatus();
+      if (!before?.vbCableBundled) {
+        throw new Error(
+          "VB-CABLE is not bundled in this desktop build. Download the latest InspireTech installer from inspirestream.xyz."
+        );
+      }
+
+      setStatus(forceReinstall ? "REINSTALLING VB-CABLE — APPROVE UAC" : "INSTALLING VB-CABLE — APPROVE UAC");
+      await companion.setSkipAudio?.(false);
+      await companion.installAudioDriver({ forceReinstall });
+      const status = await companion.getSetupStatus();
+      syncCompanionDriverStatus(status);
+      if (!status?.audioInstalled) {
+        throw new Error(
+          "VB-CABLE install did not finish. Approve UAC, complete the VB-CABLE wizard if it opened, then reboot Windows and try again."
+        );
+      }
+      setDriverSetupFailed(false);
       setStatus("SYSTEM STANDBY");
     } catch (err) {
       setDriverSetupFailed(true);
@@ -1413,7 +1460,7 @@ export default function App() {
       setStatus("REINSTALLING CAMERA — APPROVE UAC");
       await runCompanionDriverSetup({ forceReinstall: true, fromGate: false, skipVirtualMic: true });
       const status = await window.inspiretechCompanion.getSetupStatus();
-      setDriverCameraInstalled(status?.cameraInstalled ?? null);
+      syncCompanionDriverStatus(status);
       setDriverSetupFailed(false);
       setStatus("SYSTEM STANDBY");
     } catch (err) {
@@ -3538,10 +3585,21 @@ export default function App() {
                   . Pick it as your camera in calling apps (Zoom, Telegram, Discord, WhatsApp Web).
                 </div>
                 <div style={styles.compatNote}>
+                  <strong>VB-Audio Virtual Cable</strong>{" "}
+                  {vbCableBundled === false
+                    ? "is not bundled in this build — download the latest installer from inspirestream.xyz."
+                    : driverAudioInstalled == null
+                    ? "— checking…"
+                    : driverAudioInstalled
+                    ? "is installed"
+                    : "is not installed"}
+                  .{" "}
                   {routeAudioToVirtualCable
-                    ? "Microphone → CABLE Output (VB-Audio Virtual Cable)."
-                    : "Use your physical mic unless VB-CABLE routing is enabled under Devices."}
-                  {" "}WhatsApp Desktop cannot see InspireTech Camera — use Telegram, Discord, or WhatsApp Web.
+                    ? "Voice is routed to CABLE Output for calling apps."
+                    : "Enable “Route audio to VB-CABLE” under Devices after installing."}
+                </div>
+                <div style={styles.compatNote}>
+                  WhatsApp Desktop cannot see InspireTech Camera — use Telegram, Discord, or WhatsApp Web.
                 </div>
                 <div style={styles.buttonStack}>
                   <button
@@ -3550,7 +3608,19 @@ export default function App() {
                     disabled={driverSetupBusy}
                     onClick={reinstallCompanionCamera}
                   >
-                    {driverSetupBusy ? "Installing camera driver…" : "Reinstall InspireTech Camera"}
+                    {driverSetupBusy ? "Installing camera driver…" : driverCameraInstalled ? "Reinstall InspireTech Camera" : "Install InspireTech Camera"}
+                  </button>
+                  <button
+                    type="button"
+                    className="itc-btn itc-btn-secondary"
+                    disabled={driverSetupBusy || vbCableBundled === false}
+                    onClick={() => installCompanionVbCable({ forceReinstall: Boolean(driverAudioInstalled) })}
+                  >
+                    {driverSetupBusy
+                      ? "Installing VB-CABLE…"
+                      : driverAudioInstalled
+                      ? "Reinstall VB-CABLE"
+                      : "Install VB-CABLE"}
                   </button>
                   {driverSetupFailed && (
                     <button
