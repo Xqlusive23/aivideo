@@ -1,41 +1,24 @@
 @echo off
-REM Copies staged driver files into ProgramData and registers the virtual camera.
-REM Args: %1=pendingDir  %2=stageDir  %3=exitCodeFile
+REM Registers Unity Capture from the app bundle directory (avoids locked ProgramData copies).
+REM Args: %1=bundleDir  %2=exitCodeFile
 setlocal EnableExtensions
 
-set "PENDING=%~1"
-set "STAGE=%~2"
-set "EXITFILE=%~3"
+set "BUNDLE=%~1"
+set "EXITFILE=%~2"
+set "RC=1"
 
-if not defined PENDING exit /b 1
-if not defined STAGE exit /b 1
+if not defined BUNDLE goto writeExit
+if not exist "%BUNDLE%\UnityCaptureFilter64.dll" goto writeExit
+if not exist "%BUNDLE%\InstallInspireTech.bat" goto writeExit
 
-if not exist "%STAGE%" mkdir "%STAGE%"
-
-set "REG64=%SystemRoot%\System32\regsvr32.exe"
-set "REG32=%SystemRoot%\SysWOW64\regsvr32.exe"
-
-if exist "%STAGE%\UnityCaptureFilter32.dll" if exist "%REG32%" (
-  "%REG32%" /s /u "%STAGE%\UnityCaptureFilter32.dll" >nul 2>&1
-)
-if exist "%STAGE%\UnityCaptureFilter64.dll" (
-  "%REG64%" /s /u "%STAGE%\UnityCaptureFilter64.dll" >nul 2>&1
-)
-timeout /t 1 /nobreak >nul
-
-xcopy /Y /Q "%PENDING%\*" "%STAGE%\" >nul
-if errorlevel 1 (
-  set "RC=1"
-  goto writeExit
-)
-
-for %%F in ("%STAGE%\UnityCaptureFilter64.dll" "%STAGE%\UnityCaptureFilter32.dll") do (
-  if exist %%F if exist "%%~fF:Zone.Identifier" del /f /q "%%~fF:Zone.Identifier" 2>nul
-)
-
-cd /D "%STAGE%"
-call "%STAGE%\InstallInspireTech.bat"
+cd /D "%BUNDLE%"
+call "%BUNDLE%\InstallInspireTech.bat"
 set "RC=%ERRORLEVEL%"
+
+REM Best-effort mirror for manual repair (skip locked files silently).
+set "PD=%ProgramData%\InspireTech\UnityCapture"
+if not exist "%PD%" mkdir "%PD%" 2>nul
+copy /Y "%BUNDLE%\InstallInspireTech.bat" "%PD%\InstallInspireTech.bat" >nul 2>&1
 
 :writeExit
 if defined EXITFILE echo %RC%>"%EXITFILE%"

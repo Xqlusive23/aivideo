@@ -14,6 +14,7 @@ const {
   registerSetupIpc,
   needsFirstRunSetup,
   showSetupWizard,
+  getSetupStatus,
 } = require("./setup");
 const {
   initUpdater,
@@ -71,6 +72,14 @@ ipcMain.handle("inspiretech:feeder:configure", (_event, { width, height } = {}) 
   return configureFeeder(width, height);
 });
 
+ipcMain.handle("inspiretech:feeder:start", async () => {
+  const status = await getSetupStatus();
+  if (!status.cameraInstalled) {
+    return false;
+  }
+  return startFeeder();
+});
+
 ipcMain.on("inspiretech:audio-start", (_event, sampleRate) => {
   startAudioFeeder(Number(sampleRate) || 48000);
 });
@@ -94,7 +103,11 @@ async function launchApp() {
   }
 
   createMainWindow();
-  startFeeder();
+
+  const status = await getSetupStatus();
+  if (status.cameraInstalled) {
+    startFeeder();
+  }
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {

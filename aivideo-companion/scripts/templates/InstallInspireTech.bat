@@ -22,23 +22,30 @@ if '%errorlevel%' NEQ '0' (
     CD /D "%~dp0"
 :-------------------------------------
 
+set "REG64=%SystemRoot%\System32\regsvr32.exe"
+set "REG32=%SystemRoot%\SysWOW64\regsvr32.exe"
+set "CAPNAME=InspireTech Camera"
+set "PD=%ProgramData%\InspireTech\UnityCapture"
+
 REM Clear Mark-of-the-Web without PowerShell (Zone.Identifier alternate data stream).
 for %%F in ("%~dp0UnityCaptureFilter64.dll" "%~dp0UnityCaptureFilter32.dll") do (
   if exist %%F if exist "%%~fF:Zone.Identifier" del /f /q "%%~fF:Zone.Identifier" 2>nul
 )
 
-set "REG64=%SystemRoot%\System32\regsvr32.exe"
-set "REG32=%SystemRoot%\SysWOW64\regsvr32.exe"
-set "CAPNAME=InspireTech Camera"
-
-REM Unregister stale copies before reinstalling.
+REM Unregister stale copies from ProgramData and this folder before reinstalling.
+if exist "%PD%\UnityCaptureFilter32.dll" if exist "%REG32%" (
+  "%REG32%" /s /u "%PD%\UnityCaptureFilter32.dll" >nul 2>&1
+)
+if exist "%PD%\UnityCaptureFilter64.dll" (
+  "%REG64%" /s /u "%PD%\UnityCaptureFilter64.dll" >nul 2>&1
+)
 if exist "%~dp0UnityCaptureFilter32.dll" if exist "%REG32%" (
   "%REG32%" /s /u "%~dp0UnityCaptureFilter32.dll" >nul 2>&1
 )
 if exist "%~dp0UnityCaptureFilter64.dll" (
   "%REG64%" /s /u "%~dp0UnityCaptureFilter64.dll" >nul 2>&1
 )
-timeout /t 1 /nobreak >nul
+timeout /t 2 /nobreak >nul
 
 REM Match upstream Unity Capture InstallCustomName.bat (32-bit first, /i as separate quoted arg).
 if exist "%~dp0UnityCaptureFilter32.dll" if exist "%REG32%" (

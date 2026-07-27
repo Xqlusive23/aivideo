@@ -1343,6 +1343,9 @@ export default function App() {
     if (companion.completeSetup) {
       await companion.completeSetup();
     }
+    if (companion.startVirtualCamFeeder) {
+      await companion.startVirtualCamFeeder();
+    }
     setDriverSetupFailed(false);
   };
 
@@ -1527,6 +1530,9 @@ export default function App() {
           await window.inspiretechCompanion.setSkipAudio(Boolean(options.skipVirtualMic ?? true));
         }
         await runCompanionDriverSetup({ ...options, forceReinstall: true, fromGate: true });
+        if (window.inspiretechCompanion?.startVirtualCamFeeder) {
+          await window.inspiretechCompanion.startVirtualCamFeeder();
+        }
       }
 
       saveAccessToken(normalized);

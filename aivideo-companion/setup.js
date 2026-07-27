@@ -144,6 +144,27 @@ function clearMotwRecursive(dir) {
   }
 }
 
+function releaseCameraDllLocks() {
+  stopFeeder();
+  for (const image of ["virtualcam_feeder.exe", "audio_feeder.exe"]) {
+    try {
+      execFileSync("taskkill", ["/F", "/IM", image], { windowsHide: true });
+    } catch {
+      // not running
+    }
+  }
+}
+
+function regQueryValue(rootKey, valueName = "") {
+  return new Promise((resolve) => {
+    const args = ["query", rootKey];
+    if (valueName) args.push("/v", valueName);
+    execFile("reg.exe", args, { windowsHide: true, maxBuffer: 1024 * 1024 }, (error, stdout) => {
+      resolve(error ? "" : stdout);
+    });
+  });
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -170,20 +191,23 @@ function copyDirRecursive(src, dest) {
 }
 
 async function isVirtualCameraInstalled() {
-  const stageDir = getStagedUnityCaptureDir();
+  const clsid64 = "{5c2cd55c-92ad-4999-8666-912bd3e70010}";
+  const inprocKey = `HKLM\\SOFTWARE\\Classes\\CLSID\\${clsid64}\\InprocServer32`;
+  const inproc = await regQueryValue(inprocKey);
+  if (inproc && inproc.includes("UnityCaptureFilter64.dll")) {
+    const match = inproc.match(/REG_SZ\s+(.+)/);
+    const dllPath = match ? match[1].trim() : "";
+    if (dllPath && fs.existsSync(dllPath)) {
+      return true;
+    }
+  }
+
   const searches = [
     ["HKLM\\SOFTWARE\\Classes\\CLSID", VIRTUAL_CAMERA_NAME],
     ["HKLM\\SOFTWARE\\WOW6432Node\\Classes\\CLSID", VIRTUAL_CAMERA_NAME],
-    ["HKLM\\SOFTWARE\\Classes\\CLSID", "UnityCaptureFilter64.dll"],
-    ["HKLM\\SOFTWARE\\WOW6432Node\\Classes\\CLSID", "UnityCaptureFilter64.dll"],
   ];
   for (const [rootKey, term] of searches) {
     if (await regQueryContains(rootKey, term)) return true;
-  }
-  if (stageDir && fs.existsSync(path.join(stageDir, "UnityCaptureFilter64.dll"))) {
-    if (await regQueryContains("HKLM\\SOFTWARE\\Classes\\CLSID", "InspireTech\\UnityCapture")) {
-      return true;
-    }
   }
   return false;
 }
@@ -225,9 +249,8 @@ function runElevatedError(exitCode, stepLabel, manualPath = "") {
   }
   if (normalizedExitCode === 1) {
     return new Error(
-      `${stepLabel} failed (exit code 1 — Windows may be blocking the driver DLL as downloaded from the internet). ` +
-        `Click Continue again to retry (we unblock automatically). If it still fails, reboot and retry, or run as administrator:` +
-        (manualPath ? `\n${manualPath}` : "")
+      `${stepLabel} failed (exit code 1). Close Chrome and other apps using a webcam, then try again. ` +
+        `If it still fails, reboot and double-click:\n${manualPath}`
     );
   }
   return new Error(
@@ -332,42 +355,19 @@ async function prepareUnityCaptureStaging() {
     );
   }
 
-  stopFeeder();
-  await sleep(400);
-
-  const pendingDir = path.join(app.getPath("temp"), "inspiretech-unity-capture-pending");
-  fs.rmSync(pendingDir, { recursive: true, force: true });
-  fs.mkdirSync(pendingDir, { recursive: true });
-
-  const required = ["UnityCaptureFilter64.dll", "InstallInspireTech.bat"];
+  releaseCameraDllLocks();
+  await sleep(600);
   unblockDriverFiles(bundleDir);
-  for (const file of required) {
-    const src = path.join(bundleDir, file);
-    if (!fs.existsSync(src)) {
-      throw new Error(`Missing driver file: ${src}`);
-    }
-    copyFileWithoutMotw(src, path.join(pendingDir, file));
-  }
 
-  const dll32 = path.join(bundleDir, "UnityCaptureFilter32.dll");
-  if (fs.existsSync(dll32)) {
-    copyFileWithoutMotw(dll32, path.join(pendingDir, "UnityCaptureFilter32.dll"));
-  }
-
-  unblockDriverFiles(pendingDir);
-
-  return {
-    pendingDir,
-    stageDir: getStagedUnityCaptureDir(),
-  };
+  return { bundleDir };
 }
 
 async function installVirtualCamera() {
   const stepLabel = "InspireTech Camera (Unity Capture)";
   cleanupInstallTempFiles();
 
-  const { pendingDir, stageDir } = await prepareUnityCaptureStaging();
-  const manualBatPath = path.join(stageDir, "InstallInspireTech.bat");
+  const { bundleDir } = await prepareUnityCaptureStaging();
+  const manualBatPath = path.join(getStagedUnityCaptureDir(), "InstallInspireTech.bat");
   const promoteTemplate = getPromoteUnityCaptureBat();
   if (!promoteTemplate) {
     throw new Error("PromoteUnityCapture.bat is missing from this build.");
@@ -383,7 +383,7 @@ async function installVirtualCamera() {
     // ignore
   }
 
-  const quotedArgs = [pendingDir, stageDir, exitFile]
+  const quotedArgs = [bundleDir, exitFile]
     .map((arg) => `"${String(arg).replace(/"/g, '""')}"`)
     .join(" ");
   const cmdLine = `"${promoteBat.replace(/"/g, '""')}" ${quotedArgs}`;
@@ -398,17 +398,12 @@ async function installVirtualCamera() {
     } catch {
       // ignore
     }
-    try {
-      fs.rmSync(pendingDir, { recursive: true, force: true });
-    } catch {
-      // ignore cleanup failures
-    }
   }
 
   const installed = await waitForDetection(isVirtualCameraInstalled, 12, 1000);
   if (!installed) {
     throw new Error(
-      `${stepLabel} was not detected after install. Reboot Windows and try again, or double-click Run as administrator:\n${manualBatPath}`
+      `${stepLabel} was not detected after install. Close Chrome, reboot Windows, then double-click:\n${manualBatPath}`
     );
   }
   return true;
