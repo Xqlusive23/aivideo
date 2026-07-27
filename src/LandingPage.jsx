@@ -11,6 +11,14 @@ import {
   WINDOWS_DOWNLOAD_URL,
   WINDOWS_DOWNLOAD_FALLBACK,
 } from "./siteConfig";
+import {
+  DISPLAY_CREDITS_PER_SECOND,
+  TOP_UP_OPTIONS,
+  formatCredits,
+  formatLiveTimeFromCredits,
+  formatNaira,
+  formatUsdFromNaira,
+} from "./pricing.js";
 import WhatsAppLink from "./WhatsAppLink.jsx";
 
 function WindowsIcon() {
@@ -180,6 +188,7 @@ export default function LandingPage() {
             onClick={() => setNavOpen(false)}
           >
             <a href="#features" className="itc-landing-nav-link">Features</a>
+            <a href="#pricing" className="itc-landing-nav-link">Pricing</a>
             <a href="#access" className="itc-landing-nav-link">Get access</a>
             <a href="#download" className="itc-landing-nav-link">Download</a>
             <Link to="/app" className="itc-landing-nav-cta">Open studio</Link>
@@ -259,10 +268,38 @@ export default function LandingPage() {
         </div>
       </section>
 
+      <section id="pricing" className="itc-landing-section">
+        <h2 className="itc-landing-section-title">Pricing</h2>
+        <p className="itc-landing-section-lead">
+          Credits are used while your live transformation is running — {DISPLAY_CREDITS_PER_SECOND} credits
+          per second ({DISPLAY_CREDITS_PER_SECOND * 60} credits per minute). Top up in the studio after you
+          have access; Paystack checkout charges Nigerian Naira (international cards accepted).
+        </p>
+        <div className="itc-landing-pricing-grid">
+          {TOP_UP_OPTIONS.map((tier) => (
+            <article
+              key={tier.credits}
+              className={`itc-landing-pricing-card${tier.popular ? " is-popular" : ""}`}
+            >
+              {tier.popular ? <span className="itc-landing-pricing-badge">Most popular</span> : null}
+              <p className="itc-landing-pricing-credits">{formatCredits(tier.credits)} credits</p>
+              <p className="itc-landing-pricing-time">{formatLiveTimeFromCredits(tier.credits)} live</p>
+              <p className="itc-landing-pricing-usd">{formatUsdFromNaira(tier.naira)}</p>
+              <p className="itc-landing-pricing-naira">{formatNaira(tier.naira)} via Paystack</p>
+            </article>
+          ))}
+        </div>
+        <p className="itc-landing-fine-print">
+          Live time is approximate — billing runs server-side while transformation is active. Voice changer
+          usage follows the same credit rate when enabled.
+        </p>
+      </section>
+
       <section id="payments" className="itc-landing-section">
         <h2 className="itc-landing-section-title">Payments worldwide</h2>
         <p className="itc-landing-section-lead">
-          InspireTech uses Paystack for credit top-ups. The studio shows approximate USD prices; Paystack checkout charges the exact amount in Nigerian Naira (for example ₦22,400 for 1,000 credits / $14).
+          InspireTech uses Paystack for credit top-ups. USD prices above are for reference; checkout always
+          shows the exact Naira amount.
         </p>
         <ul className="itc-landing-download-list">
           <li><strong>Outside Nigeria:</strong> pay with international Visa or Mastercard — your bank converts at their rate.</li>

@@ -10,6 +10,15 @@ import {
   checkAccessToken,
   normalizeAccessToken,
 } from "./ledgerClient.js";
+import {
+  DISPLAY_CREDITS_PER_SECOND,
+  DISPLAY_NAIRA_PER_USD,
+  HEARTBEAT_INTERVAL_MS,
+  LOW_CREDIT_THRESHOLD,
+  TOP_UP_OPTIONS,
+  formatUsdFromCredits,
+  formatUsdFromNaira,
+} from "./pricing.js";
 
 const { colors: c, gradients: g, fonts: f, radius: r, shadow: s } = theme;
 const fd = f.display;
@@ -55,33 +64,7 @@ const MY_DECART_KEY = (import.meta.env?.VITE_DECART_API_KEY || "").trim();
 
 // --- Real credit ledger backend --------------------------------------------
 // See /ledger-backend. The browser NEVER decides the balance — it only ever
-// displays whatever this server last reported.
-const CREDITS_PER_DOLLAR = 100; // must match ledger-backend/server.js TIERS ($1 = 100 credits)
-const NAIRA_PER_USD = 1600; // must match ledger-backend/server.js NAIRA_PER_DOLLAR
-const NAIRA_PER_CREDIT = (14 * NAIRA_PER_USD) / 1000; // ₦22.40/credit — matches $14 / 1,000 credits tier
-const DISPLAY_NAIRA_PER_USD = Number(import.meta.env?.VITE_NAIRA_PER_USD) || NAIRA_PER_USD;
-const DISPLAY_CREDITS_PER_SECOND = 2; // for UI copy only — the server decides the real rate
-const LOW_CREDIT_THRESHOLD = 40; // ~20 seconds left at 2 credits/sec — warn before it runs out
-const HEARTBEAT_INTERVAL_MS = 1000; // 1s ticks → ~2 credits deducted per tick at 2 credits/sec
-
-// Paystack checkout charges the naira amount; USD is a display conversion only.
-const TOP_UP_OPTIONS = [
-  { naira: 22400, credits: 1000 },
-  { naira: 112000, credits: 5000 },
-  { naira: 224000, credits: 10000, popular: true },
-  { naira: 1120000, credits: 50000 },
-];
-
-const formatUsdFromNaira = (nairaAmount) => {
-  const dollars = nairaAmount / DISPLAY_NAIRA_PER_USD;
-  return `$${dollars.toLocaleString(undefined, {
-    minimumFractionDigits: dollars >= 100 ? 0 : 2,
-    maximumFractionDigits: 2,
-  })}`;
-};
-
-const formatUsdFromCredits = (creditAmount) =>
-  formatUsdFromNaira(creditAmount * NAIRA_PER_CREDIT);
+// displays whatever this server last reported. Pricing tiers live in pricing.js.
 
 // --- WhatsApp contact (shown on the access-token gate) ---------------------
 // Configured in src/siteConfig.js

@@ -415,6 +415,73 @@ body {
   gap: 16px;
 }
 
+.itc-landing-pricing-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+  margin-top: 8px;
+}
+
+.itc-landing-pricing-card {
+  position: relative;
+  padding: 22px 20px;
+  border-radius: 16px;
+  background: rgba(17, 24, 39, 0.75);
+  border: 1px solid var(--itc-border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.itc-landing-pricing-card.is-popular {
+  border-color: rgba(129, 140, 248, 0.55);
+  box-shadow: 0 0 0 1px rgba(99, 102, 241, 0.25), 0 12px 40px rgba(99, 102, 241, 0.12);
+}
+
+.itc-landing-pricing-badge {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--itc-violet);
+  background: rgba(99, 102, 241, 0.15);
+  border: 1px solid rgba(129, 140, 248, 0.35);
+  border-radius: 999px;
+  padding: 4px 8px;
+}
+
+.itc-landing-pricing-credits {
+  margin: 0;
+  font-family: var(--itc-font-display);
+  font-size: 1.35rem;
+  font-weight: 800;
+  color: var(--itc-text);
+  letter-spacing: var(--itc-tracking-tight);
+}
+
+.itc-landing-pricing-time {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--itc-emerald);
+}
+
+.itc-landing-pricing-usd {
+  margin: 8px 0 0;
+  font-size: 1.125rem;
+  font-weight: 700;
+  color: var(--itc-text);
+}
+
+.itc-landing-pricing-naira {
+  margin: 0;
+  font-size: 13px;
+  color: var(--itc-text-muted);
+}
+
 .itc-landing-feature {
   background: rgba(26, 34, 56, 0.6);
   border: 1px solid var(--itc-border);
