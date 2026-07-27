@@ -15,9 +15,10 @@ import {
   DISPLAY_CREDITS_PER_SECOND,
   TOP_UP_OPTIONS,
   formatCredits,
-  formatLiveTimeFromCredits,
+  formatLiveTimePerMonth,
   formatNaira,
   formatUsdFromNaira,
+  getPricingTierFeatures,
 } from "./pricing.js";
 import WhatsAppLink from "./WhatsAppLink.jsx";
 
@@ -247,23 +248,34 @@ export default function LandingPage() {
           per second ({DISPLAY_CREDITS_PER_SECOND * 60} credits per minute). Top up in the studio after you
           have access; Paystack checkout charges Nigerian Naira (international cards accepted).
         </p>
-        <div className="itc-landing-pricing-grid">
+        <div className="itc-landing-pricing-row">
           {TOP_UP_OPTIONS.map((tier) => (
             <article
               key={tier.credits}
-              className={`itc-landing-pricing-card${tier.popular ? " is-popular" : ""}`}
+              className={`itc-landing-pricing-tile${tier.popular ? " is-popular" : ""}`}
             >
               {tier.popular ? <span className="itc-landing-pricing-badge">Most popular</span> : null}
-              <p className="itc-landing-pricing-credits">{formatCredits(tier.credits)} credits</p>
-              <p className="itc-landing-pricing-time">{formatLiveTimeFromCredits(tier.credits)} live</p>
-              <p className="itc-landing-pricing-usd">{formatUsdFromNaira(tier.naira)}</p>
-              <p className="itc-landing-pricing-naira">{formatNaira(tier.naira)} via Paystack</p>
+              <div className="itc-landing-pricing-tile-head">
+                <p className="itc-landing-pricing-credits">{formatCredits(tier.credits)} credits</p>
+                <p className="itc-landing-pricing-usd">
+                  {formatUsdFromNaira(tier.naira)}
+                  <span className="itc-landing-pricing-period"> / month</span>
+                </p>
+                <p className="itc-landing-pricing-naira">{formatNaira(tier.naira)} via Paystack</p>
+                <p className="itc-landing-pricing-time">{formatLiveTimePerMonth(tier.credits)}</p>
+              </div>
+              <ul className="itc-landing-pricing-features">
+                {getPricingTierFeatures(tier.credits).map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
             </article>
           ))}
         </div>
         <p className="itc-landing-fine-print">
-          Live time is approximate — billing runs server-side while transformation is active. Voice changer
-          usage follows the same credit rate when enabled.
+          Live minutes per month are approximate at {DISPLAY_CREDITS_PER_SECOND} credits/sec while
+          transformation is active. Credit packs are purchased as one-time top-ups in the studio; unused
+          credits stay on your account.
         </p>
       </section>
 

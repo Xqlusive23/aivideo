@@ -415,34 +415,49 @@ body {
   gap: 16px;
 }
 
-.itc-landing-pricing-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 16px;
+.itc-landing-pricing-row {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  gap: 12px;
   margin-top: 8px;
+  overflow-x: auto;
+  padding-bottom: 8px;
+  scroll-snap-type: x proximity;
+  -webkit-overflow-scrolling: touch;
 }
 
-.itc-landing-pricing-card {
+.itc-landing-pricing-tile {
   position: relative;
-  padding: 22px 20px;
+  flex: 1 1 0;
+  min-width: 168px;
+  padding: 20px 16px 18px;
   border-radius: 16px;
   background: rgba(17, 24, 39, 0.75);
   border: 1px solid var(--itc-border);
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 14px;
+  scroll-snap-align: start;
 }
 
-.itc-landing-pricing-card.is-popular {
+.itc-landing-pricing-tile.is-popular {
   border-color: rgba(129, 140, 248, 0.55);
   box-shadow: 0 0 0 1px rgba(99, 102, 241, 0.25), 0 12px 40px rgba(99, 102, 241, 0.12);
 }
 
+.itc-landing-pricing-tile-head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 4px;
+}
+
 .itc-landing-pricing-badge {
   position: absolute;
-  top: 12px;
-  right: 12px;
-  font-size: 10px;
+  top: 10px;
+  right: 10px;
+  font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -450,36 +465,76 @@ body {
   background: rgba(99, 102, 241, 0.15);
   border: 1px solid rgba(129, 140, 248, 0.35);
   border-radius: 999px;
-  padding: 4px 8px;
+  padding: 3px 7px;
+  max-width: calc(100% - 20px);
+  text-align: center;
 }
 
 .itc-landing-pricing-credits {
   margin: 0;
   font-family: var(--itc-font-display);
-  font-size: 1.35rem;
+  font-size: 1.15rem;
   font-weight: 800;
   color: var(--itc-text);
   letter-spacing: var(--itc-tracking-tight);
+  line-height: 1.2;
 }
 
 .itc-landing-pricing-time {
   margin: 0;
-  font-size: 15px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--itc-emerald);
+  line-height: 1.35;
 }
 
 .itc-landing-pricing-usd {
-  margin: 8px 0 0;
-  font-size: 1.125rem;
+  margin: 6px 0 0;
+  font-size: 1.25rem;
   font-weight: 700;
   color: var(--itc-text);
+  line-height: 1.2;
+}
+
+.itc-landing-pricing-period {
+  font-size: 0.72em;
+  font-weight: 600;
+  color: var(--itc-text-muted);
 }
 
 .itc-landing-pricing-naira {
   margin: 0;
-  font-size: 13px;
+  font-size: 12px;
   color: var(--itc-text-muted);
+}
+
+.itc-landing-pricing-features {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  border-top: 1px solid rgba(129, 140, 248, 0.12);
+  padding-top: 12px;
+}
+
+.itc-landing-pricing-features li {
+  position: relative;
+  padding-left: 14px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--itc-text-muted);
+}
+
+.itc-landing-pricing-features li::before {
+  content: "✓";
+  position: absolute;
+  left: 0;
+  top: 0;
+  color: var(--itc-emerald);
+  font-size: 10px;
+  font-weight: 700;
 }
 
 .itc-landing-feature {

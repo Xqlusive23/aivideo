@@ -50,3 +50,32 @@ export function formatLiveTimeFromCredits(credits) {
   if (mins >= 1) return `~${mins} min`;
   return `~${Math.round(totalSeconds)} sec`;
 }
+
+export function formatLiveTimePerMonth(credits) {
+  return `${formatLiveTimeFromCredits(credits)} live per month`;
+}
+
+/** Marketing feature bullets for landing-page pricing tiles. */
+export function getPricingTierFeatures(credits) {
+  const features = [
+    "Real-time face transform (Lucy 2.5)",
+    "InspireTech virtual camera for Zoom, Discord & Teams",
+    "Web studio in your browser",
+    "Windows desktop app with virtual drivers",
+    "Optional AI voice changer",
+    "Credits roll over until used",
+  ];
+  if (credits >= 2000) {
+    features.push("Ideal for weekly calls & streams");
+  }
+  if (credits >= 5000) {
+    features.push("Built for creators who go live often");
+  }
+  if (credits >= 10000) {
+    features.push("Best value for daily use");
+  }
+  if (credits >= 50000) {
+    features.push("For power users & heavy sessions");
+  }
+  return features;
+}
