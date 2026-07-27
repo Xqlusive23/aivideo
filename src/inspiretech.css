@@ -1767,10 +1767,6 @@ body {
   color: var(--itc-muted);
 }
 
-.itc-landing-pricing-features li.is-excluded {
-  opacity: 0.72;
-}
-
 .itc-fixed-output.itc-live {
   border-color: var(--itc-primary);
   animation: liveGlow 3.2s cubic-bezier(0.45, 0, 0.55, 1) infinite;
