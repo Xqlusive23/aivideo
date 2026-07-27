@@ -13,6 +13,7 @@ const GITHUB_RELEASES_URL =
 let mainWindowRef = null;
 let pendingUpdate = null;
 let updateMode = "auto"; // "auto" = electron-updater, "manual" = downloaded GitHub asset
+let lastAutoUpdaterResult = null; // null | "available" | "not-available" | "error"
 
 function sendEvent(event, payload = {}) {
   if (!mainWindowRef || mainWindowRef.isDestroyed()) return;
@@ -79,6 +80,32 @@ async function checkGitHubFallback() {
   };
 }
 
+function emitManualUpdateAvailable(fallback, fallbackReason = "") {
+  updateMode = "manual";
+  pendingUpdate = fallback;
+  sendEvent("available", {
+    version: fallback.version,
+    currentVersion: app.getVersion(),
+    releaseNotes: fallback.releaseNotes,
+    releaseDate: fallback.releaseDate,
+    downloadUrl: fallback.downloadUrl,
+    releasePageUrl: fallback.releasePageUrl,
+    mode: "manual",
+    ...(fallbackReason ? { fallbackReason } : {}),
+  });
+}
+
+async function tryGitHubFallback(fallbackReason = "") {
+  const fallback = await checkGitHubFallback();
+  if (!fallback) {
+    sendEvent("not-available", { version: app.getVersion() });
+    return { ok: true, source: "none" };
+  }
+
+  emitManualUpdateAvailable(fallback, fallbackReason);
+  return { ok: true, source: "fallback" };
+}
+
 function downloadFile(url, destination, onProgress) {
   return new Promise((resolve, reject) => {
     const client = url.startsWith("https:") ? https : http;
@@ -137,6 +164,7 @@ function registerAutoUpdaterEvents() {
 
   autoUpdater.on("checking-for-update", () => sendEvent("checking"));
   autoUpdater.on("update-available", (info) => {
+    lastAutoUpdaterResult = "available";
     updateMode = "auto";
     pendingUpdate = info;
     sendEvent("available", {
@@ -147,10 +175,11 @@ function registerAutoUpdaterEvents() {
       mode: "auto",
     });
   });
-  autoUpdater.on("update-not-available", (info) => {
-    sendEvent("not-available", { version: info?.version || app.getVersion() });
+  autoUpdater.on("update-not-available", () => {
+    lastAutoUpdaterResult = "not-available";
   });
   autoUpdater.on("error", (error) => {
+    lastAutoUpdaterResult = "error";
     sendEvent("error", { message: String(error?.message || error), mode: updateMode });
   });
   autoUpdater.on("download-progress", (progress) => {
@@ -176,38 +205,35 @@ async function runUpdateCheck() {
     return { ok: true, source: "dev" };
   }
 
+  lastAutoUpdaterResult = null;
   sendEvent("checking");
 
   try {
     await autoUpdater.checkForUpdates();
-    return { ok: true, source: "auto" };
   } catch (error) {
     try {
-      const fallback = await checkGitHubFallback();
-      if (!fallback) {
-        sendEvent("not-available", { version: app.getVersion() });
-        return { ok: true, source: "fallback-none" };
-      }
-
-      updateMode = "manual";
-      pendingUpdate = fallback;
-      sendEvent("available", {
-        version: fallback.version,
-        currentVersion: app.getVersion(),
-        releaseNotes: fallback.releaseNotes,
-        releaseDate: fallback.releaseDate,
-        downloadUrl: fallback.downloadUrl,
-        releasePageUrl: fallback.releasePageUrl,
-        mode: "manual",
-        fallbackReason: String(error?.message || error),
-      });
-      return { ok: true, source: "fallback" };
+      return await tryGitHubFallback(String(error?.message || error));
     } catch (fallbackError) {
       sendEvent("error", {
         message: String(fallbackError?.message || fallbackError),
       });
       return { ok: false, error: String(fallbackError?.message || fallbackError) };
     }
+  }
+
+  if (lastAutoUpdaterResult === "available") {
+    return { ok: true, source: "auto" };
+  }
+
+  try {
+    return await tryGitHubFallback(
+      lastAutoUpdaterResult === "error" ? "auto-updater error" : "auto-updater no update"
+    );
+  } catch (fallbackError) {
+    sendEvent("error", {
+      message: String(fallbackError?.message || fallbackError),
+    });
+    return { ok: false, error: String(fallbackError?.message || fallbackError) };
   }
 }
 

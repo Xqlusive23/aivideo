@@ -22,6 +22,7 @@ import {
   formatUsdFromNaira,
   formatLiveTimeFromCredits,
 } from "./pricing.js";
+import { checkForNewerShellRelease } from "./shellUpdate.js";
 
 const { colors: c, gradients: g, fonts: f, radius: r, shadow: s } = theme;
 const fd = f.display;
@@ -386,6 +387,8 @@ export default function App() {
   const [appUpdateError, setAppUpdateError] = useState("");
   const [desktopAppVersion, setDesktopAppVersion] = useState("");
   const [companionNavSection, setCompanionNavSection] = useState("studio");
+  const appUpdateManualCheckRef = useRef(false);
+  const appUpdateResolvedRef = useRef(false);
 
   const isCompanionApp = () =>
     typeof window !== "undefined" && Boolean(window.inspiretechCompanion?.isDesktop);
@@ -731,6 +734,101 @@ export default function App() {
     };
   }, [driverSetupBusy, driverSetupFailed]);
 
+  const showShellUpdateAvailable = (payload, { ignoreSnooze = false } = {}) => {
+    if (!ignoreSnooze) {
+      let snoozedUntil = 0;
+      try {
+        snoozedUntil = Number(window.localStorage.getItem("inspiretech_update_snooze_until") || 0);
+      } catch {
+        // ignore
+      }
+      if (Date.now() < snoozedUntil) return false;
+    }
+
+    appUpdateResolvedRef.current = true;
+    setAppUpdateInfo(payload);
+    setAppUpdatePhase("available");
+    setAppUpdateProgress(0);
+    setAppUpdateError("");
+    setAppUpdateOpen(true);
+    return true;
+  };
+
+  const runWebShellUpdateFallback = async (currentVersion, { manual = false } = {}) => {
+    let version = String(currentVersion || "").trim();
+    if (!version) {
+      try {
+        version = String((await window.inspiretechCompanion?.getAppVersion?.()) || "").trim();
+      } catch {
+        version = "";
+      }
+    }
+    if (!version) return false;
+
+    try {
+      const release = await checkForNewerShellRelease(version);
+      if (!release) {
+        if (manual) {
+          appUpdateResolvedRef.current = true;
+          setAppUpdateInfo({ currentVersion: version });
+          setAppUpdatePhase("not-available");
+          setAppUpdateOpen(true);
+        }
+        return false;
+      }
+
+      return showShellUpdateAvailable(
+        {
+          version: release.version,
+          currentVersion: version,
+          releaseNotes: release.releaseNotes,
+          releaseDate: release.releaseDate,
+          downloadUrl: release.downloadUrl,
+          releasePageUrl: release.releasePageUrl,
+          mode: "manual",
+          webFallback: true,
+        },
+        { ignoreSnooze: manual }
+      );
+    } catch (err) {
+      if (manual) {
+        appUpdateResolvedRef.current = true;
+        setAppUpdateBusy(false);
+        setAppUpdateError(String(err.message || err));
+        setAppUpdateOpen(true);
+      }
+      return false;
+    }
+  };
+
+  const handleManualAppUpdateCheck = async () => {
+    const companion = window.inspiretechCompanion;
+    if (!companion?.checkForUpdates) return;
+
+    appUpdateManualCheckRef.current = true;
+    appUpdateResolvedRef.current = false;
+    setAppUpdateBusy(false);
+    setAppUpdateError("");
+    setAppUpdatePhase("checking");
+    setAppUpdateInfo({ currentVersion: desktopAppVersion });
+    setAppUpdateOpen(true);
+
+    try {
+      await companion.checkForUpdates();
+    } catch {
+      // Errors are surfaced via update events or the web fallback below.
+    }
+
+    window.setTimeout(async () => {
+      if (appUpdateResolvedRef.current) {
+        appUpdateManualCheckRef.current = false;
+        return;
+      }
+      await runWebShellUpdateFallback(desktopAppVersion, { manual: true });
+      appUpdateManualCheckRef.current = false;
+    }, 1200);
+  };
+
   // Desktop app: check GitHub / electron-updater for a newer shell build.
   useEffect(() => {
     if (!isCompanionApp()) return undefined;
@@ -750,29 +848,29 @@ export default function App() {
       }
 
       if (payload.event === "available") {
-        let snoozedUntil = 0;
-        try {
-          snoozedUntil = Number(window.localStorage.getItem("inspiretech_update_snooze_until") || 0);
-        } catch {
-          // ignore
-        }
-        if (Date.now() < snoozedUntil) return;
+        const ignoreSnooze = appUpdateManualCheckRef.current;
+        showShellUpdateAvailable(payload, { ignoreSnooze });
+        return;
+      }
 
-        setAppUpdateInfo(payload);
-        setAppUpdatePhase("available");
-        setAppUpdateProgress(0);
-        setAppUpdateError("");
-        setAppUpdateOpen(true);
+      if (payload.event === "not-available") {
+        if (appUpdateManualCheckRef.current) {
+          return;
+        }
+        appUpdateResolvedRef.current = true;
+        void runWebShellUpdateFallback(desktopAppVersion || payload.version);
         return;
       }
 
       if (payload.event === "progress") {
+        appUpdateResolvedRef.current = true;
         setAppUpdatePhase("downloading");
         setAppUpdateProgress(Math.max(0, Math.min(100, Number(payload.percent) || 0)));
         return;
       }
 
       if (payload.event === "downloaded") {
+        appUpdateResolvedRef.current = true;
         setAppUpdatePhase("downloaded");
         setAppUpdateBusy(false);
         setAppUpdateProgress(100);
@@ -780,15 +878,19 @@ export default function App() {
       }
 
       if (payload.event === "error") {
+        appUpdateResolvedRef.current = true;
         setAppUpdateBusy(false);
         setAppUpdateError(String(payload.message || "Update check failed"));
+        if (appUpdateManualCheckRef.current) {
+          setAppUpdateOpen(true);
+        }
       }
     });
 
     companion.checkForUpdates?.().catch(() => {});
 
     return unsubscribe;
-  }, []);
+  }, [desktopAppVersion]);
 
   // Idle access check: catches admin revoke/delete while the user is on the page.
   useEffect(() => {
@@ -1496,6 +1598,21 @@ export default function App() {
 
   const startAppUpdateDownload = async () => {
     const companion = window.inspiretechCompanion;
+    if (appUpdateInfo?.webFallback && appUpdateInfo?.downloadUrl) {
+      setAppUpdateBusy(true);
+      setAppUpdateError("");
+      setAppUpdatePhase("downloading");
+      try {
+        window.open(appUpdateInfo.downloadUrl, "_blank", "noopener,noreferrer");
+        setAppUpdatePhase("downloaded");
+        setAppUpdateBusy(false);
+      } catch (err) {
+        setAppUpdateBusy(false);
+        setAppUpdatePhase("available");
+        setAppUpdateError(String(err.message || err));
+      }
+      return;
+    }
     if (!companion?.downloadUpdate) return;
     setAppUpdateBusy(true);
     setAppUpdateError("");
@@ -1518,7 +1635,53 @@ export default function App() {
   };
 
   const renderAppUpdateModal = () => {
-    if (!isCompanionApp() || !appUpdateOpen || !appUpdateInfo) return null;
+    if (!isCompanionApp() || !appUpdateOpen) return null;
+
+    if (appUpdatePhase === "checking") {
+      const currentVersion = appUpdateInfo?.currentVersion || desktopAppVersion || "…";
+      return (
+        <div className="itc-update-overlay" role="dialog" aria-modal="true" aria-labelledby="itc-update-title">
+          <div className="itc-update-modal">
+            <h2 id="itc-update-title" className="itc-update-title">Checking for updates…</h2>
+            <p className="itc-update-copy">
+              Looking for a newer InspireTech desktop build. You&apos;re currently on v{currentVersion}.
+            </p>
+            {appUpdateError && <div className="itc-update-error">{appUpdateError}</div>}
+            <div className="itc-update-actions">
+              <button type="button" className="itc-btn itc-btn-secondary" disabled>
+                Checking…
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    if (appUpdatePhase === "not-available") {
+      const currentVersion = appUpdateInfo?.currentVersion || desktopAppVersion || "unknown";
+      return (
+        <div className="itc-update-overlay" role="dialog" aria-modal="true" aria-labelledby="itc-update-title">
+          <div className="itc-update-modal">
+            <h2 id="itc-update-title" className="itc-update-title">You&apos;re up to date</h2>
+            <p className="itc-update-copy">
+              InspireTech v{currentVersion} is the latest desktop build available.
+            </p>
+            {appUpdateError && <div className="itc-update-error">{appUpdateError}</div>}
+            <div className="itc-update-actions">
+              <button
+                type="button"
+                className="itc-btn itc-btn-primary"
+                onClick={() => setAppUpdateOpen(false)}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    if (!appUpdateInfo) return null;
 
     const currentVersion = appUpdateInfo.currentVersion || desktopAppVersion || "unknown";
     const nextVersion = appUpdateInfo.version || "latest";
@@ -3225,7 +3388,7 @@ export default function App() {
               <button
                 type="button"
                 className="itc-header-link"
-                onClick={() => window.inspiretechCompanion?.checkForUpdates?.()}
+                onClick={handleManualAppUpdateCheck}
               >
                 Check for updates
               </button>
@@ -3739,7 +3902,7 @@ export default function App() {
                   <button
                     type="button"
                     className="itc-btn itc-btn-secondary"
-                    onClick={() => window.inspiretechCompanion?.checkForUpdates?.()}
+                    onClick={handleManualAppUpdateCheck}
                   >
                     Check for app updates
                   </button>

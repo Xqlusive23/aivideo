@@ -1,6 +1,6 @@
 {
   "name": "inspiretech-companion",
-  "version": "0.3.20",
+  "version": "0.3.21",
   "private": true,
   "description": "InspireTech desktop app — virtual camera + virtual audio for calling apps",
   "main": "main.js",
