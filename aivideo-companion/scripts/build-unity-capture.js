@@ -63,6 +63,11 @@ function copyInstallScripts() {
   if (fs.existsSync(templatePromote)) {
     fs.copyFileSync(templatePromote, path.join(UNITY_DEST, "PromoteUnityCapture.bat"));
   }
+
+  const templateUninstall = path.join(ROOT, "scripts", "templates", "UninstallUnityCapture.bat");
+  if (fs.existsSync(templateUninstall)) {
+    fs.copyFileSync(templateUninstall, path.join(UNITY_DEST, "UninstallUnityCapture.bat"));
+  }
 }
 
 function copyBuiltDlls() {

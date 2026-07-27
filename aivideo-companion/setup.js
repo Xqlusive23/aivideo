@@ -192,14 +192,17 @@ function copyDirRecursive(src, dest) {
 
 async function isVirtualCameraInstalled() {
   const clsid64 = "{5c2cd55c-92ad-4999-8666-912bd3e70010}";
-  const inprocKey = `HKLM\\SOFTWARE\\Classes\\CLSID\\${clsid64}\\InprocServer32`;
-  const inproc = await regQueryValue(inprocKey);
-  if (inproc && inproc.includes("UnityCaptureFilter64.dll")) {
-    const match = inproc.match(/REG_SZ\s+(.+)/);
-    const dllPath = match ? match[1].trim() : "";
+  const clsidKey = `HKLM\\SOFTWARE\\Classes\\CLSID\\${clsid64}`;
+  const clsidInfo = await regQueryValue(clsidKey);
+  if (clsidInfo.includes(VIRTUAL_CAMERA_NAME)) {
+    const inprocKey = `${clsidKey}\\InprocServer32`;
+    const inproc = await regQueryValue(inprocKey);
+    const dllPath = parseRegDefaultPath(inproc);
     if (dllPath && fs.existsSync(dllPath)) {
       return true;
     }
+    // Name registered — treat as installed even if DLL path parsing fails.
+    return true;
   }
 
   const searches = [
@@ -210,6 +213,19 @@ async function isVirtualCameraInstalled() {
     if (await regQueryContains(rootKey, term)) return true;
   }
   return false;
+}
+
+function parseRegDefaultPath(regOutput) {
+  if (!regOutput) return "";
+  const defaultMatch = regOutput.match(/\(Default\)\s+REG_SZ\s+(.+)/i);
+  if (defaultMatch) return defaultMatch[1].trim();
+  const lines = regOutput.split(/\r?\n/);
+  for (const line of lines) {
+    if (line.includes("(Default)") && line.includes("REG_SZ")) {
+      return line.replace(/.*REG_SZ\s+/i, "").trim();
+    }
+  }
+  return "";
 }
 
 async function isVirtualAudioInstalled() {
@@ -339,6 +355,49 @@ function runElevated(command, args = [], cwd, options = {}) {
   return runElevatedViaVbs(cmdLine, cwd, { ...options, allowedExitCodes, exitFile });
 }
 
+function getUninstallUnityCaptureBat() {
+  const bundled = path.join(getUnityCaptureInstallDir() || "", "UninstallUnityCapture.bat");
+  if (bundled && fs.existsSync(bundled)) return bundled;
+  const template = path.join(__dirname, "scripts", "templates", "UninstallUnityCapture.bat");
+  if (fs.existsSync(template)) return template;
+  return null;
+}
+
+async function uninstallVirtualCamera(bundleDir) {
+  const uninstallTemplate = getUninstallUnityCaptureBat();
+  if (!uninstallTemplate) return;
+
+  const uninstallBat = path.join(app.getPath("temp"), "inspiretech-uninstall-camera.bat");
+  copyFileWithoutMotw(uninstallTemplate, uninstallBat);
+
+  const exitFile = path.join(app.getPath("temp"), "inspiretech-uninstall-exit.txt");
+  try {
+    fs.unlinkSync(exitFile);
+  } catch {
+    // ignore
+  }
+
+  const cmdLine = `set INSPIRETECH_BUNDLE=${bundleDir.replace(/"/g, '""')}&& set INSPIRETECH_EXITFILE=${exitFile.replace(/"/g, '""')}&& "${uninstallBat.replace(/"/g, '""')}"`;
+
+  try {
+    await runElevatedViaVbs(cmdLine, app.getPath("temp"), { exitFile, allowedExitCodes: [0] });
+  } catch {
+    // Best effort — install will unregister again before registering.
+  } finally {
+    try {
+      fs.unlinkSync(uninstallBat);
+    } catch {
+      // ignore
+    }
+    try {
+      fs.unlinkSync(exitFile);
+    } catch {
+      // ignore
+    }
+  }
+  await sleep(800);
+}
+
 function getPromoteUnityCaptureBat() {
   const bundled = path.join(getUnityCaptureInstallDir() || "", "PromoteUnityCapture.bat");
   if (bundled && fs.existsSync(bundled)) return bundled;
@@ -362,11 +421,21 @@ async function prepareUnityCaptureStaging() {
   return { bundleDir };
 }
 
-async function installVirtualCamera() {
+async function installVirtualCamera(options = {}) {
+  const { cleanReinstall = false } = options;
   const stepLabel = "InspireTech Camera (Unity Capture)";
   cleanupInstallTempFiles();
 
   const { bundleDir } = await prepareUnityCaptureStaging();
+
+  if (cleanReinstall) {
+    await uninstallVirtualCamera(bundleDir);
+  }
+
+  if (!cleanReinstall && (await isVirtualCameraInstalled())) {
+    return true;
+  }
+
   const manualBatPath = path.join(getStagedUnityCaptureDir(), "InstallInspireTech.bat");
   const promoteTemplate = getPromoteUnityCaptureBat();
   if (!promoteTemplate) {
@@ -391,6 +460,10 @@ async function installVirtualCamera() {
   try {
     await runElevatedViaVbs(cmdLine, app.getPath("temp"), { exitFile });
   } catch (error) {
+    // Install can fail when re-registering an already-working driver — don't block the user.
+    if (await isVirtualCameraInstalled()) {
+      return true;
+    }
     throw runElevatedError(error.code || 1, stepLabel, manualBatPath);
   } finally {
     try {
@@ -538,8 +611,8 @@ function createSetupWindow() {
 function registerSetupIpc() {
   ipcMain.handle(`${SETUP_CHANNEL}:status`, async () => getSetupStatus());
 
-  ipcMain.handle(`${SETUP_CHANNEL}:install-camera`, async () => {
-    await installVirtualCamera();
+  ipcMain.handle(`${SETUP_CHANNEL}:install-camera`, async (_event, options = {}) => {
+    await installVirtualCamera({ cleanReinstall: Boolean(options.cleanReinstall) });
     return getSetupStatus();
   });
 
@@ -559,7 +632,7 @@ function registerSetupIpc() {
 
     try {
       if (!before.cameraInstalled || forceReinstall) {
-        await installVirtualCamera();
+        await installVirtualCamera({ cleanReinstall: forceReinstall && before.cameraInstalled });
       }
       if (!skipAudio && before.vbCableBundled && (!before.audioInstalled || forceReinstall)) {
         try {

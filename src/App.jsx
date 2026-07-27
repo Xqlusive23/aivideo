@@ -1295,7 +1295,7 @@ export default function App() {
 
   const runCompanionDriverSetup = async ({
     skipVirtualMic = true,
-    forceReinstall = true,
+    forceReinstall = false,
     fromGate = true,
   } = {}) => {
     const companion = window.inspiretechCompanion;
@@ -1529,7 +1529,7 @@ export default function App() {
         if (window.inspiretechCompanion?.setSkipAudio) {
           await window.inspiretechCompanion.setSkipAudio(Boolean(options.skipVirtualMic ?? true));
         }
-        await runCompanionDriverSetup({ ...options, forceReinstall: true, fromGate: true });
+        await runCompanionDriverSetup({ ...options, forceReinstall: false, fromGate: true });
         if (window.inspiretechCompanion?.startVirtualCamFeeder) {
           await window.inspiretechCompanion.startVirtualCamFeeder();
         }
