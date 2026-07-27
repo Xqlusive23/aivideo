@@ -8,6 +8,15 @@ export const DISPLAY_CREDITS_PER_SECOND = 2;
 export const LOW_CREDIT_THRESHOLD = 40;
 export const HEARTBEAT_INTERVAL_MS = 1000;
 
+/** Minimum purchase tier (credits per checkout) that unlocks the voice changer. */
+export const VOICE_MIN_PURCHASE_CREDITS = 1000;
+
+/** Minimum purchase tier (credits per checkout) that unlocks background prompt + reference background. */
+export const BACKGROUND_MIN_PURCHASE_CREDITS = 2000;
+
+/** @deprecated Use VOICE_MIN_PURCHASE_CREDITS — kept for older imports. */
+export const PREMIUM_MIN_PURCHASE_CREDITS = VOICE_MIN_PURCHASE_CREDITS;
+
 export const TOP_UP_OPTIONS = [
   { naira: 11200, credits: 500 },
   { naira: 22400, credits: 1000 },
@@ -55,27 +64,42 @@ export function formatLiveTimePerMonth(credits) {
   return `${formatLiveTimeFromCredits(credits)} live per month`;
 }
 
+export function hasVoiceChangerAccess(maxPurchaseCredits) {
+  return Number(maxPurchaseCredits || 0) >= VOICE_MIN_PURCHASE_CREDITS;
+}
+
+export function hasBackgroundChangerAccess(maxPurchaseCredits) {
+  return Number(maxPurchaseCredits || 0) >= BACKGROUND_MIN_PURCHASE_CREDITS;
+}
+
 /** Marketing feature bullets for landing-page pricing tiles. */
 export function getPricingTierFeatures(credits) {
+  const voiceIncluded = credits >= VOICE_MIN_PURCHASE_CREDITS;
+  const backgroundIncluded = credits >= BACKGROUND_MIN_PURCHASE_CREDITS;
   const features = [
-    "Real-time face transform (Lucy 2.5)",
-    "InspireTech virtual camera for Zoom, Discord & Teams",
-    "Web studio in your browser",
-    "Windows desktop app with virtual drivers",
-    "Optional AI voice changer",
-    "Credits roll over until used",
+    { label: "Real-time face transform (Lucy 2.5)" },
+    { label: "InspireTech virtual camera for Zoom, Discord & Teams" },
+    { label: "Web studio in your browser" },
+    { label: "Windows desktop app with virtual drivers" },
+    voiceIncluded
+      ? { label: "AI voice changer included" }
+      : { label: "Voice changer — 1,000+ credits/month only", excluded: true },
+    backgroundIncluded
+      ? { label: "Custom & reference background changer" }
+      : { label: "Background changer — 2,000+ credits/month only", excluded: true },
+    { label: "Credits roll over until used" },
   ];
   if (credits >= 2000) {
-    features.push("Ideal for weekly calls & streams");
+    features.push({ label: "Ideal for weekly calls & streams" });
   }
   if (credits >= 5000) {
-    features.push("Built for creators who go live often");
+    features.push({ label: "Built for creators who go live often" });
   }
   if (credits >= 10000) {
-    features.push("Best value for daily use");
+    features.push({ label: "Best value for daily use" });
   }
   if (credits >= 50000) {
-    features.push("For power users & heavy sessions");
+    features.push({ label: "For power users & heavy sessions" });
   }
   return features;
 }

@@ -192,6 +192,42 @@ function getBalance(token) {
   return user ? user.credits : 0;
 }
 
+const VOICE_MIN_PURCHASE_CREDITS = 1000;
+const BACKGROUND_MIN_PURCHASE_CREDITS = 2000;
+
+function getMaxPurchaseCredits(token) {
+  const row = db
+    .prepare(
+      "SELECT MAX(credits) AS maxCredits FROM transactions WHERE token = ? AND type = 'purchase' AND credits > 0"
+    )
+    .get(token);
+  return Number(row?.maxCredits || 0);
+}
+
+function hasVoiceChangerAccess(token) {
+  return getMaxPurchaseCredits(token) >= VOICE_MIN_PURCHASE_CREDITS;
+}
+
+function hasBackgroundChangerAccess(token) {
+  return getMaxPurchaseCredits(token) >= BACKGROUND_MIN_PURCHASE_CREDITS;
+}
+
+function tierPayload(token) {
+  const maxPurchaseCredits = getMaxPurchaseCredits(token);
+  const voiceChanger = maxPurchaseCredits >= VOICE_MIN_PURCHASE_CREDITS;
+  const backgroundChanger = maxPurchaseCredits >= BACKGROUND_MIN_PURCHASE_CREDITS;
+  return {
+    maxPurchaseCredits,
+    voiceChanger,
+    backgroundChanger,
+    voiceMinPurchaseCredits: VOICE_MIN_PURCHASE_CREDITS,
+    backgroundMinPurchaseCredits: BACKGROUND_MIN_PURCHASE_CREDITS,
+    // Legacy field — voice tier only (frontend versions before split).
+    premiumFeatures: voiceChanger,
+    premiumMinPurchaseCredits: VOICE_MIN_PURCHASE_CREDITS,
+  };
+}
+
 function adjustBalance(token, delta) {
   const current = getBalance(token);
   const next = Math.max(0, current + delta);
@@ -230,7 +266,7 @@ function creditFromPaystackTransaction(data) {
     return { credits: getBalance(token), alreadyProcessed: false, error: "This access token has been revoked" };
   }
   if (hasProcessedReference(reference)) {
-    return { credits: getBalance(token), alreadyProcessed: true };
+    return { credits: getBalance(token), alreadyProcessed: true, ...tierPayload(token) };
   }
 
   const credits = Number(data.metadata?.credits || 0);
@@ -240,7 +276,7 @@ function creditFromPaystackTransaction(data) {
     recordTransaction({ token, type: "purchase", credits, amount_ngn: amountNgn, provider_reference: reference });
     console.log(`✅ Credited ${credits} credits (balance now ${newBalance}) for token ${token.slice(0, 8)}... ref ${reference}`);
   }
-  return { credits: getBalance(token), alreadyProcessed: false };
+  return { credits: getBalance(token), alreadyProcessed: false, ...tierPayload(token) };
 }
 
 // --- Middleware -------------------------------------------------------------
@@ -344,6 +380,14 @@ function requireToken(req, res, next) {
   req.token = token;
   req.user = user;
   next();
+}
+
+function requireVoiceChangerAccess(req, res, next) {
+  if (hasVoiceChangerAccess(req.token)) return next();
+  return res.status(403).json({
+    error: `Voice changer requires a plan of at least ${VOICE_MIN_PURCHASE_CREDITS} credits. Upgrade in Credits.`,
+    ...tierPayload(req.token),
+  });
 }
 
 // --- Admin: mint access tokens ------------------------------------------------
@@ -605,12 +649,13 @@ app.get("/api/access-check", requireToken, (req, res) => {
     scope: req.clientPlatformScope,
     platform: req.clientPlatform,
     credits: getBalance(req.token),
+    ...tierPayload(req.token),
   });
 });
 
 // --- Balance ----------------------------------------------------------------
 app.get("/api/credits", requireToken, (req, res) => {
-  res.json({ credits: getBalance(req.token) });
+  res.json({ credits: getBalance(req.token), ...tierPayload(req.token) });
 });
 
 app.get("/api/transactions", requireToken, (req, res) => {
@@ -623,7 +668,7 @@ app.get("/api/transactions", requireToken, (req, res) => {
 // --- Voice changer -----------------------------------------------------------
 // List available ElevenLabs voices, so the frontend can populate a dropdown
 // without ever holding the real API key itself.
-app.get("/api/voice/voices", requireToken, async (req, res) => {
+app.get("/api/voice/voices", requireToken, requireVoiceChangerAccess, async (req, res) => {
   try {
     if (!ELEVENLABS_API_KEY) return res.status(500).json({ error: "Voice changer is not configured on the server" });
     const elevenRes = await fetch("https://api.elevenlabs.io/v1/voices", {
@@ -650,7 +695,7 @@ app.get("/api/voice/voices", requireToken, async (req, res) => {
 // into the chosen target voice, preserving the original words/delivery, and
 // streams the converted audio straight back. Gated behind requireToken so
 // your ElevenLabs key/quota can't be hit by anyone without a valid access token.
-app.post("/api/voice/convert", requireToken, upload.single("audio"), async (req, res) => {
+app.post("/api/voice/convert", requireToken, requireVoiceChangerAccess, upload.single("audio"), async (req, res) => {
   try {
     if (!ELEVENLABS_API_KEY) return res.status(500).json({ error: "Voice changer is not configured on the server" });
     const voiceId = req.body?.voice_id;
@@ -701,7 +746,7 @@ app.post("/api/voice/convert", requireToken, upload.single("audio"), async (req,
 // voice-rt-server's WebSocket (see /voice-rt-server). Same credit check as
 // starting a Decart session, since using the real-time voice server is just
 // as much "real usage" as the video transformation is.
-app.post("/api/voice/rtc-ticket", requireToken, (req, res) => {
+app.post("/api/voice/rtc-ticket", requireToken, requireVoiceChangerAccess, (req, res) => {
   if (!RTC_TICKET_SECRET) return res.status(500).json({ error: "Real-time voice server is not configured" });
   const credits = getBalance(req.token);
   if (credits <= 0) return res.status(402).json({ error: "Out of credits", credits });
@@ -712,7 +757,7 @@ app.post("/api/voice/rtc-ticket", requireToken, (req, res) => {
 // Proxies voice-rt-server's /voices through ledger-backend so the browser
 // doesn't hit RunPod directly (avoids CORS) and gets clearer errors when
 // the pod is stopped or the URL is stale.
-app.get("/api/voice/rtc-voices", requireToken, async (req, res) => {
+app.get("/api/voice/rtc-voices", requireToken, requireVoiceChangerAccess, async (req, res) => {
   if (!RTC_TICKET_SECRET) {
     return res.status(500).json({ error: "RTC_TICKET_SECRET is not set in ledger-backend/.env" });
   }
@@ -748,7 +793,7 @@ app.get("/api/voice/rtc-voices", requireToken, async (req, res) => {
 });
 
 // Proxies voice-rt-server /preview — returns a WAV sample for the selected RVC voice.
-app.get("/api/voice/rtc-preview/:voiceId", requireToken, async (req, res) => {
+app.get("/api/voice/rtc-preview/:voiceId", requireToken, requireVoiceChangerAccess, async (req, res) => {
   if (!RTC_TICKET_SECRET) {
     return res.status(500).json({ error: "RTC_TICKET_SECRET is not set in ledger-backend/.env" });
   }

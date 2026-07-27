@@ -266,7 +266,9 @@ export default function LandingPage() {
               </div>
               <ul className="itc-landing-pricing-features">
                 {getPricingTierFeatures(tier.credits).map((item) => (
-                  <li key={item}>{item}</li>
+                  <li key={item.label} className={item.excluded ? "is-excluded" : undefined}>
+                    {item.label}
+                  </li>
                 ))}
               </ul>
             </article>

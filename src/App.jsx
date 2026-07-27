@@ -15,6 +15,8 @@ import {
   DISPLAY_NAIRA_PER_USD,
   HEARTBEAT_INTERVAL_MS,
   LOW_CREDIT_THRESHOLD,
+  BACKGROUND_MIN_PURCHASE_CREDITS,
+  VOICE_MIN_PURCHASE_CREDITS,
   TOP_UP_OPTIONS,
   formatUsdFromCredits,
   formatUsdFromNaira,
@@ -285,6 +287,9 @@ function shouldEnhanceDecartPrompt(_userText, enhanceEnabled) {
 const VOICE_RT_URL = import.meta.env?.VITE_VOICE_RT_URL || "";
 const VOICE_RT_FRAME_SAMPLES_DEFAULT = 6400; // 400ms @ 16kHz — must match voice-rt-server FRAME_MS (synced from /voices)
 
+const VOICE_UPGRADE_MESSAGE = `Voice changer requires a plan of at least ${VOICE_MIN_PURCHASE_CREDITS.toLocaleString()} credits/month. Upgrade in Credits below.`;
+const BACKGROUND_UPGRADE_MESSAGE = `Background prompt and reference background require a plan of at least ${BACKGROUND_MIN_PURCHASE_CREDITS.toLocaleString()} credits/month. Upgrade in Credits below.`;
+
 export default function App() {
   const [isRunning, setIsRunning] = useState(false);
   const [status, setStatus] = useState("SYSTEM STANDBY");
@@ -427,6 +432,9 @@ export default function App() {
 
   const clearAccessToken = () => {
     setAccessToken("");
+    setVoiceChangerAccess(false);
+    setBackgroundChangerAccess(false);
+    setTierAccessLoaded(false);
     try {
       window.localStorage.removeItem("inspiretech_access_token");
     } catch {
@@ -437,6 +445,9 @@ export default function App() {
   // --- Real credit balance state (sourced from the ledger backend) ---
   const [credits, setCredits] = useState(0);
   const [creditsLoaded, setCreditsLoaded] = useState(false);
+  const [voiceChangerAccess, setVoiceChangerAccess] = useState(false);
+  const [backgroundChangerAccess, setBackgroundChangerAccess] = useState(false);
+  const [tierAccessLoaded, setTierAccessLoaded] = useState(false);
   const [ledgerUnreachable, setLedgerUnreachable] = useState(false);
   const [sessionCreditsUsed, setSessionCreditsUsed] = useState(0);
   const [showAddCredits, setShowAddCredits] = useState(false);
@@ -658,6 +669,7 @@ export default function App() {
       }
       setCredits(validation.credits);
       setCreditsLoaded(true);
+      syncTierAccessFromLedger(validation);
       setLedgerUnreachable(false);
       setSessionReady(true);
       await reportPresence(accessToken);
@@ -1033,9 +1045,16 @@ export default function App() {
     };
   }, [accessToken, isRunning]);
 
+  // Voice changer (1,000+) and background changer (2,000+) are tier-gated separately.
+  useEffect(() => {
+    if (!tierAccessLoaded) return;
+    if (!voiceChangerAccess) setVoiceChangerEnabled(false);
+    if (!backgroundChangerAccess) setUseReferenceBackground(false);
+  }, [voiceChangerAccess, backgroundChangerAccess, tierAccessLoaded]);
+
   // Load the voice list once, right after the token is accepted.
   useEffect(() => {
-    if (!accessToken) return;
+    if (!accessToken || !voiceChangerAccess) return;
     setVoicesLoading(true);
     (async () => {
       try {
@@ -1054,6 +1073,9 @@ export default function App() {
             setVoiceLoadError("");
             if (!selectedVoiceId) setSelectedVoiceId(data.voices[0].voice_id);
           }
+        } else if (res.status === 403 && data.voiceChanger === false) {
+          syncTierAccessFromLedger(data);
+          setVoiceLoadError(data.error || VOICE_UPGRADE_MESSAGE);
         } else {
           setVoiceLoadError(data.error || `Could not load voices (server responded ${res.status})`);
         }
@@ -1065,23 +1087,31 @@ export default function App() {
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [accessToken]);
+  }, [accessToken, voiceChangerAccess]);
 
   // Load the real-time engine's voice list only when that engine is
   // actually selected (no point minting tickets/hitting voice-rt-server
   // otherwise) — needs a ticket from ledger-backend first, then asks
   // voice-rt-server directly for whatever voice folders are on its volume.
   useEffect(() => {
-    if (!accessToken || voiceEngine !== "realtime") return;
+    if (!accessToken || !voiceChangerAccess || voiceEngine !== "realtime") return;
     setRtcVoicesLoading(true);
     setRtcLoadError("");
     (async () => {
       try {
         const res = await fetch(`${LEDGER_URL}/api/voice/rtc-voices`, { headers: authHeaders() });
         const data = await res.json().catch(() => ({}));
-        if (res.status === 401 || res.status === 403) {
-          if (res.status === 401) handleTokenRejected("Your access token was rejected. Please re-enter it.");
-          else handleTokenRejected(data.error || "Your access has been revoked. If you think this is a mistake, message us on WhatsApp below.");
+        if (res.status === 401) {
+          handleTokenRejected("Your access token was rejected. Please re-enter it.");
+          return;
+        }
+        if (res.status === 403) {
+          if (data.voiceChanger === false) {
+            syncTierAccessFromLedger(data);
+            setRtcLoadError(data.error || VOICE_UPGRADE_MESSAGE);
+            return;
+          }
+          handleTokenRejected(data.error || "Your access has been revoked. If you think this is a mistake, message us on WhatsApp below.");
           return;
         }
         if (res.status === 402) {
@@ -1276,6 +1306,30 @@ export default function App() {
 
   const validateAccessToken = async (token) =>
     checkAccessToken(token, { clientPlatform: getClientPlatform() });
+
+  const syncTierAccessFromLedger = (data) => {
+    if (typeof data?.voiceChanger === "boolean" || typeof data?.premiumFeatures === "boolean") {
+      setVoiceChangerAccess(Boolean(data.voiceChanger ?? data.premiumFeatures));
+    }
+    if (typeof data?.backgroundChanger === "boolean") {
+      setBackgroundChangerAccess(data.backgroundChanger);
+    } else if (typeof data?.voiceChanger === "boolean" || typeof data?.premiumFeatures === "boolean") {
+      // Older ledger builds only expose voice tier — keep background locked until redeployed.
+      setBackgroundChangerAccess(false);
+    }
+    if (
+      typeof data?.voiceChanger === "boolean" ||
+      typeof data?.backgroundChanger === "boolean" ||
+      typeof data?.premiumFeatures === "boolean"
+    ) {
+      setTierAccessLoaded(true);
+    }
+  };
+
+  const scrollToCreditsSection = () => {
+    creditSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    setShowAddCredits(true);
+  };
 
   const runCompanionDriverSetup = async ({
     skipVirtualMic = true,
@@ -1525,6 +1579,7 @@ export default function App() {
       setSessionReady(true);
       setCredits(validation.credits);
       setCreditsLoaded(true);
+      syncTierAccessFromLedger(validation);
       setLedgerUnreachable(false);
       setDriverSetupFailed(false);
       await reportPresence(normalized);
@@ -1590,6 +1645,7 @@ export default function App() {
       if (!res.ok) throw new Error(`Ledger responded ${res.status}`);
       const data = await res.json();
       setCredits(data.credits);
+      syncTierAccessFromLedger(data);
       setCreditsLoaded(true);
       setLedgerUnreachable(false);
     } catch (err) {
@@ -1610,6 +1666,7 @@ export default function App() {
         return;
       }
       setCredits(data.credits);
+      syncTierAccessFromLedger(data);
       setCreditsLoaded(true);
       setStatus(data.alreadyProcessed ? "PAYMENT ALREADY CREDITED" : "CREDITS ADDED — READY TO REDEPLOY");
     } catch (err) {
@@ -2414,12 +2471,14 @@ export default function App() {
   };
 
   const getPromptComposeOptions = () => ({
-    useReferenceBackground: useReferenceBackground && Boolean(selectedFile),
+    useReferenceBackground: backgroundChangerAccess && useReferenceBackground && Boolean(selectedFile),
   });
 
   const getPromptText = () => {
-    if (useReferenceBackground && selectedFile) return "";
-    return transformationPrompt.trim() || DEFAULT_TRANSFORMATION_PROMPT;
+    if (backgroundChangerAccess && useReferenceBackground && selectedFile) return "";
+    const text = transformationPrompt.trim() || DEFAULT_TRANSFORMATION_PROMPT;
+    if (!backgroundChangerAccess && hasBackgroundIntent(text)) return DEFAULT_TRANSFORMATION_PROMPT;
+    return text;
   };
 
   const getDecartPrompt = () =>
@@ -2496,6 +2555,7 @@ export default function App() {
   };
 
   const needsSceneBackground = (sourcePrompt = getPromptText()) =>
+    backgroundChangerAccess &&
     Boolean(selectedFile) &&
     (getPromptComposeOptions().useReferenceBackground || hasBackgroundIntent(sourcePrompt));
 
@@ -2563,6 +2623,15 @@ export default function App() {
   const applyTransformationPrompt = async (promptOverride) => {
     const sourcePrompt = promptOverride ?? getPromptText();
     const session = realtimeClientRef.current;
+    const composeOptions = getPromptComposeOptions();
+    const wantsBackground =
+      Boolean(selectedFile) &&
+      (composeOptions.useReferenceBackground || hasBackgroundIntent(sourcePrompt));
+
+    if (!backgroundChangerAccess && wantsBackground) {
+      setPromptApplyNote(BACKGROUND_UPGRADE_MESSAGE);
+      return;
+    }
 
     if (!session?.isConnected?.()) {
       setPromptApplyNote("Saved — this prompt will apply when you start transformation.");
@@ -2572,7 +2641,6 @@ export default function App() {
     setPromptApplyBusy(true);
     setPromptApplyNote("");
     try {
-      const composeOptions = getPromptComposeOptions();
       activeScenePromptRef.current = sourcePrompt;
       activeSceneUseRefBackgroundRef.current = composeOptions.useReferenceBackground;
       await pushDecartState(session, sourcePrompt);
@@ -2630,6 +2698,7 @@ export default function App() {
         return;
       }
       if (!res.ok) throw new Error(`Access check failed with ${res.status}`);
+      syncTierAccessFromLedger(data);
       if (data.credits <= 0) {
         setCredits(data.credits);
         setStatus("OUT OF CREDITS — ADD MORE TO CONTINUE");
@@ -2659,7 +2728,8 @@ export default function App() {
     // voiceEngine — the two are mutually exclusive per session.
     let streamForDecart = localStreamRef.current;
     let convertedAudioStream = null;
-    if (voiceChangerEnabled) {
+    const voiceAllowed = voiceChangerAccess && voiceChangerEnabled;
+    if (voiceAllowed) {
       const hasValidVoice = voiceEngine === "realtime" ? !!rtcSelectedVoiceId : !!selectedVoiceId;
       if (hasValidVoice) {
         convertedAudioStream =
@@ -2804,6 +2874,22 @@ export default function App() {
   };
 
   const renderPromptDock = () => {
+    if (!backgroundChangerAccess) {
+      return (
+        <div className="itc-prompt-dock itc-premium-locked">
+          <div className="itc-prompt-dock-header">
+            <div>
+              <h3 className="itc-prompt-dock-title">Custom background (premium)</h3>
+              <p className="itc-prompt-dock-subtitle">{BACKGROUND_UPGRADE_MESSAGE}</p>
+            </div>
+          </div>
+          <button type="button" className="itc-btn itc-btn-secondary" onClick={scrollToCreditsSection}>
+            View plans — 2,000+ credits
+          </button>
+        </div>
+      );
+    }
+
     const refBackgroundActive = useReferenceBackground && Boolean(selectedFile);
     const sceneSubtitle = refBackgroundActive
       ? "Scene is copied from your reference photo — enhanced automatically. Turn off to pick a different background with a prompt."
@@ -3249,6 +3335,15 @@ export default function App() {
             <div className="itc-studio-card-title">
               <span>🎙️</span> Voice changer
             </div>
+            {!voiceChangerAccess ? (
+              <div className="itc-premium-locked-copy">
+                <p>{VOICE_UPGRADE_MESSAGE}</p>
+                <button type="button" className="itc-btn itc-btn-secondary" onClick={scrollToCreditsSection}>
+                  View plans — 1,000+ credits
+                </button>
+              </div>
+            ) : (
+              <>
             <div style={styles.parameterRow} className="itc-parameter-row">
               <label className="itc-studio-label" style={styles.paramLabel}>Enable voice changer</label>
               <input
@@ -3372,6 +3467,8 @@ export default function App() {
                 ? `Converts your voice in ~${VOICE_CHUNK_MS / 1000}s clips — speak clearly at the mic. Audio plays through the output video, same as without voice changer.`
                 : "Real-time RVC via voice-rt-server (RunPod). Audio plays through the output video. Fan noise is gated before sending to the GPU."}
             </div>
+              </>
+            )}
           </div>
           </div>
 

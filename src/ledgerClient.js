@@ -62,7 +62,16 @@ export async function checkAccessToken(token, { clientPlatform = getClientPlatfo
     }
 
     const data = await res.json();
-    return { ok: true, token: normalized, credits: data.credits };
+    return {
+      ok: true,
+      token: normalized,
+      credits: data.credits,
+      voiceChanger: Boolean(data.voiceChanger ?? data.premiumFeatures),
+      backgroundChanger: Boolean(data.backgroundChanger),
+      maxPurchaseCredits: Number(data.maxPurchaseCredits || 0),
+      voiceMinPurchaseCredits: Number(data.voiceMinPurchaseCredits || data.premiumMinPurchaseCredits || 1000),
+      backgroundMinPurchaseCredits: Number(data.backgroundMinPurchaseCredits || 2000),
+    };
   } catch {
     return {
       ok: false,
