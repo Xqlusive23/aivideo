@@ -273,9 +273,8 @@ export default function LandingPage() {
           ))}
         </div>
         <p className="itc-landing-fine-print">
-          Live minutes per month are approximate at {DISPLAY_CREDITS_PER_SECOND} credits/sec while
-          transformation is active. Credit packs are purchased as one-time top-ups in the studio; unused
-          credits stay on your account.
+          Live time shown on each pack reflects actual session billing. Credit packs are purchased as
+          one-time top-ups in the studio; unused credits stay on your account.
         </p>
       </section>
 

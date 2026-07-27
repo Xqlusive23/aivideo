@@ -7,7 +7,8 @@ export const DISPLAY_NAIRA_PER_USD = Number(import.meta.env?.VITE_NAIRA_PER_USD)
 export const BASE_CREDITS_PER_SECOND = 2;
 export const BILLING_MULTIPLIER = 1.35;
 export const EFFECTIVE_CREDITS_PER_SECOND = BASE_CREDITS_PER_SECOND * BILLING_MULTIPLIER;
-export const DISPLAY_CREDITS_PER_SECOND = Math.ceil(EFFECTIVE_CREDITS_PER_SECOND);
+// UI shows the base rate; ledger bills at EFFECTIVE_CREDITS_PER_SECOND (~3/sec with ceil per tick).
+export const DISPLAY_CREDITS_PER_SECOND = BASE_CREDITS_PER_SECOND;
 export const LOW_CREDIT_THRESHOLD = 40;
 export const HEARTBEAT_INTERVAL_MS = 1000;
 
