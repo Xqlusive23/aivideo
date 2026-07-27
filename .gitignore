@@ -31,7 +31,8 @@ aivideo-companion/resources/feeder/
 aivideo-companion/resources/drivers/unity-capture/
 aivideo-companion/resources/drivers/unity-capture-bundle/
 aivideo-companion/resources/drivers/unity-capture-src/
-aivideo-companion/resources/drivers/vb-cable/*.exe
+aivideo-companion/resources/drivers/vb-cable/*
+!aivideo-companion/resources/drivers/vb-cable/README.md
 
 # Editor directories and files
 .vscode/*

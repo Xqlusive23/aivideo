@@ -99,13 +99,30 @@ function getUnityCaptureInstallDir() {
   return null;
 }
 
-function getVbCableInstaller() {
+function getVbCableBundleDir() {
+  const dir = getDriversPath("vb-cable");
+  return fs.existsSync(dir) ? dir : null;
+}
+
+function getVbCableInstaller(bundleDir = getVbCableBundleDir()) {
+  if (!bundleDir) return null;
   const candidates = [
-    getDriversPath("vb-cable", "VBCABLE_Setup_x64.exe"),
-    getDriversPath("vb-cable", "VBCABLE_Setup.exe"),
-    getDriversPath("vb-cable", "setup.exe"),
+    path.join(bundleDir, "VBCABLE_Setup_x64.exe"),
+    path.join(bundleDir, "VBCABLE_Setup.exe"),
+    path.join(bundleDir, "setup.exe"),
   ];
   return candidates.find((candidate) => fs.existsSync(candidate)) || null;
+}
+
+function isVbCableBundleComplete(bundleDir = getVbCableBundleDir()) {
+  if (!getVbCableInstaller(bundleDir)) return false;
+  try {
+    return fs
+      .readdirSync(bundleDir)
+      .some((name) => name.toLowerCase().endsWith(".inf"));
+  } catch {
+    return false;
+  }
 }
 
 module.exports = {
@@ -121,5 +138,7 @@ module.exports = {
   getAudioFeederCommand,
   getUnityCaptureInstallDir,
   getStagedUnityCaptureDir,
+  getVbCableBundleDir,
   getVbCableInstaller,
+  isVbCableBundleComplete,
 };

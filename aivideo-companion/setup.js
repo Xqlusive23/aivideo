@@ -7,7 +7,9 @@ const {
   getSetupStatePath,
   getUnityCaptureInstallDir,
   getStagedUnityCaptureDir,
+  getVbCableBundleDir,
   getVbCableInstaller,
+  isVbCableBundleComplete,
 } = require("./paths");
 const { stopFeeder } = require("./feeder");
 
@@ -50,6 +52,7 @@ function cleanupInstallTempFiles() {
     "inspiretech-register-camera.ps1",
     "inspiretech-unregister-camera.ps1",
     "inspiretech-promote-camera.ps1",
+    "inspiretech-vb-cable",
   ]) {
     try {
       fs.unlinkSync(path.join(tempDir, name));
@@ -103,28 +106,51 @@ Get-ChildItem -LiteralPath '${escaped}' -Filter 'UnityCaptureFilter*.dll' -Error
   }
 }
 
+function unblockPackageDir(dir) {
+  if (!dir || !fs.existsSync(dir)) return;
+  const escaped = dir.replace(/'/g, "''");
+  const script = `
+Get-ChildItem -LiteralPath '${escaped}' -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object {
+  Unblock-File -LiteralPath $_.FullName -ErrorAction SilentlyContinue
+  $zone = "$($_.FullName):Zone.Identifier"
+  if (Test-Path -LiteralPath $zone) {
+    Remove-Item -LiteralPath $zone -Force -ErrorAction SilentlyContinue
+  }
+}
+`.trim();
+  try {
+    execFileSync(
+      "powershell.exe",
+      ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
+      { windowsHide: true }
+    );
+  } catch {
+    // Best effort before the elevated VB-CABLE installer runs.
+  }
+}
+
+function copyFileWithoutMotw(src, dest) {
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  fs.writeFileSync(dest, fs.readFileSync(src));
+}
+
+function copyDirRecursive(src, dest) {
+  fs.mkdirSync(dest, { recursive: true });
+  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+    const srcPath = path.join(src, entry.name);
+    const destPath = path.join(dest, entry.name);
+    if (entry.isDirectory()) {
+      copyDirRecursive(srcPath, destPath);
+    } else {
+      copyFileWithoutMotw(srcPath, destPath);
+    }
+  }
+}
+
 async function isVirtualCameraInstalled() {
   // DirectShow virtual cameras (Unity Capture) do NOT appear in Get-PnpDevice
   // -Class Camera. Detect COM registration of the filter DLL instead.
   const script = `
-    function Test-UnityCaptureRegistered {
-      param([string]$DllName)
-      $roots = @(
-        'HKLM:\\SOFTWARE\\Classes\\CLSID',
-        'HKLM:\\SOFTWARE\\WOW6432Node\\Classes\\CLSID'
-      )
-      foreach ($root in $roots) {
-        if (-not (Test-Path $root)) { continue }
-        $matches = & reg.exe query $root /s /f $DllName 2>$null
-        if ($LASTEXITCODE -eq 0 -and $matches) { return $true }
-      }
-      return $false
-    }
-
-    $byDll = (Test-UnityCaptureRegistered 'UnityCaptureFilter64.dll') -or
-             (Test-UnityCaptureRegistered 'UnityCaptureFilter32.dll')
-    if ($byDll) { 'true'; exit 0 }
-
     $nameMatches = & reg.exe query HKLM\\SOFTWARE\\Classes\\CLSID /s /f '${VIRTUAL_CAMERA_NAME}' 2>$null
     if ($LASTEXITCODE -eq 0 -and $nameMatches) { 'true' } else { 'false' }
   `;
@@ -159,19 +185,20 @@ async function waitForDetection(checkFn, attempts = 8, delayMs = 750) {
 }
 
 function runElevatedError(exitCode, stepLabel, manualPath = "") {
-  if (exitCode === UAC_CANCELLED_EXIT_CODE) {
+  const normalizedExitCode = exitCode >>> 0 === 4294967295 ? -1 : exitCode;
+  if (normalizedExitCode === UAC_CANCELLED_EXIT_CODE) {
     return new Error(
       `${stepLabel}: installation cancelled. Click Install again and approve the Windows UAC prompt.`
     );
   }
-  if (exitCode === 3) {
+  if (normalizedExitCode === 3) {
     return new Error(
       `${stepLabel} failed (exit code 3 — Windows blocked driver registration). ` +
         `Approve UAC, then try again. If it still fails, right-click Run as administrator:` +
         (manualPath ? `\n${manualPath}` : "")
     );
   }
-  if (exitCode === 1) {
+  if (normalizedExitCode === 1) {
     return new Error(
       `${stepLabel} failed (exit code 1 — Windows may be blocking the driver DLL as downloaded from the internet). ` +
         `Click Continue again to retry (we unblock automatically). If it still fails, reboot and retry, or run as administrator:` +
@@ -179,7 +206,7 @@ function runElevatedError(exitCode, stepLabel, manualPath = "") {
     );
   }
   return new Error(
-    `${stepLabel} failed (exit code ${exitCode}). Approve UAC, ensure you have administrator rights, and try again.` +
+    `${stepLabel} failed (exit code ${normalizedExitCode}). Approve UAC, ensure you have administrator rights, and try again.` +
       (manualPath ? `\nManual install: ${manualPath}` : "")
   );
 }
@@ -237,12 +264,12 @@ async function prepareUnityCaptureStaging() {
     if (!fs.existsSync(src)) {
       throw new Error(`Missing driver file: ${src}`);
     }
-    fs.copyFileSync(src, path.join(pendingDir, file));
+    copyFileWithoutMotw(src, path.join(pendingDir, file));
   }
 
   const dll32 = path.join(bundleDir, "UnityCaptureFilter32.dll");
   if (fs.existsSync(dll32)) {
-    fs.copyFileSync(dll32, path.join(pendingDir, "UnityCaptureFilter32.dll"));
+    copyFileWithoutMotw(dll32, path.join(pendingDir, "UnityCaptureFilter32.dll"));
   }
 
   unblockDriverFiles(pendingDir);
@@ -297,22 +324,19 @@ Get-ChildItem -LiteralPath $pending | ForEach-Object {
 Clear-DriverBlocks $stage
 Clear-DriverBlocks $pending
 
-$dll64 = Join-Path $stage 'UnityCaptureFilter64.dll'
-$dll32 = Join-Path $stage 'UnityCaptureFilter32.dll'
-if (-not (Test-Path -LiteralPath $dll64)) {
-  Write-Error "Missing UnityCaptureFilter64.dll in $stage"
+$bat = Join-Path $stage 'InstallInspireTech.bat'
+if (-not (Test-Path -LiteralPath $bat)) {
+  Write-Error "Missing InstallInspireTech.bat in $stage"
   exit 1
 }
 
-Unregister-Dll $regsvr64 $dll64
-Unregister-Dll $regsvr32 $dll32
-
-& $regsvr64 /s $dll64 "/i:UnityCaptureName=InspireTech Camera"
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-if ((Test-Path $regsvr32) -and (Test-Path $dll32)) {
-  & $regsvr32 /s $dll32 "/i:UnityCaptureName=InspireTech Camera"
+Push-Location $stage
+try {
+  & cmd.exe /c InstallInspireTech.bat
+  exit $LASTEXITCODE
+} finally {
+  Pop-Location
 }
-exit 0
 `.trim();
 
   fs.writeFileSync(ps1Path, ps1Content, "utf8");
@@ -346,26 +370,52 @@ exit 0
   return true;
 }
 
-async function installVirtualAudio() {
-  const stepLabel = "VB-Audio Virtual Cable";
-  const installer = getVbCableInstaller();
-  if (!installer) {
+async function prepareVbCableStaging() {
+  const bundleDir = getVbCableBundleDir();
+  if (!isVbCableBundleComplete(bundleDir)) {
     throw new Error(
-      "VB-CABLE installer not bundled. Download from https://vb-audio.com/Cable/ and place VBCABLE_Setup_x64.exe in aivideo-companion/resources/drivers/vb-cable/ before building."
+      "VB-CABLE driver package is incomplete in this build (missing .inf files). " +
+        "Extract the full VB-CABLE ZIP into aivideo-companion/resources/drivers/vb-cable/ before building, " +
+        "or run npm run prepare:drivers. Download from https://vb-audio.com/Cable/"
     );
   }
 
-  const cwd = path.dirname(installer);
+  const stagingDir = path.join(app.getPath("temp"), "inspiretech-vb-cable");
+  fs.rmSync(stagingDir, { recursive: true, force: true });
+  copyDirRecursive(bundleDir, stagingDir);
+  unblockPackageDir(stagingDir);
+
+  const installer = getVbCableInstaller(stagingDir);
+  if (!installer) {
+    throw new Error("VB-CABLE installer missing after staging.");
+  }
+
+  return { stagingDir, installer };
+}
+
+async function installVirtualAudio() {
+  const stepLabel = "VB-Audio Virtual Cable";
+  const { stagingDir, installer } = await prepareVbCableStaging();
   const runOptions = { allowedExitCodes: VB_CABLE_SUCCESS_EXIT_CODES };
 
   try {
-    await runElevated(installer, ["-i", "-h"], cwd, runOptions);
-  } catch {
-    // Silent flags are unreliable on fresh PCs — fall back to the official installer UI.
     try {
-      await runElevated(installer, [], cwd, runOptions);
-    } catch (error) {
-      throw runElevatedError(error.code || 1, stepLabel);
+      await runElevated(installer, ["-i", "-h"], stagingDir, runOptions);
+    } catch {
+      // Silent flags are unreliable on fresh PCs — fall back to the official installer UI.
+      await runElevated(installer, [], stagingDir, runOptions);
+    }
+  } catch (error) {
+    throw runElevatedError(
+      error.code || 1,
+      stepLabel,
+      `${installer}\nRun from an extracted folder (not directly from a ZIP). Reboot if the installer asks.`
+    );
+  } finally {
+    try {
+      fs.rmSync(stagingDir, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup failures
     }
   }
 
@@ -397,7 +447,7 @@ async function getSetupStatus() {
   ]);
 
   const state = readSetupState();
-  const vbCableBundled = Boolean(getVbCableInstaller());
+  const vbCableBundled = isVbCableBundleComplete();
   const unityCaptureBundled = Boolean(getUnityCaptureInstallDir());
   const skipVirtualAudio = Boolean(state.skipVirtualAudio);
 
@@ -472,8 +522,18 @@ function registerSetupIpc() {
       if (!before.cameraInstalled || forceReinstall) {
         await installVirtualCamera();
       }
-      if (!skipAudio && before.vbCableBundled && !before.audioInstalled) {
-        await installVirtualAudio();
+      if (!skipAudio && before.vbCableBundled && (!before.audioInstalled || forceReinstall)) {
+        try {
+          await installVirtualAudio();
+        } catch (audioError) {
+          const afterCamera = await getSetupStatus();
+          if (afterCamera.cameraInstalled) {
+            throw new Error(
+              `InspireTech Camera is installed. VB-CABLE failed: ${audioError.message || audioError}`
+            );
+          }
+          throw audioError;
+        }
       }
 
       const after = await getSetupStatus();
