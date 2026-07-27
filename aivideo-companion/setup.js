@@ -79,59 +79,81 @@ function runPowerShell(script) {
   });
 }
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function unblockDriverFiles(dir) {
-  if (!dir || !fs.existsSync(dir)) return;
-  const escaped = dir.replace(/'/g, "''");
-  const script = `
-Get-ChildItem -LiteralPath '${escaped}' -Filter 'UnityCaptureFilter*.dll' -ErrorAction SilentlyContinue | ForEach-Object {
-  Unblock-File -LiteralPath $_.FullName -ErrorAction SilentlyContinue
-  $zone = "$($_.FullName):Zone.Identifier"
-  if (Test-Path -LiteralPath $zone) {
-    Remove-Item -LiteralPath $zone -Force -ErrorAction SilentlyContinue
-  }
-}
-`.trim();
-  try {
-    execFileSync(
-      "powershell.exe",
-      ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
-      { windowsHide: true }
+function regQueryContains(rootKey, searchTerm) {
+  return new Promise((resolve) => {
+    execFile(
+      "reg.exe",
+      ["query", rootKey, "/s", "/f", searchTerm],
+      { windowsHide: true, maxBuffer: 4 * 1024 * 1024 },
+      (error, stdout) => {
+        resolve(!error && stdout.includes(searchTerm));
+      }
     );
-  } catch {
-    // Best effort — the elevated installer also clears blocks before regsvr32.
-  }
-}
-
-function unblockPackageDir(dir) {
-  if (!dir || !fs.existsSync(dir)) return;
-  const escaped = dir.replace(/'/g, "''");
-  const script = `
-Get-ChildItem -LiteralPath '${escaped}' -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object {
-  Unblock-File -LiteralPath $_.FullName -ErrorAction SilentlyContinue
-  $zone = "$($_.FullName):Zone.Identifier"
-  if (Test-Path -LiteralPath $zone) {
-    Remove-Item -LiteralPath $zone -Force -ErrorAction SilentlyContinue
-  }
-}
-`.trim();
-  try {
-    execFileSync(
-      "powershell.exe",
-      ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
-      { windowsHide: true }
-    );
-  } catch {
-    // Best effort before the elevated VB-CABLE installer runs.
-  }
+  });
 }
 
 function copyFileWithoutMotw(src, dest) {
   fs.mkdirSync(path.dirname(dest), { recursive: true });
   fs.writeFileSync(dest, fs.readFileSync(src));
+}
+
+function clearMotwForDlls(dir) {
+  if (!dir || !fs.existsSync(dir)) return;
+  for (const name of fs.readdirSync(dir)) {
+    if (!/^UnityCaptureFilter.*\.dll$/i.test(name)) continue;
+    const full = path.join(dir, name);
+    try {
+      copyFileWithoutMotw(full, full);
+    } catch {
+      // ignore per-file failures
+    }
+    try {
+      execFileSync(
+        "cmd.exe",
+        ["/c", `if exist "${full}:Zone.Identifier" del /f /q "${full}:Zone.Identifier"`],
+        { windowsHide: true }
+      );
+    } catch {
+      // best effort
+    }
+  }
+}
+
+function clearMotwRecursive(dir) {
+  if (!dir || !fs.existsSync(dir)) return;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      clearMotwRecursive(full);
+      continue;
+    }
+    try {
+      copyFileWithoutMotw(full, full);
+    } catch {
+      // ignore
+    }
+    try {
+      execFileSync(
+        "cmd.exe",
+        ["/c", `if exist "${full}:Zone.Identifier" del /f /q "${full}:Zone.Identifier"`],
+        { windowsHide: true }
+      );
+    } catch {
+      // best effort
+    }
+  }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function unblockDriverFiles(dir) {
+  clearMotwForDlls(dir);
+}
+
+function unblockPackageDir(dir) {
+  clearMotwRecursive(dir);
 }
 
 function copyDirRecursive(src, dest) {
@@ -148,28 +170,31 @@ function copyDirRecursive(src, dest) {
 }
 
 async function isVirtualCameraInstalled() {
-  // DirectShow virtual cameras (Unity Capture) do NOT appear in Get-PnpDevice
-  // -Class Camera. Detect COM registration of the filter DLL instead.
-  const script = `
-    $nameMatches = & reg.exe query HKLM\\SOFTWARE\\Classes\\CLSID /s /f '${VIRTUAL_CAMERA_NAME}' 2>$null
-    if ($LASTEXITCODE -eq 0 -and $nameMatches) { 'true' } else { 'false' }
-  `;
-  try {
-    const result = await runPowerShell(script);
-    return result.includes("true");
-  } catch {
-    return false;
+  const stageDir = getStagedUnityCaptureDir();
+  const searches = [
+    ["HKLM\\SOFTWARE\\Classes\\CLSID", VIRTUAL_CAMERA_NAME],
+    ["HKLM\\SOFTWARE\\WOW6432Node\\Classes\\CLSID", VIRTUAL_CAMERA_NAME],
+    ["HKLM\\SOFTWARE\\Classes\\CLSID", "UnityCaptureFilter64.dll"],
+    ["HKLM\\SOFTWARE\\WOW6432Node\\Classes\\CLSID", "UnityCaptureFilter64.dll"],
+  ];
+  for (const [rootKey, term] of searches) {
+    if (await regQueryContains(rootKey, term)) return true;
   }
+  if (stageDir && fs.existsSync(path.join(stageDir, "UnityCaptureFilter64.dll"))) {
+    if (await regQueryContains("HKLM\\SOFTWARE\\Classes\\CLSID", "InspireTech\\UnityCapture")) {
+      return true;
+    }
+  }
+  return false;
 }
 
 async function isVirtualAudioInstalled() {
-  const script = `
-    $names = Get-CimInstance Win32_PnPEntity -ErrorAction SilentlyContinue |
-      ForEach-Object { $_.Name }
-    if ($names -match 'VB-Audio|CABLE Input|CABLE Output|Virtual Cable') { 'true' } else { 'false' }
-  `;
   try {
-    const result = await runPowerShell(script);
+    const result = await runPowerShell(`
+      $names = Get-CimInstance Win32_PnPEntity -ErrorAction SilentlyContinue |
+        ForEach-Object { $_.Name }
+      if ($names -match 'VB-Audio|CABLE Input|CABLE Output|Virtual Cable') { 'true' } else { 'false' }
+    `);
     return result.includes("true");
   } catch {
     return false;
@@ -211,35 +236,92 @@ function runElevatedError(exitCode, stepLabel, manualPath = "") {
   );
 }
 
-function runElevated(command, args = [], cwd, options = {}) {
-  const { allowedExitCodes = [0] } = options;
-  const escapePs = (value) => value.replace(/'/g, "''");
-  const argList =
-    args.length > 0
-      ? `-ArgumentList ${args.map((arg) => `'${escapePs(String(arg))}'`).join(", ")}`
-      : "";
+function runElevatedViaVbs(cmdLine, cwd, options = {}) {
+  const { allowedExitCodes = [0], timeoutMs = 180000, exitFile = null } = options;
+  const vbsPath = path.join(app.getPath("temp"), `inspiretech-elev-${Date.now()}.vbs`);
+  const workDir = (cwd || app.getPath("temp")).replace(/\\/g, "\\\\");
+  const escapedCmd = cmdLine.replace(/"/g, '""');
+  const vbs = [
+    'Set shell = CreateObject("Shell.Application")',
+    `shell.ShellExecute "cmd.exe", "/c ""${escapedCmd}""", "${workDir}", "runas", 0`,
+  ].join("\r\n");
 
-  const script = `
-    $p = Start-Process -FilePath '${escapePs(command)}' ${argList} -WorkingDirectory '${escapePs(cwd)}' -Verb RunAs -Wait -PassThru -WindowStyle Normal
-    if ($null -eq $p) { exit ${UAC_CANCELLED_EXIT_CODE} }
-    exit $p.ExitCode
-  `;
+  fs.writeFileSync(vbsPath, vbs, "utf8");
 
   return new Promise((resolve, reject) => {
-    execFile(
-      "powershell.exe",
-      ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
-      { windowsHide: false },
-      (error) => {
-        const exitCode = error?.code || 0;
-        if (error && !allowedExitCodes.includes(exitCode)) {
-          reject(error);
+    execFile("wscript.exe", ["//Nologo", vbsPath], { windowsHide: true }, () => {
+      // wscript returns immediately after launching UAC — poll for completion below.
+    });
+
+    const started = Date.now();
+    const poll = setInterval(() => {
+      if (exitFile && fs.existsSync(exitFile)) {
+        clearInterval(poll);
+        try {
+          fs.unlinkSync(vbsPath);
+        } catch {
+          // ignore
+        }
+        const raw = fs.readFileSync(exitFile, "utf8").trim();
+        try {
+          fs.unlinkSync(exitFile);
+        } catch {
+          // ignore
+        }
+        const code = parseInt(raw, 10);
+        if (Number.isNaN(code)) {
+          reject(
+            Object.assign(new Error("Elevated install did not report an exit code."), { code: 1 })
+          );
           return;
         }
-        resolve(exitCode);
+        if (!allowedExitCodes.includes(code)) {
+          reject(
+            Object.assign(new Error(`Elevated install failed with exit code ${code}.`), { code })
+          );
+          return;
+        }
+        resolve(code);
+        return;
       }
-    );
+
+      if (Date.now() - started > timeoutMs) {
+        clearInterval(poll);
+        try {
+          fs.unlinkSync(vbsPath);
+        } catch {
+          // ignore
+        }
+        reject(
+          Object.assign(
+            new Error("Installation timed out or the Windows UAC prompt was cancelled."),
+            { code: UAC_CANCELLED_EXIT_CODE }
+          )
+        );
+      }
+    }, 400);
   });
+}
+
+function runElevated(command, args = [], cwd, options = {}) {
+  const { allowedExitCodes = [0] } = options;
+  const exitFile = path.join(app.getPath("temp"), `inspiretech-exit-${Date.now()}.txt`);
+  try {
+    fs.unlinkSync(exitFile);
+  } catch {
+    // ignore
+  }
+  const quotedArgs = args.map((arg) => `"${String(arg).replace(/"/g, '""')}"`).join(" ");
+  const cmdLine = `"${command.replace(/"/g, '""')}"${quotedArgs ? ` ${quotedArgs}` : ""} & echo %ERRORLEVEL%> "${exitFile}"`;
+  return runElevatedViaVbs(cmdLine, cwd, { ...options, allowedExitCodes, exitFile });
+}
+
+function getPromoteUnityCaptureBat() {
+  const bundled = path.join(getUnityCaptureInstallDir() || "", "PromoteUnityCapture.bat");
+  if (bundled && fs.existsSync(bundled)) return bundled;
+  const template = path.join(__dirname, "scripts", "templates", "PromoteUnityCapture.bat");
+  if (fs.existsSync(template)) return template;
+  return null;
 }
 
 async function prepareUnityCaptureStaging() {
@@ -286,73 +368,35 @@ async function installVirtualCamera() {
 
   const { pendingDir, stageDir } = await prepareUnityCaptureStaging();
   const manualBatPath = path.join(stageDir, "InstallInspireTech.bat");
-  const ps1Path = path.join(app.getPath("temp"), "inspiretech-promote-camera.ps1");
-  const ps1Content = `
-$ErrorActionPreference = 'Stop'
-$pending = '${pendingDir.replace(/'/g, "''")}'
-$stage = '${stageDir.replace(/'/g, "''")}'
-New-Item -ItemType Directory -Force -Path $stage | Out-Null
-
-function Clear-DriverBlocks([string]$dir) {
-  Get-ChildItem -LiteralPath $dir -Filter 'UnityCaptureFilter*.dll' -ErrorAction SilentlyContinue | ForEach-Object {
-    Unblock-File -LiteralPath $_.FullName -ErrorAction SilentlyContinue
-    $zone = "$($_.FullName):Zone.Identifier"
-    if (Test-Path -LiteralPath $zone) {
-      Remove-Item -LiteralPath $zone -Force -ErrorAction SilentlyContinue
-    }
+  const promoteTemplate = getPromoteUnityCaptureBat();
+  if (!promoteTemplate) {
+    throw new Error("PromoteUnityCapture.bat is missing from this build.");
   }
-}
 
-$regsvr64 = Join-Path $env:SystemRoot 'System32\\regsvr32.exe'
-$regsvr32 = Join-Path $env:SystemRoot 'SysWOW64\\regsvr32.exe'
+  const promoteBat = path.join(app.getPath("temp"), "inspiretech-promote-camera.bat");
+  copyFileWithoutMotw(promoteTemplate, promoteBat);
 
-function Unregister-Dll($regsvr, $dll) {
-  if (-not (Test-Path $regsvr) -or -not (Test-Path $dll)) { return }
-  & $regsvr /s /u $dll | Out-Null
-}
-
-$old64 = Join-Path $stage 'UnityCaptureFilter64.dll'
-$old32 = Join-Path $stage 'UnityCaptureFilter32.dll'
-Unregister-Dll $regsvr64 $old64
-Unregister-Dll $regsvr32 $old32
-Start-Sleep -Milliseconds 750
-
-Get-ChildItem -LiteralPath $pending | ForEach-Object {
-  Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $stage $_.Name) -Force
-}
-
-Clear-DriverBlocks $stage
-Clear-DriverBlocks $pending
-
-$bat = Join-Path $stage 'InstallInspireTech.bat'
-if (-not (Test-Path -LiteralPath $bat)) {
-  Write-Error "Missing InstallInspireTech.bat in $stage"
-  exit 1
-}
-
-Push-Location $stage
-try {
-  & cmd.exe /c InstallInspireTech.bat
-  exit $LASTEXITCODE
-} finally {
-  Pop-Location
-}
-`.trim();
-
-  fs.writeFileSync(ps1Path, ps1Content, "utf8");
+  const exitFile = path.join(app.getPath("temp"), "inspiretech-promote-exit.txt");
   try {
-    await runElevated(
-      "powershell.exe",
-      ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ps1Path],
-      stageDir
-    );
+    fs.unlinkSync(exitFile);
+  } catch {
+    // ignore
+  }
+
+  const quotedArgs = [pendingDir, stageDir, exitFile]
+    .map((arg) => `"${String(arg).replace(/"/g, '""')}"`)
+    .join(" ");
+  const cmdLine = `"${promoteBat.replace(/"/g, '""')}" ${quotedArgs}`;
+
+  try {
+    await runElevatedViaVbs(cmdLine, app.getPath("temp"), { exitFile });
   } catch (error) {
     throw runElevatedError(error.code || 1, stepLabel, manualBatPath);
   } finally {
     try {
-      fs.unlinkSync(ps1Path);
+      fs.unlinkSync(promoteBat);
     } catch {
-      // temp script may remain if UAC was cancelled mid-run
+      // ignore
     }
     try {
       fs.rmSync(pendingDir, { recursive: true, force: true });
@@ -364,7 +408,7 @@ try {
   const installed = await waitForDetection(isVirtualCameraInstalled, 12, 1000);
   if (!installed) {
     throw new Error(
-      `${stepLabel} was not detected after install. Reboot Windows and try again, or right-click Run as administrator:\n${manualBatPath}`
+      `${stepLabel} was not detected after install. Reboot Windows and try again, or double-click Run as administrator:\n${manualBatPath}`
     );
   }
   return true;

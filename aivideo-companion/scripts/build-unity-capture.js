@@ -58,6 +58,11 @@ function copyInstallScripts() {
   if (fs.existsSync(templateInstaller)) {
     fs.copyFileSync(templateInstaller, path.join(UNITY_DEST, "InstallInspireTech.bat"));
   }
+
+  const templatePromote = path.join(ROOT, "scripts", "templates", "PromoteUnityCapture.bat");
+  if (fs.existsSync(templatePromote)) {
+    fs.copyFileSync(templatePromote, path.join(UNITY_DEST, "PromoteUnityCapture.bat"));
+  }
 }
 
 function copyBuiltDlls() {
