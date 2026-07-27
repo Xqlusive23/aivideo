@@ -187,8 +187,8 @@ export default function LandingPage() {
             className={`itc-landing-nav-links${navOpen ? " is-open" : ""}`}
             onClick={() => setNavOpen(false)}
           >
-            <a href="#features" className="itc-landing-nav-link">Features</a>
             <a href="#pricing" className="itc-landing-nav-link">Pricing</a>
+            <a href="#features" className="itc-landing-nav-link">Features</a>
             <a href="#access" className="itc-landing-nav-link">Get access</a>
             <a href="#download" className="itc-landing-nav-link">Download</a>
             <Link to="/app" className="itc-landing-nav-cta">Open studio</Link>
@@ -240,6 +240,33 @@ export default function LandingPage() {
         </div>
       </section>
 
+      <section id="pricing" className="itc-landing-section">
+        <h2 className="itc-landing-section-title">Pricing</h2>
+        <p className="itc-landing-section-lead">
+          Credits are used while your live transformation is running — {DISPLAY_CREDITS_PER_SECOND} credits
+          per second ({DISPLAY_CREDITS_PER_SECOND * 60} credits per minute). Top up in the studio after you
+          have access; Paystack checkout charges Nigerian Naira (international cards accepted).
+        </p>
+        <div className="itc-landing-pricing-grid">
+          {TOP_UP_OPTIONS.map((tier) => (
+            <article
+              key={tier.credits}
+              className={`itc-landing-pricing-card${tier.popular ? " is-popular" : ""}`}
+            >
+              {tier.popular ? <span className="itc-landing-pricing-badge">Most popular</span> : null}
+              <p className="itc-landing-pricing-credits">{formatCredits(tier.credits)} credits</p>
+              <p className="itc-landing-pricing-time">{formatLiveTimeFromCredits(tier.credits)} live</p>
+              <p className="itc-landing-pricing-usd">{formatUsdFromNaira(tier.naira)}</p>
+              <p className="itc-landing-pricing-naira">{formatNaira(tier.naira)} via Paystack</p>
+            </article>
+          ))}
+        </div>
+        <p className="itc-landing-fine-print">
+          Live time is approximate — billing runs server-side while transformation is active. Voice changer
+          usage follows the same credit rate when enabled.
+        </p>
+      </section>
+
       <section id="features" className="itc-landing-section">
         <h2 className="itc-landing-section-title">What InspireTech does</h2>
         <p className="itc-landing-section-lead">
@@ -266,33 +293,6 @@ export default function LandingPage() {
             );
           })}
         </div>
-      </section>
-
-      <section id="pricing" className="itc-landing-section">
-        <h2 className="itc-landing-section-title">Pricing</h2>
-        <p className="itc-landing-section-lead">
-          Credits are used while your live transformation is running — {DISPLAY_CREDITS_PER_SECOND} credits
-          per second ({DISPLAY_CREDITS_PER_SECOND * 60} credits per minute). Top up in the studio after you
-          have access; Paystack checkout charges Nigerian Naira (international cards accepted).
-        </p>
-        <div className="itc-landing-pricing-grid">
-          {TOP_UP_OPTIONS.map((tier) => (
-            <article
-              key={tier.credits}
-              className={`itc-landing-pricing-card${tier.popular ? " is-popular" : ""}`}
-            >
-              {tier.popular ? <span className="itc-landing-pricing-badge">Most popular</span> : null}
-              <p className="itc-landing-pricing-credits">{formatCredits(tier.credits)} credits</p>
-              <p className="itc-landing-pricing-time">{formatLiveTimeFromCredits(tier.credits)} live</p>
-              <p className="itc-landing-pricing-usd">{formatUsdFromNaira(tier.naira)}</p>
-              <p className="itc-landing-pricing-naira">{formatNaira(tier.naira)} via Paystack</p>
-            </article>
-          ))}
-        </div>
-        <p className="itc-landing-fine-print">
-          Live time is approximate — billing runs server-side while transformation is active. Voice changer
-          usage follows the same credit rate when enabled.
-        </p>
       </section>
 
       <section id="payments" className="itc-landing-section">
