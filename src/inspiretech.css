@@ -1801,6 +1801,54 @@ body {
   display: none;
 }
 
+.itc-mobile-setup {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.itc-mobile-ref-picker {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 120px;
+  padding: 0;
+  border: 1px dashed rgba(129, 140, 248, 0.35);
+  border-radius: 12px;
+  background: rgba(17, 24, 39, 0.55);
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.itc-mobile-ref-thumb {
+  width: 100%;
+  max-height: 180px;
+  object-fit: cover;
+  display: block;
+}
+
+.itc-mobile-ref-empty,
+.itc-mobile-setup-hint {
+  margin: 0;
+  color: var(--itc-text-muted);
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  text-align: center;
+}
+
+.itc-mobile-ref-empty {
+  padding: 24px 16px;
+}
+
+.itc-mobile-setup-btn {
+  width: 100%;
+}
+
+.itc-status-ribbon-compact {
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+}
+
 @media (max-width: 900px) {
   .itc-app {
     --itc-studio-chrome: 220px;
@@ -1979,6 +2027,62 @@ body {
     padding: 10px 8px !important;
     font-size: 12px !important;
     white-space: nowrap;
+  }
+
+  .itc-app-mobile.itc-mobile-web {
+    padding-bottom: calc(72px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .itc-app-mobile.itc-mobile-web .itc-canvas-control-bar {
+    display: none !important;
+  }
+
+  .itc-app-mobile.itc-mobile-web .itc-sidebar {
+    padding: 10px 12px 12px !important;
+    gap: 10px;
+  }
+
+  .itc-app-mobile.itc-mobile-web .itc-section-card {
+    padding: 14px !important;
+    border-radius: 14px;
+  }
+
+  .itc-app-mobile.itc-mobile-web .itc-studio-card-title {
+    font-size: 0.875rem;
+    margin-bottom: 10px;
+  }
+
+  .itc-app-mobile.itc-mobile-web .itc-sidebar-section-credits {
+    order: 2;
+  }
+
+  .itc-app-mobile.itc-mobile-web .itc-sidebar-section-devices {
+    order: 1;
+  }
+
+  .itc-app-mobile.itc-mobile-web .itc-sidebar-section-topup {
+    order: 3;
+  }
+
+  .itc-app-mobile.itc-mobile-web .itc-status-ribbon {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  .itc-app-mobile.itc-mobile-web .itc-header-actions .itc-header-link {
+    font-size: 0.75rem;
+    padding: 6px 8px;
+  }
+
+  .itc-app-mobile.itc-mobile-web .itc-mobile-action-dock-simple {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .itc-app-mobile.itc-mobile-web.itc-mobile-sidebar-collapsed .itc-mobile-action-dock-simple {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .itc-app-mobile.itc-mobile-web .itc-mobile-action-dock-simple:has(.itc-btn:nth-child(4)) {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
   .itc-top-header {

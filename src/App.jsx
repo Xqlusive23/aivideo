@@ -456,12 +456,13 @@ export default function App() {
   const [isPoppedOut, setIsPoppedOut] = useState(false);
   const [mobileOutputFocus, setMobileOutputFocus] = useState(false);
   const [theaterControlsVisible, setTheaterControlsVisible] = useState(true);
-  const [mobileControlsOpen, setMobileControlsOpen] = useState(true);
+  const [mobileControlsOpen, setMobileControlsOpen] = useState(false);
   const [isMobileLayout, setIsMobileLayout] = useState(() =>
     typeof window !== "undefined"
       ? window.matchMedia(`(max-width: ${MOBILE_LAYOUT_MAX_WIDTH}px)`).matches
       : false
   );
+  const isMobileWebStudio = isMobileLayout && !companionToolbar;
   const pipSupported = typeof document !== "undefined" && document.pictureInPictureEnabled;
 
   const localVideoRef = useRef(null);
@@ -3056,8 +3057,8 @@ export default function App() {
     );
   };
 
-  const showPromptBelowOutput = !isMobileLayout || !isRunning;
-  const showPromptInSidebar = isMobileLayout && isRunning;
+  const showPromptBelowOutput = (!isMobileLayout || !isRunning) && !isMobileWebStudio;
+  const showPromptInSidebar = isMobileLayout && isRunning && !isMobileWebStudio;
 
   const purchaseCredits = async (creditAmount) => {
     try {
@@ -3099,7 +3100,30 @@ export default function App() {
     return companionNavSection === section ? "" : "itc-companion-hidden";
   };
 
-  const renderStatusRibbon = () => (
+  const renderStatusRibbon = () => {
+    if (isMobileWebStudio) {
+      return (
+        <div className="itc-status-ribbon itc-status-ribbon-compact">
+          <div className="itc-status-chip">
+            <span className="itc-status-chip-label">Status</span>
+            <span className={`itc-status-chip-value${isRunning ? " is-live" : ""}`} style={!isRunning ? { color: c.amber } : undefined}>
+              {formatStatusDisplay(status)}
+            </span>
+          </div>
+          <div className="itc-status-chip">
+            <span className="itc-status-chip-label">Credits</span>
+            <span
+              className={`itc-status-chip-value itc-mono${isLowCredit ? " is-danger" : ""}`}
+              style={{ animation: isLowCredit && isRunning ? "creditPulse 1s infinite" : "none" }}
+            >
+              {creditsLoaded ? credits : "…"}
+            </span>
+          </div>
+        </div>
+      );
+    }
+
+    return (
     <div className="itc-status-ribbon">
       <div className="itc-status-chip">
         <span className="itc-status-chip-label">Status</span>
@@ -3132,7 +3156,8 @@ export default function App() {
         </span>
       </div>
     </div>
-  );
+    );
+  };
 
   // No access token yet — show sign-in gate (landing page lives at /).
   if (!accessToken || !sessionReady) {
@@ -3155,13 +3180,13 @@ export default function App() {
     <>
     <div
       style={styles.appContainer}
-      className={`itc-app${isMobileLayout ? " itc-app-mobile" : ""}${mobileOutputFocus ? " itc-mobile-theater" : ""}${isMobileLayout && !mobileControlsOpen ? " itc-mobile-sidebar-collapsed" : ""}`}
+      className={`itc-app${isMobileLayout ? " itc-app-mobile" : ""}${isMobileWebStudio ? " itc-mobile-web" : ""}${mobileOutputFocus ? " itc-mobile-theater" : ""}${isMobileLayout && !mobileControlsOpen ? " itc-mobile-sidebar-collapsed" : ""}`}
     >
       <header className={`itc-top-header${companionToolbar ? " itc-top-header-companion" : ""}`}>
         <div className="itc-header-brand">
           <div className="itc-header-brand-id">
             <LogoLockup size="md" />
-            <span className="itc-header-version">v2.8</span>
+            {!isMobileWebStudio && <span className="itc-header-version">v2.8</span>}
           </div>
           <div className="itc-header-actions">
             <button
@@ -3243,6 +3268,38 @@ export default function App() {
 
           <div className={`${companionSectionClass("devices")} itc-sidebar-section itc-sidebar-section-devices`}>
           <div style={styles.sectionCard} className="itc-card itc-section-card">
+            {isMobileWebStudio ? (
+              <>
+                <div className="itc-studio-card-title">Setup</div>
+                <div className="itc-mobile-setup">
+                  <button
+                    type="button"
+                    className="itc-mobile-ref-picker"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={isRunning}
+                  >
+                    {imagePreview ? (
+                      <img src={imagePreview} alt="" className="itc-mobile-ref-thumb" />
+                    ) : (
+                      <span className="itc-mobile-ref-empty">Tap to choose reference photo</span>
+                    )}
+                  </button>
+                  <input type="file" ref={fileInputRef} accept="image/*" style={{ display: "none" }} onChange={(e) => handleFileChange(e.target.files?.[0])} />
+                  <button
+                    type="button"
+                    className="itc-btn itc-btn-primary itc-mobile-setup-btn"
+                    onClick={() => startCamera()}
+                    disabled={isRunning}
+                  >
+                    {cameraActive ? "Camera on" : "Turn on camera"}
+                  </button>
+                  {!cameraActive && (
+                    <p className="itc-mobile-setup-hint">Allow camera access when your browser asks.</p>
+                  )}
+                </div>
+              </>
+            ) : (
+              <>
             <div className="itc-studio-card-title">
               <span>⚙️</span> Camera & inputs
             </div>
@@ -3324,32 +3381,43 @@ export default function App() {
               </button>
               <input type="file" ref={fileInputRef} accept="image/*" style={{ display: "none" }} onChange={(e) => handleFileChange(e.target.files?.[0])} />
             </div>
+              </>
+            )}
           </div>
           </div>
 
           <div className={`${companionSectionClass("credits")} itc-sidebar-section itc-sidebar-section-credits`}>
-          {/* --- Real credit meter card --- */}
           <div style={styles.sectionCard} className="itc-card itc-section-card">
             <div className="itc-studio-card-title">
-              <span>💳</span> Credit balance
+              <span>{isMobileWebStudio ? "" : "💳 "}</span>
+              {isMobileWebStudio ? "Credits" : "Credit balance"}
             </div>
             {ledgerUnreachable ? (
               <div style={styles.ledgerErrorNote}>
-                Can't reach the ledger backend at {LEDGER_URL}. Is it running? (<code>cd ledger-backend && npm start</code>)
+                Can't reach the billing server. Check your connection and try again.
               </div>
             ) : (
               <>
                 <div style={styles.creditBalanceRow}>
                   <span style={styles.creditBalanceNumber}>{creditsLoaded ? credits : "…"}</span>
-                  <span style={styles.creditBalanceSub}>credits · {creditsLoaded ? formatUsdFromCredits(credits) : "—"}</span>
+                  {!isMobileWebStudio && (
+                    <span style={styles.creditBalanceSub}>credits · {creditsLoaded ? formatUsdFromCredits(credits) : "—"}</span>
+                  )}
                 </div>
-                <div style={styles.creditBarTrack}>
-                  <div style={{...styles.creditBarFill, width: `${creditPercent}%`, backgroundColor: isLowCredit ? c.rose : c.primary}} />
-                </div>
-                <div style={styles.creditMeta}>
-                  <span>~{DISPLAY_CREDITS_PER_SECOND} credits/sec while live (billed server-side)</span>
-                  {isRunning && <span>Used this session: {sessionCreditsUsed} ({formatUsdFromCredits(sessionCreditsUsed)})</span>}
-                </div>
+                {!isMobileWebStudio && (
+                  <>
+                    <div style={styles.creditBarTrack}>
+                      <div style={{...styles.creditBarFill, width: `${creditPercent}%`, backgroundColor: isLowCredit ? c.rose : c.primary}} />
+                    </div>
+                    <div style={styles.creditMeta}>
+                      <span>~{DISPLAY_CREDITS_PER_SECOND} credits/sec while live (billed server-side)</span>
+                      {isRunning && <span>Used this session: {sessionCreditsUsed} ({formatUsdFromCredits(sessionCreditsUsed)})</span>}
+                    </div>
+                  </>
+                )}
+                {isMobileWebStudio && isRunning && (
+                  <p className="itc-mobile-setup-hint">Using ~{DISPLAY_CREDITS_PER_SECOND} credits/sec while live.</p>
+                )}
               </>
             )}
             <button
@@ -3362,6 +3430,7 @@ export default function App() {
           </div>
           </div>
 
+          {!isMobileWebStudio && (
           <div className={`${companionSectionClass("studio")} itc-sidebar-section itc-sidebar-section-ref`}>
           <div style={styles.sectionCard} className="itc-card itc-section-card">
             <div className="itc-studio-card-title">
@@ -3376,7 +3445,9 @@ export default function App() {
             </div>
           </div>
           </div>
+          )}
 
+          {!isMobileWebStudio && (
           <div className={`${companionSectionClass("voice")} itc-sidebar-section itc-sidebar-section-voice`}>
           <div style={styles.sectionCard} className="itc-card itc-section-card">
             <div className="itc-studio-card-title">
@@ -3518,7 +3589,9 @@ export default function App() {
             )}
           </div>
           </div>
+          )}
 
+          {!isMobileWebStudio && (
           <div className={`${companionSectionClass("studio")} itc-sidebar-section itc-sidebar-section-preview`}>
           <div style={styles.sectionCard} className="itc-card itc-section-card">
             <div className="itc-studio-card-title">
@@ -3539,13 +3612,17 @@ export default function App() {
             </div>
           </div>
           </div>
+          )}
 
+          {(!isMobileWebStudio || showAddCredits) && (
           <div className={`${companionSectionClass("credits")} itc-sidebar-section itc-sidebar-section-topup`}>
           <div ref={creditSectionRef} style={{...styles.sectionCard, ...(showAddCredits ? styles.sectionCardAlert : {})}} className="itc-card itc-section-card">
             <div className="itc-studio-card-title">
-              <span>💳</span> Buy more credits
+              <span>{isMobileWebStudio ? "" : "💳 "}</span>Buy credits
             </div>
-            <p style={styles.modalSubtitle}>You can purchase more Credits to start generating</p>
+            {!isMobileWebStudio && (
+              <p style={styles.modalSubtitle}>You can purchase more Credits to start generating</p>
+            )}
             <div style={styles.creditCardGrid} className="itc-credit-grid">
               {TOP_UP_OPTIONS.map((opt) => (
                 <div key={opt.credits} style={{...styles.creditCard, ...(opt.popular ? styles.creditCardPopular : {})}}>
@@ -3564,10 +3641,13 @@ export default function App() {
               ))}
             </div>
             <div style={styles.modalNote}>
-              USD is approximate (₦{DISPLAY_NAIRA_PER_USD.toLocaleString()} ≈ $1). Paystack Checkout charges the exact naira amount (e.g. ₦22,400).
+              {isMobileWebStudio
+                ? "Charged in naira via Paystack."
+                : `USD is approximate (₦${DISPLAY_NAIRA_PER_USD.toLocaleString()} ≈ $1). Paystack Checkout charges the exact naira amount (e.g. ₦22,400).`}
             </div>
           </div>
           </div>
+          )}
 
           {companionToolbar && (
             <div className={companionSectionClass("drivers")}>
@@ -3675,10 +3755,12 @@ export default function App() {
 
         <div className="itc-studio-stage">
         <main style={styles.outputCanvas} className="itc-output-canvas">
-          <div style={styles.canvasControlBar} className="itc-canvas-control-bar">
+          <div style={styles.canvasControlBar} className={`itc-canvas-control-bar${isMobileWebStudio ? " itc-canvas-control-bar-mobile" : ""}`}>
             <div style={styles.canvasTitleGroup} className="itc-canvas-title-group">
-              <h2 className="itc-canvas-title">Output monitor</h2>
-              <span className="itc-canvas-subtitle" style={styles.canvasSubtitle}>1280×720 Lucy 2.5 output</span>
+              <h2 className="itc-canvas-title">{isMobileWebStudio ? "Live output" : "Output monitor"}</h2>
+              {!isMobileWebStudio && (
+                <span className="itc-canvas-subtitle" style={styles.canvasSubtitle}>1280×720 Lucy 2.5 output</span>
+              )}
             </div>
             <div style={styles.actionRow} className="itc-action-row itc-desktop-action-row">
               <button
@@ -3720,9 +3802,11 @@ export default function App() {
               {isRunning && (
                 <div style={styles.timerBadgeRow} className="itc-timer-badge-row">
                   <div style={styles.timerBadgeOutside}>{formatTime(elapsedSeconds)}</div>
-                  <div style={{...styles.timerBadgeOutside, color: isLowCredit ? c.rose : c.primary}}>
-                    {credits} credits left
-                  </div>
+                  {!isMobileWebStudio && (
+                    <div style={{...styles.timerBadgeOutside, color: isLowCredit ? c.rose : c.primary}}>
+                      {credits} credits left
+                    </div>
+                  )}
                 </div>
               )}
               <div style={styles.fixedOutputContainer} className={`itc-fixed-output${isRunning ? " itc-live" : ""}`}>
@@ -3737,7 +3821,11 @@ export default function App() {
                       {credits <= 0 && creditsLoaded ? "Out of credits" : "Not connected"}
                     </div>
                     <div style={styles.overlaySubtext}>
-                      {credits <= 0 && creditsLoaded ? "Add credits from the sidebar to continue." : "Upload a reference image, start your camera, then hit Start transformation."}
+                      {credits <= 0 && creditsLoaded
+                        ? "Add credits to continue."
+                        : isMobileWebStudio
+                        ? "Choose a photo and turn on your camera, then tap Go live."
+                        : "Upload a reference image, start your camera, then hit Start transformation."}
                     </div>
                   </div>
                 )}
@@ -3773,13 +3861,13 @@ export default function App() {
       )}
 
       {isMobileLayout && !mobileOutputFocus && (
-        <div className="itc-mobile-action-dock">
+        <div className={`itc-mobile-action-dock${isMobileWebStudio ? " itc-mobile-action-dock-simple" : ""}`}>
           <button
             type="button"
             className="itc-btn itc-btn-secondary"
             onClick={() => setMobileControlsOpen((open) => !open)}
           >
-            {mobileControlsOpen ? "Hide setup" : "Show setup"}
+            {mobileControlsOpen ? "Hide setup" : "Setup"}
           </button>
           <button
             type="button"
@@ -3787,7 +3875,7 @@ export default function App() {
             onClick={startTransformation}
             disabled={isRunning || !selectedFile || credits <= 0 || ledgerUnreachable}
           >
-            Start
+            {isMobileWebStudio ? "Go live" : "Start"}
           </button>
           <button
             type="button"
@@ -3797,14 +3885,25 @@ export default function App() {
           >
             Stop
           </button>
-          <button
-            type="button"
-            className="itc-btn itc-btn-secondary"
-            onClick={handlePopOutVideo}
-            disabled={!isRunning}
-          >
-            Full screen
-          </button>
+          {!isMobileWebStudio && (
+            <button
+              type="button"
+              className="itc-btn itc-btn-secondary"
+              onClick={handlePopOutVideo}
+              disabled={!isRunning}
+            >
+              Full screen
+            </button>
+          )}
+          {isMobileWebStudio && isRunning && (
+            <button
+              type="button"
+              className="itc-btn itc-btn-secondary"
+              onClick={handlePopOutVideo}
+            >
+              Expand
+            </button>
+          )}
         </div>
       )}
     </div>
