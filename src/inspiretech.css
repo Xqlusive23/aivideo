@@ -2015,11 +2015,16 @@ body {
     z-index: 200;
     grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 8px;
-    padding: 10px 12px calc(10px + env(safe-area-inset-bottom, 0px));
+    padding: 8px 12px calc(8px + env(safe-area-inset-bottom, 0px));
     background: rgba(9, 11, 17, 0.96);
     backdrop-filter: blur(12px);
     border-top: 1px solid rgba(129, 140, 248, 0.18);
     box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.35);
+  }
+
+  .itc-app-mobile.itc-mobile-web .itc-mobile-action-dock.itc-mobile-action-dock-simple {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    grid-template-areas: none !important;
   }
 
   .itc-app-mobile .itc-mobile-action-dock .itc-btn {
@@ -2030,16 +2035,16 @@ body {
   }
 
   .itc-app-mobile.itc-mobile-web {
-    padding-bottom: calc(72px + env(safe-area-inset-bottom, 0px));
+    padding-bottom: calc(68px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .itc-app-mobile.itc-mobile-web .itc-sidebar {
+    padding: 10px 12px calc(68px + env(safe-area-inset-bottom, 0px)) !important;
+    gap: 10px;
   }
 
   .itc-app-mobile.itc-mobile-web .itc-canvas-control-bar {
     display: none !important;
-  }
-
-  .itc-app-mobile.itc-mobile-web .itc-sidebar {
-    padding: 10px 12px 12px !important;
-    gap: 10px;
   }
 
   .itc-app-mobile.itc-mobile-web .itc-section-card {
@@ -2071,18 +2076,6 @@ body {
   .itc-app-mobile.itc-mobile-web .itc-header-actions .itc-header-link {
     font-size: 0.75rem;
     padding: 6px 8px;
-  }
-
-  .itc-app-mobile.itc-mobile-web .itc-mobile-action-dock-simple {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
-  .itc-app-mobile.itc-mobile-web.itc-mobile-sidebar-collapsed .itc-mobile-action-dock-simple {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
-  .itc-app-mobile.itc-mobile-web .itc-mobile-action-dock-simple:has(.itc-btn:nth-child(4)) {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
   .itc-top-header {
@@ -2146,7 +2139,7 @@ body {
     grid-template-columns: 1fr !important;
   }
 
-  .itc-app-mobile .itc-mobile-action-dock {
+  .itc-app-mobile .itc-mobile-action-dock:not(.itc-mobile-action-dock-simple) {
     grid-template-columns: 1fr 1fr;
     grid-template-areas:
       "setup setup"
@@ -2154,19 +2147,31 @@ body {
       "full full";
   }
 
-  .itc-app-mobile .itc-mobile-action-dock .itc-btn:nth-child(1) {
+  .itc-app-mobile.itc-mobile-web .itc-mobile-action-dock.itc-mobile-action-dock-simple {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    grid-template-areas: none !important;
+  }
+
+  .itc-app-mobile.itc-mobile-web .itc-mobile-action-dock.itc-mobile-action-dock-simple .itc-btn {
+    grid-area: auto !important;
+    min-height: 42px !important;
+    padding: 8px 6px !important;
+    font-size: 11px !important;
+  }
+
+  .itc-app-mobile .itc-mobile-action-dock:not(.itc-mobile-action-dock-simple) .itc-btn:nth-child(1) {
     grid-area: setup;
   }
 
-  .itc-app-mobile .itc-mobile-action-dock .itc-btn:nth-child(2) {
+  .itc-app-mobile .itc-mobile-action-dock:not(.itc-mobile-action-dock-simple) .itc-btn:nth-child(2) {
     grid-area: start;
   }
 
-  .itc-app-mobile .itc-mobile-action-dock .itc-btn:nth-child(3) {
+  .itc-app-mobile .itc-mobile-action-dock:not(.itc-mobile-action-dock-simple) .itc-btn:nth-child(3) {
     grid-area: stop;
   }
 
-  .itc-app-mobile .itc-mobile-action-dock .itc-btn:nth-child(4) {
+  .itc-app-mobile .itc-mobile-action-dock:not(.itc-mobile-action-dock-simple) .itc-btn:nth-child(4) {
     grid-area: full;
   }
 }

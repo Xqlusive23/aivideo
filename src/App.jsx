@@ -908,6 +908,15 @@ export default function App() {
     }
   }, [isMobileLayout, isRunning]);
 
+  useEffect(() => {
+    if (!isMobileWebStudio || !showAddCredits) return;
+    setMobileControlsOpen(true);
+    const timer = setTimeout(() => {
+      creditSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 80);
+    return () => clearTimeout(timer);
+  }, [showAddCredits, isMobileWebStudio]);
+
   const THEATER_CONTROLS_HIDE_MS = 3500;
 
   const clearTheaterControlsTimer = () => {
@@ -3867,7 +3876,7 @@ export default function App() {
             className="itc-btn itc-btn-secondary"
             onClick={() => setMobileControlsOpen((open) => !open)}
           >
-            {mobileControlsOpen ? "Hide setup" : "Setup"}
+            {mobileControlsOpen ? (isMobileWebStudio ? "Hide" : "Hide setup") : "Setup"}
           </button>
           <button
             type="button"
@@ -3893,15 +3902,6 @@ export default function App() {
               disabled={!isRunning}
             >
               Full screen
-            </button>
-          )}
-          {isMobileWebStudio && isRunning && (
-            <button
-              type="button"
-              className="itc-btn itc-btn-secondary"
-              onClick={handlePopOutVideo}
-            >
-              Expand
             </button>
           )}
         </div>
