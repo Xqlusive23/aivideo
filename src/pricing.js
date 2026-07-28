@@ -7,10 +7,10 @@ export const DISPLAY_NAIRA_PER_USD = Number(import.meta.env?.VITE_NAIRA_PER_USD)
 export const BASE_CREDITS_PER_SECOND = 2;
 // Ledger billing anchor: 1000 credits ≈ 3 min live (server-side truth).
 export const LIVE_MINUTES_PER_1000_CREDITS = 3;
-// Credit-pack tiles show ~4 min per 1000 credits (marketing; backend uses LIVE_MINUTES above).
-export const DISPLAY_LIVE_MINUTES_PER_1000_CREDITS = 4;
+// Credit-pack tiles: 500 credits ≈ 4 min live, 1000 ≈ 8 min, etc. (marketing only).
+export const DISPLAY_LIVE_MINUTES_PER_500_CREDITS = 4;
 export const EFFECTIVE_CREDITS_PER_SECOND = 1000 / (LIVE_MINUTES_PER_1000_CREDITS * 60);
-export const DISPLAY_LIVE_CREDITS_PER_SECOND = 1000 / (DISPLAY_LIVE_MINUTES_PER_1000_CREDITS * 60);
+export const DISPLAY_LIVE_CREDITS_PER_SECOND = 500 / (DISPLAY_LIVE_MINUTES_PER_500_CREDITS * 60);
 export const BILLING_MULTIPLIER = EFFECTIVE_CREDITS_PER_SECOND / BASE_CREDITS_PER_SECOND;
 // UI rate label only — ledger bills at EFFECTIVE_CREDITS_PER_SECOND.
 export const DISPLAY_CREDITS_PER_SECOND = BASE_CREDITS_PER_SECOND;
