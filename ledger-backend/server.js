@@ -44,10 +44,67 @@ const MAX_HEARTBEAT_GAP_SECONDS = 10; // caps deduction if a heartbeat is late/m
 const PRESENCE_ACTIVE_SECONDS = 90; // admin "online now" window
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY || "";
 const ADMIN_SECRET = process.env.ADMIN_SECRET || "";
-const DECART_API_KEY = process.env.DECART_API_KEY || "";
+const DECART_API_KEY = (process.env.DECART_API_KEY || "").trim();
 
 if (!DECART_API_KEY) {
   console.warn("\n⚠️  DECART_API_KEY is not set — live transformation tokens cannot be minted until you add it to .env\n");
+}
+
+function normalizeDecartOrigin(origin) {
+  const raw = String(origin || "").trim();
+  if (!raw) return null;
+  try {
+    const url = new URL(raw);
+    if (url.username || url.password) return null;
+    const host = url.hostname.toLowerCase();
+    const isDefaultPort =
+      (url.protocol === "https:" && (url.port === "" || url.port === "443")) ||
+      (url.protocol === "http:" && (url.port === "" || url.port === "80"));
+    if (isDefaultPort) return `${url.protocol}//${host}`;
+    return `${url.protocol}//${host}:${url.port}`;
+  } catch {
+    return null;
+  }
+}
+
+function decartAllowedOrigins() {
+  return [
+    ...new Set(
+      [
+        "https://www.inspirestream.xyz",
+        "https://inspirestream.xyz",
+        FRONTEND_URL,
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+      ]
+        .map(normalizeDecartOrigin)
+        .filter(Boolean)
+    ),
+  ];
+}
+
+function decartMintErrorResponse(err) {
+  const message = String(err?.message || err || "");
+  const statusMatch = message.match(/Failed to create token: (\d+)/);
+  const status = statusMatch ? Number(statusMatch[1]) : 500;
+  console.error("Decart token mint failed:", message);
+
+  if (status === 401 || status === 403) {
+    return {
+      status: 503,
+      error: "Decart API key is invalid on the server. Set DECART_API_KEY on the ledger backend.",
+    };
+  }
+  if (status === 402 || /insufficient|balance|credit/i.test(message)) {
+    return { status: 503, error: "Decart provider account is out of credits." };
+  }
+  if (status === 400) {
+    return {
+      status: 500,
+      error: "Decart rejected token options. Check FRONTEND_URL and allowedOrigins on the server.",
+    };
+  }
+  return { status: 500, error: "Could not create Decart session token." };
 }
 
 // --- Voice changer (ElevenLabs Speech-to-Speech / Voice Changer API) --------
@@ -1095,14 +1152,6 @@ app.post("/api/sessions/:id/end", requireToken, (req, res) => {
 });
 
 // --- Decart realtime (short-lived client tokens) -----------------------------
-const DECART_ALLOWED_ORIGINS = [
-  "https://www.inspirestream.xyz",
-  "https://inspirestream.xyz",
-  FRONTEND_URL,
-  "http://localhost:5173",
-  "http://127.0.0.1:5173",
-].filter(Boolean);
-
 let decartAdminClient = null;
 
 function getDecartAdminClient() {
@@ -1138,8 +1187,9 @@ app.post("/api/decart/realtime-token", requireToken, async (req, res) => {
     metadata: { inspiretechToken: req.token.slice(0, 8) },
   };
 
-  if (DECART_ALLOWED_ORIGINS.length > 0 && req.clientPlatform !== "windows-app") {
-    tokenOptions.allowedOrigins = [...new Set(DECART_ALLOWED_ORIGINS)];
+  const allowedOrigins = decartAllowedOrigins();
+  if (allowedOrigins.length > 0) {
+    tokenOptions.allowedOrigins = allowedOrigins;
   }
 
   try {
@@ -1152,8 +1202,8 @@ app.post("/api/decart/realtime-token", requireToken, async (req, res) => {
       ...billingPayload(),
     });
   } catch (err) {
-    console.error("Decart token mint failed:", err);
-    res.status(500).json({ error: "Could not create Decart session token." });
+    const { status, error } = decartMintErrorResponse(err);
+    res.status(status).json({ error });
   }
 });
 
