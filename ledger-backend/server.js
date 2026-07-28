@@ -38,13 +38,12 @@ const ALLOWED_ORIGINS = new Set(
 );
 const CREDITS_PER_SECOND = Number(process.env.CREDITS_PER_SECOND || 2);
 // Decart API cost per second — keep in sync with src/pricing.js DECART_CREDITS_PER_SECOND.
-// Backend live-time anchor: 500 credits ≈ 3 min (same linear scale as display, shorter duration).
-const LIVE_MINUTES_PER_500_CREDITS = Number(process.env.LIVE_MINUTES_PER_500_CREDITS || 3);
+// 500 credits = exactly 3 min 40 sec (220 s); other packs scale linearly.
+const LIVE_SECONDS_PER_500_CREDITS = Number(process.env.LIVE_SECONDS_PER_500_CREDITS || 220);
 const BILLING_MULTIPLIER = Number(
   process.env.BILLING_MULTIPLIER ||
-    500 / (LIVE_MINUTES_PER_500_CREDITS * 60) / CREDITS_PER_SECOND
+    500 / LIVE_SECONDS_PER_500_CREDITS / CREDITS_PER_SECOND
 );
-const MAX_HEARTBEAT_GAP_SECONDS = 10; // caps deduction if a heartbeat is late/missed
 const PRESENCE_ACTIVE_SECONDS = 90; // admin "online now" window
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY || "";
 const ADMIN_SECRET = process.env.ADMIN_SECRET || "";
@@ -309,8 +308,16 @@ function effectiveCreditsPerSecond() {
   return CREDITS_PER_SECOND * BILLING_MULTIPLIER;
 }
 
-function creditsForElapsedSeconds(elapsedSeconds) {
-  return Math.ceil(Math.max(0, elapsedSeconds) * effectiveCreditsPerSecond());
+function creditsOwedForTotalElapsed(totalElapsedSeconds) {
+  return Math.round(Math.max(0, totalElapsedSeconds) * effectiveCreditsPerSecond());
+}
+
+function creditsToBillForSession(session, asOf = new Date()) {
+  const started = new Date(session.started_at);
+  const totalElapsedSeconds = Math.max(0, (asOf - started) / 1000);
+  const totalOwed = creditsOwedForTotalElapsed(totalElapsedSeconds);
+  const alreadyUsed = Number(session.credits_used || 0);
+  return Math.max(0, totalOwed - alreadyUsed);
 }
 
 function maxLiveSecondsForCredits(credits) {
@@ -1049,9 +1056,7 @@ app.post("/api/sessions/start", requireToken, (req, res) => {
     .all(req.token);
   for (const session of orphaned) {
     const now = new Date();
-    const last = new Date(session.last_heartbeat_at);
-    const elapsedSeconds = Math.min(MAX_HEARTBEAT_GAP_SECONDS, Math.max(0, (now - last) / 1000));
-    const creditsToDeduct = creditsForElapsedSeconds(elapsedSeconds);
+    const creditsToDeduct = creditsToBillForSession(session, now);
     adjustBalance(req.token, -creditsToDeduct);
     if (creditsToDeduct > 0) {
       recordTransaction({ token: req.token, type: "usage", credits: -creditsToDeduct });
@@ -1094,9 +1099,7 @@ app.post("/api/sessions/:id/heartbeat", requireToken, (req, res) => {
   }
 
   const now = new Date();
-  const last = new Date(session.last_heartbeat_at);
-  const elapsedSeconds = Math.min(MAX_HEARTBEAT_GAP_SECONDS, Math.max(0, (now - last) / 1000));
-  const creditsToDeduct = creditsForElapsedSeconds(elapsedSeconds);
+  const creditsToDeduct = creditsToBillForSession(session, now);
 
   const remaining = adjustBalance(req.token, -creditsToDeduct);
   if (creditsToDeduct > 0) {
@@ -1128,9 +1131,7 @@ app.post("/api/sessions/:id/end", requireToken, (req, res) => {
   if (session.ended_at) return res.json({ credits: getBalance(req.token) });
 
   const now = new Date();
-  const last = new Date(session.last_heartbeat_at);
-  const elapsedSeconds = Math.min(MAX_HEARTBEAT_GAP_SECONDS, Math.max(0, (now - last) / 1000));
-  const creditsToDeduct = creditsForElapsedSeconds(elapsedSeconds);
+  const creditsToDeduct = creditsToBillForSession(session, now);
   const remaining = adjustBalance(req.token, -creditsToDeduct);
   if (creditsToDeduct > 0) {
     recordTransaction({ token: req.token, type: "usage", credits: -creditsToDeduct });
