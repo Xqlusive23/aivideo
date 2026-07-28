@@ -5,9 +5,14 @@ export const NAIRA_PER_USD = 1600;
 export const NAIRA_PER_CREDIT = (14 * NAIRA_PER_USD) / 1000;
 export const DISPLAY_NAIRA_PER_USD = Number(import.meta.env?.VITE_NAIRA_PER_USD) || NAIRA_PER_USD;
 export const BASE_CREDITS_PER_SECOND = 2;
-export const BILLING_MULTIPLIER = 1.35;
-export const EFFECTIVE_CREDITS_PER_SECOND = BASE_CREDITS_PER_SECOND * BILLING_MULTIPLIER;
-// UI shows the base rate; ledger bills at EFFECTIVE_CREDITS_PER_SECOND (~3/sec with ceil per tick).
+// Ledger billing anchor: 1000 credits ≈ 3 min live (server-side truth).
+export const LIVE_MINUTES_PER_1000_CREDITS = 3;
+// Credit-pack tiles show ~4 min per 1000 credits (marketing; backend uses LIVE_MINUTES above).
+export const DISPLAY_LIVE_MINUTES_PER_1000_CREDITS = 4;
+export const EFFECTIVE_CREDITS_PER_SECOND = 1000 / (LIVE_MINUTES_PER_1000_CREDITS * 60);
+export const DISPLAY_LIVE_CREDITS_PER_SECOND = 1000 / (DISPLAY_LIVE_MINUTES_PER_1000_CREDITS * 60);
+export const BILLING_MULTIPLIER = EFFECTIVE_CREDITS_PER_SECOND / BASE_CREDITS_PER_SECOND;
+// UI rate label only — ledger bills at EFFECTIVE_CREDITS_PER_SECOND.
 export const DISPLAY_CREDITS_PER_SECOND = BASE_CREDITS_PER_SECOND;
 export const LOW_CREDIT_THRESHOLD = 40;
 export const HEARTBEAT_INTERVAL_MS = 1000;
@@ -50,9 +55,9 @@ export function formatCredits(credits) {
   return credits.toLocaleString();
 }
 
-/** Live transformation time billed at EFFECTIVE_CREDITS_PER_SECOND while the session is running. */
+/** Live time shown on credit packs (optimistic; actual billing uses EFFECTIVE_CREDITS_PER_SECOND). */
 export function formatLiveTimeFromCredits(credits) {
-  const totalSeconds = credits / EFFECTIVE_CREDITS_PER_SECOND;
+  const totalSeconds = credits / DISPLAY_LIVE_CREDITS_PER_SECOND;
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.round((totalSeconds % 3600) / 60);
 

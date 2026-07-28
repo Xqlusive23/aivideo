@@ -273,8 +273,8 @@ export default function LandingPage() {
           ))}
         </div>
         <p className="itc-landing-fine-print">
-          Live time shown on each pack reflects actual session billing. Credit packs are purchased as
-          one-time top-ups in the studio; unused credits stay on your account.
+          Live minutes shown on each pack are approximate. Credit packs are purchased as one-time top-ups
+          in the studio; unused credits stay on your account.
         </p>
       </section>
 
