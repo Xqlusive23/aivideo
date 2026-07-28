@@ -5,14 +5,16 @@ export const NAIRA_PER_USD = 1600;
 export const NAIRA_PER_CREDIT = (14 * NAIRA_PER_USD) / 1000;
 export const DISPLAY_NAIRA_PER_USD = Number(import.meta.env?.VITE_NAIRA_PER_USD) || NAIRA_PER_USD;
 export const BASE_CREDITS_PER_SECOND = 2;
-// Ledger billing anchor: 1000 credits ≈ 3 min live (server-side truth).
-export const LIVE_MINUTES_PER_1000_CREDITS = 3;
+// Approximate Decart API cost — ledger bills above this so your balance is never drained first.
+export const DECART_CREDITS_PER_SECOND = BASE_CREDITS_PER_SECOND;
 // Credit-pack tiles: 500 credits ≈ 4 min live, 1000 ≈ 8 min, etc. (marketing only).
 export const DISPLAY_LIVE_MINUTES_PER_500_CREDITS = 4;
-export const EFFECTIVE_CREDITS_PER_SECOND = 1000 / (LIVE_MINUTES_PER_1000_CREDITS * 60);
+// Backend uses the same linear formula but shorter live time per pack (500 ≈ 3 min, 1000 ≈ 6 min).
+export const LIVE_MINUTES_PER_500_CREDITS = 3;
 export const DISPLAY_LIVE_CREDITS_PER_SECOND = 500 / (DISPLAY_LIVE_MINUTES_PER_500_CREDITS * 60);
-export const BILLING_MULTIPLIER = EFFECTIVE_CREDITS_PER_SECOND / BASE_CREDITS_PER_SECOND;
-// UI rate label only — ledger bills at EFFECTIVE_CREDITS_PER_SECOND.
+export const EFFECTIVE_CREDITS_PER_SECOND = 500 / (LIVE_MINUTES_PER_500_CREDITS * 60);
+export const BILLING_MULTIPLIER = EFFECTIVE_CREDITS_PER_SECOND / DECART_CREDITS_PER_SECOND;
+// UI rate label — ledger bills at EFFECTIVE_CREDITS_PER_SECOND (~35% above Decart).
 export const DISPLAY_CREDITS_PER_SECOND = BASE_CREDITS_PER_SECOND;
 export const LOW_CREDIT_THRESHOLD = 40;
 export const HEARTBEAT_INTERVAL_MS = 1000;
@@ -55,7 +57,7 @@ export function formatCredits(credits) {
   return credits.toLocaleString();
 }
 
-/** Live time shown on credit packs (optimistic; actual billing uses EFFECTIVE_CREDITS_PER_SECOND). */
+/** Live time shown on credit packs (marketing; actual billing uses EFFECTIVE_CREDITS_PER_SECOND). */
 export function formatLiveTimeFromCredits(credits) {
   const totalSeconds = credits / DISPLAY_LIVE_CREDITS_PER_SECOND;
   const hours = Math.floor(totalSeconds / 3600);

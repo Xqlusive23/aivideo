@@ -37,11 +37,12 @@ const ALLOWED_ORIGINS = new Set(
   ].filter(Boolean)
 );
 const CREDITS_PER_SECOND = Number(process.env.CREDITS_PER_SECOND || 2);
-// Billing anchor: 1000 credits ≈ 3 min live (keep in sync with src/pricing.js LIVE_MINUTES_PER_1000_CREDITS).
-const LIVE_MINUTES_PER_1000_CREDITS = Number(process.env.LIVE_MINUTES_PER_1000_CREDITS || 3);
+// Decart API cost per second — keep in sync with src/pricing.js DECART_CREDITS_PER_SECOND.
+// Backend live-time anchor: 500 credits ≈ 3 min (same linear scale as display, shorter duration).
+const LIVE_MINUTES_PER_500_CREDITS = Number(process.env.LIVE_MINUTES_PER_500_CREDITS || 3);
 const BILLING_MULTIPLIER = Number(
   process.env.BILLING_MULTIPLIER ||
-    1000 / (LIVE_MINUTES_PER_1000_CREDITS * 60) / CREDITS_PER_SECOND
+    500 / (LIVE_MINUTES_PER_500_CREDITS * 60) / CREDITS_PER_SECOND
 );
 const MAX_HEARTBEAT_GAP_SECONDS = 10; // caps deduction if a heartbeat is late/missed
 const PRESENCE_ACTIVE_SECONDS = 90; // admin "online now" window
