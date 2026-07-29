@@ -170,6 +170,43 @@ function drawVideoFrame(ctx, video, destWidth, destHeight, fit = "cover") {
   ctx.drawImage(video, sx, sy, sw, sh, 0, 0, destWidth, destHeight);
 }
 
+const REFERENCE_UPLOAD_MAX_EDGE = 1280;
+const DECART_PREWARM_TTL_MS = 4 * 60 * 1000;
+
+async function prepareReferenceImageForUpload(file) {
+  if (!file || typeof document === "undefined") return file;
+  if (!String(file.type || "").startsWith("image/")) return file;
+  if (file.size < 450_000 && /jpe?g$/i.test(file.type)) return file;
+
+  const objectUrl = URL.createObjectURL(file);
+  try {
+    const image = await new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error("Could not decode reference image"));
+      img.src = objectUrl;
+    });
+    const maxEdge = Math.max(image.naturalWidth || 0, image.naturalHeight || 0);
+    const scale = maxEdge > REFERENCE_UPLOAD_MAX_EDGE ? REFERENCE_UPLOAD_MAX_EDGE / maxEdge : 1;
+    const width = Math.max(1, Math.round((image.naturalWidth || 1) * scale));
+    const height = Math.max(1, Math.round((image.naturalHeight || 1) * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return file;
+    ctx.drawImage(image, 0, 0, width, height);
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.88));
+    if (!blob) return file;
+    const baseName = file.name.replace(/\.[^.]+$/, "") || "reference";
+    return new File([blob], `${baseName}.jpg`, { type: "image/jpeg" });
+  } catch {
+    return file;
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
 const DEFAULT_TRANSFORMATION_PROMPT =
   "Substitute the character in the video with the person in the reference image, matching their full appearance exactly as shown in the reference — including clothing, outfit, hat, hair, skin tone, and body shape.";
 const CHARACTER_WITH_REF_PROMPT = DEFAULT_TRANSFORMATION_PROMPT;
@@ -180,9 +217,11 @@ const BACKGROUND_INTENT_PATTERN =
 const DEFAULT_BACKGROUND_PROMPT =
   "Change the background to a bright modern office with desk, chair, window light, soft afternoon shadows, coworkers passing in the background, and sunlight on the floor.";
 const REFERENCE_BACKGROUND_PROMPT =
-  "Change the background to fully recreate the complete environment shown in the reference image — all walls, floors, ceilings, furniture, props, colors, materials, depth, shadows, and lighting with sharp photorealistic detail filling every pixel edge to edge behind the person; completely remove and replace the entire original webcam room with zero visible bleed-through, ghosting, edges, or leftover walls, furniture, or lighting from the live camera feed.";
+  "Change the background to closely match the environment, setting, and mood shown in the reference image — recreate the same type of room, location, layout, colors, materials, lighting direction, and depth cues with photorealistic detail filling every pixel edge to edge behind the person; when exact pixels are unavailable, infer and synthesize the closest plausible match to the reference scene rather than leaving the original webcam room visible; completely remove and replace the entire original webcam room with zero visible bleed-through, ghosting, edges, or leftover walls, furniture, or lighting from the live camera feed.";
 const REFERENCE_BACKGROUND_ENHANCE_SUFFIX =
-  " Enhance environmental clarity with rich textures, crisp depth, accurate colors, fine surface detail, and consistent ambient lighting matching the reference scene.";
+  " Maximize environmental fidelity with rich textures, crisp depth, accurate colors, fine surface detail, consistent ambient lighting, and stable background geometry that stays aligned with the reference scene.";
+const TEMPORAL_STABILITY_CLAUSE =
+  " Keep the subject and background spatially stable frame-to-frame when the input camera is still — no sway, drift, idle motion, breathing wobble on static poses, or background shimmer.";
 const PROMPT_PRESETS = [
   {
     label: "Office",
@@ -234,7 +273,7 @@ function composeBackgroundOnlyPrompt(userText) {
 }
 
 function composeReferenceBackgroundPrompt() {
-  return `${REFERENCE_BACKGROUND_PROMPT}${REFERENCE_BACKGROUND_ENHANCE_SUFFIX}`;
+  return `${REFERENCE_BACKGROUND_PROMPT}${REFERENCE_BACKGROUND_ENHANCE_SUFFIX}${TEMPORAL_STABILITY_CLAUSE}`;
 }
 
 function composeLayeredPrompt(userText, hasReferenceImage = true, options = {}) {
@@ -245,7 +284,7 @@ function composeLayeredPrompt(userText, hasReferenceImage = true, options = {}) 
     ? composeReferenceBackgroundPrompt(options)
     : composeBackgroundOnlyPrompt(trimmed || DEFAULT_BACKGROUND_PROMPT);
   // Decart layered edits: one sentence per edit type (see lucy-2.5-prompting guide).
-  return `${backgroundClause} ${CHARACTER_WITH_REF_PROMPT}`;
+  return `${backgroundClause} ${CHARACTER_WITH_REF_PROMPT}${useReferenceBackground ? "" : TEMPORAL_STABILITY_CLAUSE}`;
 }
 
 function composeTransformationPrompt(userText, hasReferenceImage = true, options = {}) {
@@ -265,7 +304,9 @@ function composeTransformationPrompt(userText, hasReferenceImage = true, options
   }
 
   if (!trimmed || trimmed === DEFAULT_TRANSFORMATION_PROMPT) {
-    return wantsBackground ? composeLayeredPrompt(trimmed || DEFAULT_BACKGROUND_PROMPT, true, options) : CHARACTER_WITH_REF_PROMPT;
+    return wantsBackground
+      ? composeLayeredPrompt(trimmed || DEFAULT_BACKGROUND_PROMPT, true, options)
+      : `${CHARACTER_WITH_REF_PROMPT}${TEMPORAL_STABILITY_CLAUSE}`;
   }
 
   if (wantsBackground) {
@@ -345,6 +386,13 @@ export default function App() {
   });
   const [cameraActive, setCameraActive] = useState(false);
   const [mirrorLocalPreview, setMirrorLocalPreview] = useState(false);
+  const [mobileMicEnabled, setMobileMicEnabled] = useState(() => {
+    try {
+      return window.localStorage.getItem("inspiretech_mobile_mic") !== "0";
+    } catch {
+      return true;
+    }
+  });
   const selectedVideoDeviceIdRef = useRef("");
   const selectedVideoDeviceLabelRef = useRef("");
   const selectedAudioDeviceIdRef = useRef("");
@@ -505,6 +553,8 @@ export default function App() {
       : false
   );
   const nativeVideoFullscreenRef = useRef(false);
+  const decartPrewarmRef = useRef({ apiKey: null, fetchedAt: 0, uploadPromise: null });
+  const preparedReferenceFileRef = useRef(null);
 
   const setRunningState = (value) => {
     isRunningRef.current = value;
@@ -540,10 +590,12 @@ export default function App() {
 
   const buildVideoConstraints = (deviceId, { strictDevice = false, relaxed = false } = {}) => {
     const model = getRealtimeModel();
+    const targetWidth = relaxed ? 640 : model.width;
+    const targetHeight = relaxed ? 480 : model.height;
     const constraints = {
-      frameRate: relaxed ? { ideal: 24, max: 30 } : model.fps,
-      width: { ideal: relaxed ? 640 : model.width },
-      height: { ideal: relaxed ? 480 : model.height },
+      frameRate: relaxed ? { ideal: 24, max: 30 } : { ideal: 30, max: 30 },
+      width: relaxed ? { ideal: targetWidth } : { ideal: targetWidth, max: targetWidth },
+      height: relaxed ? { ideal: targetHeight } : { ideal: targetHeight, max: targetHeight },
     };
     if ((isMobileLayout || isMobileUserAgent()) && !deviceId) {
       constraints.facingMode = "user";
@@ -552,6 +604,18 @@ export default function App() {
       constraints.deviceId = strictDevice ? { exact: deviceId } : { ideal: deviceId };
     }
     return constraints;
+  };
+
+  const applyStableVideoTrackSettings = (track) => {
+    if (!track?.applyConstraints) return;
+    const model = getRealtimeModel();
+    track
+      .applyConstraints({
+        frameRate: { ideal: 30, max: 30 },
+        width: { ideal: model.width, max: model.width },
+        height: { ideal: model.height, max: model.height },
+      })
+      .catch(() => {});
   };
 
   const buildAudioConstraints = (deviceId) => {
@@ -607,17 +671,18 @@ export default function App() {
   const refreshVideoDevices = refreshMediaDevices;
 
   const openCameraStream = async (deviceId) => {
-    const audio = buildAudioConstraints(selectedAudioDeviceIdRef.current);
+    const includeMicrophone = !isMobileLayout || mobileMicEnabled;
+    const audio = includeMicrophone ? buildAudioConstraints(selectedAudioDeviceIdRef.current) : false;
     if (!deviceId) {
       return navigator.mediaDevices.getUserMedia({
-        audio,
+        ...(includeMicrophone ? { audio } : {}),
         video: buildVideoConstraints(""),
       });
     }
 
     try {
       return await navigator.mediaDevices.getUserMedia({
-        audio,
+        ...(includeMicrophone ? { audio } : {}),
         video: buildVideoConstraints(deviceId, { strictDevice: true }),
       });
     } catch (err) {
@@ -626,7 +691,7 @@ export default function App() {
       }
       // Same device, looser resolution — still keep deviceId exact so we don't fall back to DroidCam.
       return navigator.mediaDevices.getUserMedia({
-        audio,
+        ...(includeMicrophone ? { audio } : {}),
         video: buildVideoConstraints(deviceId, { strictDevice: true, relaxed: true }),
       });
     }
@@ -643,6 +708,12 @@ export default function App() {
   useEffect(() => {
     if (!selectedFile) setUseReferenceBackground(false);
   }, [selectedFile]);
+
+  useEffect(() => {
+    if (!accessToken || !selectedFile || !cameraActive || ledgerUnreachable) return;
+    void prewarmReferenceImageUpload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accessToken, selectedFile, cameraActive, ledgerUnreachable, useReferenceBackground]);
 
   const stopLocalVideoStream = () => {
     if (localStreamRef.current) {
@@ -2749,6 +2820,7 @@ export default function App() {
 
       const stream = await openCameraStream(requestedId);
       const videoTrack = stream.getVideoTracks()[0];
+      applyStableVideoTrackSettings(videoTrack);
       const activeDeviceId = videoTrack?.getSettings?.()?.deviceId;
       const activeLabel = videoTrack?.label;
       const requestedLabel =
@@ -2818,14 +2890,30 @@ export default function App() {
     }
   };
 
+  const handleMobileMicEnabledChange = async (enabled) => {
+    setMobileMicEnabled(enabled);
+    try {
+      window.localStorage.setItem("inspiretech_mobile_mic", enabled ? "1" : "0");
+    } catch {
+      // ignore storage failures
+    }
+    if (isRunning) return;
+    if (cameraActive) {
+      await startCamera(selectedVideoDeviceIdRef.current);
+    }
+  };
+
   const handleFileChange = (file) => {
     if (!file) return;
     referenceImageRefId.current = null;
     referenceImageSourceRef.current = file;
+    preparedReferenceFileRef.current = null;
+    decartPrewarmRef.current.uploadPromise = null;
     setSelectedFile(file);
     const previewUrl = URL.createObjectURL(file);
     setImagePreview(previewUrl);
     setStatus("PAYLOAD READY FOR TRANSMISSION");
+    void prewarmReferenceImageUpload();
   };
 
   const getPromptComposeOptions = () => ({
@@ -2848,20 +2936,66 @@ export default function App() {
     return shouldEnhanceDecartPrompt(sourcePrompt, enhanceMask);
   };
 
+  const ensureDecartApiKey = async () => {
+    const now = Date.now();
+    const cached = decartPrewarmRef.current;
+    if (cached.apiKey && now - cached.fetchedAt < DECART_PREWARM_TTL_MS) {
+      return cached.apiKey;
+    }
+    const auth = await fetchDecartRealtimeCredentials(getModelId());
+    if (!auth?.apiKey) return null;
+    decartPrewarmRef.current = { ...decartPrewarmRef.current, apiKey: auth.apiKey, fetchedAt: now };
+    return auth.apiKey;
+  };
+
+  const getReferenceUploadFile = async () => {
+    if (!selectedFile) return null;
+    if (
+      preparedReferenceFileRef.current &&
+      preparedReferenceFileRef.current.source === selectedFile
+    ) {
+      return preparedReferenceFileRef.current.file;
+    }
+    const prepared = await prepareReferenceImageForUpload(selectedFile);
+    preparedReferenceFileRef.current = { source: selectedFile, file: prepared };
+    referenceImageSourceRef.current = prepared;
+    return prepared;
+  };
+
+  const prewarmReferenceImageUpload = async () => {
+    if (!selectedFile || !accessToken || ledgerUnreachable || referenceImageRefId.current) return;
+    if (decartPrewarmRef.current.uploadPromise) return decartPrewarmRef.current.uploadPromise;
+    const run = async () => {
+      const apiKey = await ensureDecartApiKey();
+      if (!apiKey || !selectedFile) return;
+      const client = createDecartClient({ apiKey });
+      await resolveReferenceImage(client);
+    };
+    decartPrewarmRef.current.uploadPromise = run();
+    try {
+      await decartPrewarmRef.current.uploadPromise;
+    } catch (err) {
+      console.warn("[InspireTech] Reference prewarm failed:", err);
+    } finally {
+      decartPrewarmRef.current.uploadPromise = null;
+    }
+  };
+
   const resolveReferenceImage = async (client) => {
     if (!selectedFile) return null;
-    if (referenceImageSourceRef.current !== selectedFile) {
+    const uploadFile = await getReferenceUploadFile();
+    if (referenceImageSourceRef.current !== uploadFile) {
       referenceImageRefId.current = null;
-      referenceImageSourceRef.current = selectedFile;
+      referenceImageSourceRef.current = uploadFile;
     }
     if (referenceImageRefId.current) return referenceImageRefId.current;
     try {
-      const uploaded = await client.files.upload(selectedFile, { ttlSeconds: "persistent" });
+      const uploaded = await client.files.upload(uploadFile, { ttlSeconds: "persistent" });
       referenceImageRefId.current = uploaded.id;
       return uploaded.id;
     } catch (err) {
       console.warn("[InspireTech] Reference image upload failed — using inline bytes", err);
-      return selectedFile;
+      return uploadFile;
     }
   };
 
@@ -3095,38 +3229,46 @@ export default function App() {
     }
 
     // Pre-check balance only — billing session opens when Decart is actually live.
-    try {
-      const res = await fetch(`${LEDGER_URL}/api/access-check`, { headers: authHeaders() });
-      const data = await res.json();
-      if (res.status === 401) {
-        handleTokenRejected("Your access token was rejected. Please re-enter it.");
-        startInProgressRef.current = false;
-        return;
-      }
-      if (res.status === 403) {
-        handleTokenRejected(
-          await readRejectedMessage(
-            res,
-            "Your access has been revoked. If you think this is a mistake, message us on WhatsApp below."
-          )
-        );
-        startInProgressRef.current = false;
-        return;
-      }
-      if (!res.ok) throw new Error(`Access check failed with ${res.status}`);
-      syncTierAccessFromLedger(data);
-      if (data.credits <= 0) {
+    const needsAccessCheck = !creditsLoaded || credits <= 0 || !tierAccessLoaded;
+    if (needsAccessCheck) {
+      try {
+        const res = await fetch(`${LEDGER_URL}/api/access-check`, { headers: authHeaders() });
+        const data = await res.json();
+        if (res.status === 401) {
+          handleTokenRejected("Your access token was rejected. Please re-enter it.");
+          startInProgressRef.current = false;
+          return;
+        }
+        if (res.status === 403) {
+          handleTokenRejected(
+            await readRejectedMessage(
+              res,
+              "Your access has been revoked. If you think this is a mistake, message us on WhatsApp below."
+            )
+          );
+          startInProgressRef.current = false;
+          return;
+        }
+        if (!res.ok) throw new Error(`Access check failed with ${res.status}`);
+        syncTierAccessFromLedger(data);
+        if (data.credits <= 0) {
+          setCredits(data.credits);
+          setStatus("OUT OF CREDITS — ADD MORE TO CONTINUE");
+          setShowAddCredits(true);
+          startInProgressRef.current = false;
+          return;
+        }
         setCredits(data.credits);
-        setStatus("OUT OF CREDITS — ADD MORE TO CONTINUE");
-        setShowAddCredits(true);
+      } catch (err) {
+        console.error("Failed to verify credits before start:", err);
+        setStatus("LEDGER BACKEND UNREACHABLE — CHECK IT'S RUNNING");
+        setLedgerUnreachable(true);
         startInProgressRef.current = false;
         return;
       }
-      setCredits(data.credits);
-    } catch (err) {
-      console.error("Failed to verify credits before start:", err);
-      setStatus("LEDGER BACKEND UNREACHABLE — CHECK IT'S RUNNING");
-      setLedgerUnreachable(true);
+    } else if (credits <= 0) {
+      setStatus("OUT OF CREDITS — ADD MORE TO CONTINUE");
+      setShowAddCredits(true);
       startInProgressRef.current = false;
       return;
     }
@@ -3138,54 +3280,55 @@ export default function App() {
     startInProgressRef.current = false;
     setStatus("HANDSHAKING WITH DECART WEBRTC CLUSTER...");
 
-    // If the voice changer is on, swap the raw mic track for a synthetic one
-    // carrying the converted voice — Decart only ever sees/forwards this,
-    // never the original audio. Which pipeline actually runs depends on
-    // voiceEngine — the two are mutually exclusive per session.
-    let streamForDecart = localStreamRef.current;
-    let convertedAudioStream = null;
-    const voiceAllowed = voiceChangerAccess && voiceChangerEnabled;
-    if (voiceAllowed) {
-      const hasValidVoice = voiceEngine === "realtime" ? !!rtcSelectedVoiceId : !!selectedVoiceId;
-      if (hasValidVoice) {
-        convertedAudioStream =
-          voiceEngine === "realtime"
-            ? await startRealtimeVoiceCapture(localStreamRef.current)
-            : await startVoiceChangerCapture(localStreamRef.current);
-        if (convertedAudioStream) {
-          const videoTrack = localStreamRef.current.getVideoTracks()[0];
-          const convertedAudioTrack = convertedAudioStream.getAudioTracks()[0];
-          streamForDecart = new MediaStream([videoTrack, convertedAudioTrack].filter(Boolean));
-        } else {
-          setStatus("VOICE CHANGER UNAVAILABLE — CONTINUING WITH ORIGINAL AUDIO");
-        }
-      }
-    }
-
-    const companionAudioStream = convertedAudioStream || localStreamRef.current;
-    if (isCompanionApp() && routeAudioToVirtualCable) {
-      await startCompanionAudioExport(companionAudioStream);
-    }
-
+    let billingPromise = null;
     try {
-      const modelId = getModelId();
-      const decartAuth = await fetchDecartRealtimeCredentials(modelId);
-      if (!decartAuth?.apiKey) {
+      const apiKey = await ensureDecartApiKey();
+      if (!apiKey) {
         setRunningState(false);
         return;
       }
 
-      const client = createDecartClient({ apiKey: decartAuth.apiKey });
+      const client = createDecartClient({ apiKey });
       const realtimeModel = getRealtimeModel();
       const sourcePrompt = getPromptText();
       const composeOptions = getPromptComposeOptions();
       const wantsScene = needsSceneBackground(sourcePrompt);
-      // Decart: one atomic initialState (prompt + image together) — avoid follow-up set() spam on connect.
       const connectPrompt = wantsScene
         ? composeLayeredPrompt(sourcePrompt, true, composeOptions)
         : composeTransformationPrompt(sourcePrompt, Boolean(selectedFile), composeOptions);
       const connectEnhance = getDecartEnhance(sourcePrompt);
-      const referenceImage = selectedFile ? await resolveReferenceImage(client) : null;
+
+      const voiceAllowedNow = voiceChangerAccess && voiceChangerEnabled;
+      const hasValidVoiceNow =
+        voiceAllowedNow &&
+        (voiceEngine === "realtime" ? !!rtcSelectedVoiceId : !!selectedVoiceId);
+      const referenceImagePromise = selectedFile ? resolveReferenceImage(client) : Promise.resolve(null);
+      const voicePromise =
+        hasValidVoiceNow && voiceEngine === "realtime"
+          ? startRealtimeVoiceCapture(localStreamRef.current)
+          : hasValidVoiceNow
+          ? startVoiceChangerCapture(localStreamRef.current)
+          : Promise.resolve(null);
+
+      const [referenceImage, convertedAudioStream] = await Promise.all([
+        referenceImagePromise,
+        voicePromise,
+      ]);
+
+      let streamForDecartFinal = localStreamRef.current;
+      if (convertedAudioStream) {
+        const videoTrack = localStreamRef.current.getVideoTracks()[0];
+        const convertedAudioTrack = convertedAudioStream.getAudioTracks()[0];
+        streamForDecartFinal = new MediaStream([videoTrack, convertedAudioTrack].filter(Boolean));
+      } else if (hasValidVoiceNow) {
+        setStatus("VOICE CHANGER UNAVAILABLE — CONTINUING WITH ORIGINAL AUDIO");
+      }
+
+      const companionAudioStream = convertedAudioStream || localStreamRef.current;
+      if (isCompanionApp() && routeAudioToVirtualCable) {
+        await startCompanionAudioExport(companionAudioStream);
+      }
+
       activeScenePromptRef.current = sourcePrompt;
       activeSceneUseRefBackgroundRef.current = composeOptions.useReferenceBackground;
       decartSetGuardRef.current = { inFlight: false, lastKey: "", lastAt: 0, reconnectAt: 0 };
@@ -3203,9 +3346,10 @@ export default function App() {
           : "single set",
       });
 
-      const session = await client.realtime.connect(streamForDecart, {
+      billingPromise = beginBillingSession();
+      const session = await client.realtime.connect(streamForDecartFinal, {
         model: realtimeModel,
-        mirror: resolveDecartMirrorMode(streamForDecart),
+        mirror: resolveDecartMirrorMode(streamForDecartFinal),
         resolution: "720p",
         onRemoteStream: (remoteStream) => {
           const video = outputVideoRef.current;
@@ -3232,7 +3376,7 @@ export default function App() {
       wireDecartSession(session);
 
       realtimeClientRef.current = session;
-      const billingOk = await beginBillingSession();
+      const billingOk = await billingPromise;
       if (!billingOk) {
         try {
           session.disconnect();
@@ -3253,6 +3397,12 @@ export default function App() {
       }
     } catch (connectErr) {
       console.error(connectErr);
+      if (billingPromise) {
+        await billingPromise.catch(() => false);
+        const sid = billingSessionIdRef.current;
+        billingSessionIdRef.current = null;
+        if (sid) void endBillingSession(sid);
+      }
       setStatus(`HANDSHAKE REJECTED: ${connectErr.message}`);
       setRunningState(false);
       stopActiveVoicePipeline();
@@ -3679,6 +3829,19 @@ export default function App() {
                   >
                     {cameraActive ? "Camera on" : "Turn on camera"}
                   </button>
+                  <label className="itc-mobile-mic-toggle">
+                    <input
+                      type="checkbox"
+                      checked={mobileMicEnabled}
+                      onChange={(e) => void handleMobileMicEnabledChange(e.target.checked)}
+                      disabled={isRunning}
+                      className="itc-checkbox"
+                    />
+                    <span>Use microphone</span>
+                  </label>
+                  {!mobileMicEnabled && (
+                    <p className="itc-mobile-setup-hint">Mic off — video-only live stream.</p>
+                  )}
                   {!cameraActive && (
                     <p className="itc-mobile-setup-hint">Allow camera access when your browser asks.</p>
                   )}

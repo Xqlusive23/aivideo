@@ -1850,6 +1850,25 @@ body {
   width: 100%;
 }
 
+.itc-mobile-mic-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(129, 140, 248, 0.22);
+  background: rgba(17, 24, 39, 0.45);
+  font-size: 0.8125rem;
+  color: var(--itc-text-soft);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.itc-mobile-mic-toggle input {
+  flex-shrink: 0;
+}
+
 .itc-mobile-setup-background {
   width: 100%;
 }
