@@ -84,8 +84,8 @@ const MY_DECART_KEY = (import.meta.env?.VITE_DECART_API_KEY || "").trim();
 // context conversion; longer chunks = smoother conversion but more delay.
 const VOICE_CHUNK_MS = 500;
 const MOBILE_LAYOUT_MAX_WIDTH = 900;
-const VIRTUAL_CAM_WIDTH = 1280;
-const VIRTUAL_CAM_HEIGHT = 720;
+const VIRTUAL_CAM_WIDTH = 1920;
+const VIRTUAL_CAM_HEIGHT = 1080;
 const COMPANION_TOOLBAR_SECTIONS = [
   { id: "studio", label: "Studio", icon: "🎬" },
   { id: "credits", label: "Credits", icon: "💳" },
@@ -172,6 +172,7 @@ function drawVideoFrame(ctx, video, destWidth, destHeight, fit = "cover") {
 
 const REFERENCE_UPLOAD_MAX_EDGE = 1280;
 const DECART_PREWARM_TTL_MS = 4 * 60 * 1000;
+const DECART_OUTPUT_RESOLUTION = "1080p";
 
 async function prepareReferenceImageForUpload(file) {
   if (!file || typeof document === "undefined") return file;
@@ -590,10 +591,10 @@ export default function App() {
 
   const buildVideoConstraints = (deviceId, { strictDevice = false, relaxed = false } = {}) => {
     const model = getRealtimeModel();
-    const targetWidth = relaxed ? 640 : model.width;
-    const targetHeight = relaxed ? 480 : model.height;
+    const targetWidth = model.width;
+    const targetHeight = model.height;
     const constraints = {
-      frameRate: relaxed ? { ideal: 24, max: 30 } : { ideal: 30, max: 30 },
+      frameRate: relaxed ? { ideal: 30 } : { ideal: 30, max: 30 },
       width: relaxed ? { ideal: targetWidth } : { ideal: targetWidth, max: targetWidth },
       height: relaxed ? { ideal: targetHeight } : { ideal: targetHeight, max: targetHeight },
     };
@@ -3350,12 +3351,21 @@ export default function App() {
       const session = await client.realtime.connect(streamForDecartFinal, {
         model: realtimeModel,
         mirror: resolveDecartMirrorMode(streamForDecartFinal),
-        resolution: "720p",
+        resolution: DECART_OUTPUT_RESOLUTION,
+        preferredVideoCodec: "h264",
         onRemoteStream: (remoteStream) => {
           const video = outputVideoRef.current;
           if (!video) return;
           video.srcObject = remoteStream;
           video.muted = false;
+          const logOutputDimensions = () => {
+            if (video.videoWidth > 0) {
+              console.info(
+                `[InspireTech] Output stream ${video.videoWidth}x${video.videoHeight} (requested ${DECART_OUTPUT_RESOLUTION})`
+              );
+            }
+          };
+          video.addEventListener("loadedmetadata", logOutputDimensions, { once: true });
           void video.play().catch(() => {});
           if (shouldUseMobileTheater()) {
             requestAnimationFrame(() => {
@@ -4313,7 +4323,7 @@ export default function App() {
             <div style={styles.canvasTitleGroup} className="itc-canvas-title-group">
               <h2 className="itc-canvas-title">{isMobileWebStudio ? "Live output" : "Output monitor"}</h2>
               {!isMobileWebStudio && (
-                <span className="itc-canvas-subtitle" style={styles.canvasSubtitle}>1280×720 Lucy 2.5 output</span>
+                <span className="itc-canvas-subtitle" style={styles.canvasSubtitle}>1080p Lucy 2.5 output</span>
               )}
             </div>
             <div style={styles.actionRow} className="itc-action-row itc-desktop-action-row">
@@ -4557,7 +4567,7 @@ const styles = {
   timerBadgeRow: { display: "flex", gap: "8px", flexWrap: "wrap", justifyContent: "center" },
   timerBadgeOutside: { backgroundColor: c.surface, border: `1px solid ${c.border}`, borderRadius: r.sm, padding: "4px 12px", fontSize: "11px", fontWeight: "700", color: c.primary, letterSpacing: "0.08em" },
   fixedOutputContainer: { backgroundColor: "#000", borderRadius: r.md, border: `1px solid ${c.border}`, position: "relative", overflow: "hidden", boxShadow: `0 24px 48px -20px rgba(0,0,0,0.8), 0 0 0 1px rgba(129,140,248,0.08)` },
-  outputVideo: { width: "100%", height: "100%", objectFit: "cover" },
+  outputVideo: { width: "100%", height: "100%", objectFit: "contain", backgroundColor: "#000" },
   fittedImage: { width: "100%", height: "100%", objectFit: "contain" },
   canvasOverlay: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", backgroundColor: "rgba(11, 16, 32, 0.94)" },
   overlayPingWrap: { position: "relative", width: "24px", height: "24px", marginBottom: "16px", display: "flex", alignItems: "center", justifyContent: "center" },

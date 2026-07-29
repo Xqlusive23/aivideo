@@ -1,8 +1,8 @@
 const { spawn } = require("child_process");
 const { VIRTUAL_CAMERA_NAME, getFeederCommand } = require("./paths");
 
-const DEFAULT_WIDTH = 1280;
-const DEFAULT_HEIGHT = 720;
+const DEFAULT_WIDTH = 1920;
+const DEFAULT_HEIGHT = 1080;
 const FRAME_FPS = 20;
 
 let pythonFeeder = null;

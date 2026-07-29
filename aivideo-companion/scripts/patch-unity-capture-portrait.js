@@ -11,7 +11,8 @@ const FILTER_CPP = path.join(
   "UnityCaptureFilter.cpp"
 );
 
-const PORTRAIT_MEDIA = `\t{  720, 1280 }, //9:16 portrait
+const PORTRAIT_MEDIA = `\t{ 1920, 1080 }, //16:9 HD
+\t{  720, 1280 }, //9:16 portrait
 \t{ 1080, 1920 }, //9:16 portrait HD`;
 
 function patchUnityCapturePortrait() {
@@ -21,6 +22,11 @@ function patchUnityCapturePortrait() {
   }
 
   let source = fs.readFileSync(FILTER_CPP, "utf8");
+  if (source.includes("{ 1920, 1080 }, //16:9 HD")) {
+    console.log("[patch-unity-capture] Portrait/1080p resolutions already patched.");
+    return true;
+  }
+
   if (source.includes("{  720, 1280 }, //9:16 portrait")) {
     console.log("[patch-unity-capture] Portrait resolutions already patched.");
     return true;
@@ -34,7 +40,7 @@ function patchUnityCapturePortrait() {
 
   source = source.replace(marker, `${PORTRAIT_MEDIA}\n${marker}`);
   fs.writeFileSync(FILTER_CPP, source, "utf8");
-  console.log("[patch-unity-capture] Added 720×1280 and 1080×1920 to Unity Capture media list.");
+  console.log("[patch-unity-capture] Added 1920×1080, 720×1280 and 1080×1920 to Unity Capture media list.");
   console.log("[patch-unity-capture] Rebuild UnityCaptureFilter64.dll with Visual Studio to ship the driver update.");
   return true;
 }
