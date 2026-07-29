@@ -470,6 +470,7 @@ export default function App() {
   );
   const isMobileWebStudio = isMobileLayout && !companionToolbar;
   const pipSupported = typeof document !== "undefined" && document.pictureInPictureEnabled;
+  const outputTheaterSupported = typeof document !== "undefined";
 
   const localVideoRef = useRef(null);
   const outputVideoRef = useRef(null);
@@ -1086,14 +1087,14 @@ export default function App() {
     scheduleTheaterControlsHide();
   };
 
-  const enterMobileTheater = () => {
+  const enterOutputTheater = async ({ silent = false } = {}) => {
     if (!isRunning) {
-      setStatus("START TRANSFORMATION FIRST — THEN TAP FULL SCREEN");
+      if (!silent) setStatus("START TRANSFORMATION FIRST — THEN TAP FULL SCREEN");
       return;
     }
     const video = outputVideoRef.current;
     if (!video?.srcObject) {
-      setStatus("WAITING FOR VIDEO — TRY AGAIN IN A MOMENT");
+      if (!silent) setStatus("WAITING FOR VIDEO — TRY AGAIN IN A MOMENT");
       return;
     }
     setMobileOutputFocus(true);
@@ -1107,7 +1108,7 @@ export default function App() {
     }
   };
 
-  const exitMobileTheater = async () => {
+  const exitOutputTheater = async () => {
     setMobileOutputFocus(false);
     setIsPoppedOut(false);
     clearTheaterControlsTimer();
@@ -1117,27 +1118,35 @@ export default function App() {
       document.body.style.overflow = "";
       if (document.pictureInPictureElement) await document.exitPictureInPicture();
       if (document.fullscreenElement) await document.exitFullscreen();
-      if (outputVideoRef.current?.webkitDisplayingFullscreen) {
-        outputVideoRef.current.webkitExitFullscreen?.();
+      const video = outputVideoRef.current;
+      if (video?.webkitDisplayingFullscreen) {
+        video.webkitExitFullscreen?.();
       }
     } catch {
       // ignore
     }
   };
 
-  // Desktop PiP / mobile theater exit handler.
+  const toggleOutputTheater = async () => {
+    if (mobileOutputFocus) {
+      await exitOutputTheater();
+    } else {
+      await enterOutputTheater();
+    }
+  };
+
+  // Keep alias used elsewhere in this file.
+  const exitMobileTheater = exitOutputTheater;
+
+  // Desktop PiP / fullscreen theater handler.
   const handlePopOutVideo = async () => {
     try {
-      if (isMobileLayout) {
-        if (mobileOutputFocus) {
-          await exitMobileTheater();
-        } else {
-          enterMobileTheater();
-        }
+      if (isMobileLayout || !pipSupported) {
+        await toggleOutputTheater();
         return;
       }
       if (document.pictureInPictureElement || mobileOutputFocus) {
-        await exitMobileTheater();
+        await exitOutputTheater();
       } else if (outputVideoRef.current) {
         await outputVideoRef.current.requestPictureInPicture();
       }
@@ -1149,9 +1158,49 @@ export default function App() {
 
   useEffect(() => {
     if (!isRunning && mobileOutputFocus) {
-      exitMobileTheater();
+      exitOutputTheater();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isRunning]);
+
+  // Mobile: auto edge-to-edge output when live (no manual full-screen tap).
+  useEffect(() => {
+    if (!isMobileLayout || !isRunning || mobileOutputFocus) return undefined;
+    let cancelled = false;
+    let attempts = 0;
+    const tryAutoTheater = () => {
+      if (cancelled || attempts > 120) return;
+      attempts += 1;
+      const video = outputVideoRef.current;
+      if (video?.srcObject) {
+        void enterOutputTheater({ silent: true });
+        return;
+      }
+      requestAnimationFrame(tryAutoTheater);
+    };
+    tryAutoTheater();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isMobileLayout, isRunning, mobileOutputFocus]);
+
+  useEffect(() => {
+    const video = outputVideoRef.current;
+    if (!video) return undefined;
+    const syncTheaterFromNativeVideo = () => {
+      if (!video.webkitDisplayingFullscreen) {
+        setMobileOutputFocus(false);
+        try {
+          document.documentElement.style.overflow = "";
+          document.body.style.overflow = "";
+        } catch {
+          // ignore
+        }
+      }
+    };
+    video.addEventListener("webkitendfullscreen", syncTheaterFromNativeVideo);
+    return () => video.removeEventListener("webkitendfullscreen", syncTheaterFromNativeVideo);
   }, [isRunning]);
 
   useEffect(() => () => clearTheaterControlsTimer(), []);
@@ -3160,6 +3209,9 @@ export default function App() {
       }
 
       setStatus("COMPUTE LINK ONLINE // REALTIME TRANSFORMATION TERMINAL");
+      if (isMobileLayout) {
+        void enterOutputTheater({ silent: true });
+      }
     } catch (connectErr) {
       console.error(connectErr);
       setStatus(`HANDSHAKE REJECTED: ${connectErr.message}`);
@@ -3475,7 +3527,7 @@ export default function App() {
     <>
     <div
       style={styles.appContainer}
-      className={`itc-app${isMobileLayout ? " itc-app-mobile" : ""}${isMobileWebStudio ? " itc-mobile-web" : ""}${mobileOutputFocus ? " itc-mobile-theater" : ""}${isMobileLayout && !mobileControlsOpen ? " itc-mobile-sidebar-collapsed" : ""}`}
+      className={`itc-app${isMobileLayout ? " itc-app-mobile" : ""}${isMobileWebStudio ? " itc-mobile-web" : ""}${mobileOutputFocus ? " itc-output-theater itc-mobile-theater" : ""}${isMobileLayout && !mobileControlsOpen ? " itc-mobile-sidebar-collapsed" : ""}`}
     >
       <header className={`itc-top-header${companionToolbar ? " itc-top-header-companion" : ""}`}>
         <div className="itc-header-brand">
@@ -3590,6 +3642,11 @@ export default function App() {
                   </button>
                   {!cameraActive && (
                     <p className="itc-mobile-setup-hint">Allow camera access when your browser asks.</p>
+                  )}
+                  {!isRunning && (
+                    <div className="itc-mobile-setup-background">
+                      {renderPromptDock()}
+                    </div>
                   )}
                 </div>
               </>
@@ -4075,19 +4132,23 @@ export default function App() {
                 Stop transformation
               </button>
               <button
-                style={{...styles.actionButton, ...styles.popOutButton, opacity: !pipSupported && !isMobileLayout ? 0.5 : 1}}
+                style={{...styles.actionButton, ...styles.popOutButton, opacity: !pipSupported && !isMobileLayout && !outputTheaterSupported ? 0.5 : 1}}
                 className="itc-btn itc-btn-secondary"
                 onClick={handlePopOutVideo}
-                disabled={!pipSupported && !isMobileLayout}
+                disabled={!pipSupported && !isMobileLayout && !outputTheaterSupported}
                 title={
-                  pipSupported
+                  isMobileLayout || !pipSupported
+                    ? "Expand output to full screen"
+                    : pipSupported
                     ? "Pop the output video into its own floating window — capture that window in OBS/your calling app"
-                    : isMobileLayout
-                    ? "Expand output to full screen on mobile"
-                    : "Picture-in-Picture isn't supported in this browser — try Chrome or Edge"
+                    : "Full screen output"
                 }
               >
-                {isPoppedOut || mobileOutputFocus ? "Return to app" : isMobileLayout ? "Full screen output" : "Pop out for OBS"}
+                {isPoppedOut || mobileOutputFocus
+                  ? "Return to app"
+                  : isMobileLayout || !pipSupported
+                  ? "Full screen output"
+                  : "Pop out for OBS"}
               </button>
             </div>
           </div>
@@ -4106,6 +4167,29 @@ export default function App() {
               )}
               <div style={styles.fixedOutputContainer} className={`itc-fixed-output${isRunning ? " itc-live" : ""}`}>
                 <video ref={outputVideoRef} autoPlay playsInline style={styles.outputVideo} />
+                {isRunning && outputTheaterSupported && !isMobileLayout && (
+                  <button
+                    type="button"
+                    className={`itc-output-fullscreen-toggle${mobileOutputFocus ? " is-active" : ""}${mobileOutputFocus && !theaterControlsVisible ? " itc-theater-controls-hidden" : ""}`}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      void toggleOutputTheater();
+                    }}
+                    onTouchStart={(event) => event.stopPropagation()}
+                    aria-label={mobileOutputFocus ? "Exit full screen" : "Full screen"}
+                    title={mobileOutputFocus ? "Exit full screen" : "Full screen output"}
+                  >
+                    {mobileOutputFocus ? (
+                      <span aria-hidden="true" className="itc-output-fullscreen-toggle-icon">
+                        ✕
+                      </span>
+                    ) : (
+                      <span aria-hidden="true" className="itc-output-fullscreen-toggle-icon">
+                        ⛶
+                      </span>
+                    )}
+                  </button>
+                )}
                 {!isRunning && (
                   <div style={styles.canvasOverlay}>
                     <div style={styles.overlayPingWrap}>
@@ -4133,17 +4217,17 @@ export default function App() {
         </div>
       </div>
 
-      {isMobileLayout && mobileOutputFocus && (
+      {mobileOutputFocus && (
         <>
           <div
-            className="itc-mobile-theater-tap-layer"
+            className="itc-mobile-theater-tap-layer itc-output-theater-tap-layer"
             onClick={revealTheaterControls}
             onTouchStart={revealTheaterControls}
             aria-hidden="true"
           />
           <button
             type="button"
-            className={`itc-btn itc-btn-stop itc-mobile-theater-stop${theaterControlsVisible ? "" : " itc-theater-controls-hidden"}`}
+            className={`itc-btn itc-btn-stop itc-mobile-theater-stop itc-output-theater-stop${theaterControlsVisible ? "" : " itc-theater-controls-hidden"}`}
             onClick={(event) => {
               event.stopPropagation();
               stopTransformation();
@@ -4180,16 +4264,6 @@ export default function App() {
           >
             Stop
           </button>
-          {!isMobileWebStudio && (
-            <button
-              type="button"
-              className="itc-btn itc-btn-secondary"
-              onClick={handlePopOutVideo}
-              disabled={!isRunning}
-            >
-              Full screen
-            </button>
-          )}
         </div>
       )}
     </div>

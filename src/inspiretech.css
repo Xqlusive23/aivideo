@@ -1768,6 +1768,7 @@ body {
 }
 
 .itc-fixed-output.itc-live {
+  position: relative;
   border-color: var(--itc-primary);
   animation: liveGlow 3.2s cubic-bezier(0.45, 0, 0.55, 1) infinite;
 }
@@ -1812,8 +1813,9 @@ body {
   align-items: center;
   justify-content: center;
   width: 100%;
-  min-height: 120px;
-  padding: 0;
+  min-height: 88px;
+  max-height: 200px;
+  padding: 8px;
   border: 1px dashed rgba(129, 140, 248, 0.35);
   border-radius: 12px;
   background: rgba(17, 24, 39, 0.55);
@@ -1822,9 +1824,12 @@ body {
 }
 
 .itc-mobile-ref-thumb {
-  width: 100%;
-  max-height: 180px;
-  object-fit: cover;
+  width: auto;
+  max-width: 100%;
+  height: auto;
+  max-height: 160px;
+  object-fit: contain;
+  object-position: center center;
   display: block;
 }
 
@@ -1843,6 +1848,37 @@ body {
 
 .itc-mobile-setup-btn {
   width: 100%;
+}
+
+.itc-mobile-setup-background {
+  width: 100%;
+}
+
+.itc-mobile-setup-background .itc-prompt-dock {
+  width: 100%;
+  max-width: 100%;
+  padding: 10px;
+}
+
+.itc-mobile-setup-background .itc-prompt-dock-header {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.itc-mobile-setup-background .itc-prompt-dock-toggles {
+  align-items: stretch;
+  width: 100%;
+}
+
+.itc-mobile-setup-background .itc-prompt-enhance-toggle {
+  white-space: normal;
+  line-height: 1.35;
+}
+
+.itc-mobile-setup-background .itc-prompt-ref-scene-thumb {
+  object-fit: contain;
+  background: rgba(0, 0, 0, 0.25);
 }
 
 .itc-status-ribbon-compact {
@@ -2027,6 +2063,10 @@ body {
     grid-template-areas: none !important;
   }
 
+  .itc-app-mobile.itc-mobile-web .itc-mobile-action-dock.itc-mobile-action-dock-simple.itc-mobile-action-dock-live {
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+  }
+
   .itc-app-mobile .itc-mobile-action-dock .itc-btn {
     min-height: 44px;
     padding: 10px 8px !important;
@@ -2152,6 +2192,10 @@ body {
     grid-template-areas: none !important;
   }
 
+  .itc-app-mobile.itc-mobile-web .itc-mobile-action-dock.itc-mobile-action-dock-simple.itc-mobile-action-dock-live {
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+  }
+
   .itc-app-mobile.itc-mobile-web .itc-mobile-action-dock.itc-mobile-action-dock-simple .itc-btn {
     grid-area: auto !important;
     min-height: 42px !important;
@@ -2176,10 +2220,48 @@ body {
   }
 }
 
+.itc-output-fullscreen-toggle {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 6;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(8, 6, 13, 0.78);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  backdrop-filter: blur(10px);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+  transition: opacity 0.25s ease, transform 0.25s ease, background 0.2s ease;
+}
+
+.itc-output-fullscreen-toggle:hover {
+  background: rgba(20, 16, 32, 0.92);
+}
+
+.itc-output-fullscreen-toggle-icon {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.itc-output-fullscreen-toggle.is-active {
+  background: rgba(127, 29, 29, 0.82);
+  border-color: rgba(252, 165, 165, 0.35);
+}
+
 .itc-mobile-theater-stop {
   display: none;
 }
 
+.itc-app.itc-output-theater,
 .itc-app.itc-mobile-theater {
   overflow: hidden !important;
   height: 100dvh !important;
@@ -2189,12 +2271,22 @@ body {
   inset: 0 !important;
   width: 100% !important;
   z-index: 9998;
+  overscroll-behavior: none;
+  -webkit-overflow-scrolling: touch;
 }
 
 .itc-app.itc-mobile-theater.itc-app-mobile {
   overflow: hidden !important;
 }
 
+.itc-app.itc-output-theater .itc-top-header,
+.itc-app.itc-output-theater .itc-sidebar,
+.itc-app.itc-output-theater .itc-mobile-action-dock,
+.itc-app.itc-output-theater .itc-canvas-control-bar,
+.itc-app.itc-output-theater .itc-desktop-action-row,
+.itc-app.itc-output-theater .itc-timer-badge-row,
+.itc-app.itc-output-theater .itc-canvas-overlay,
+.itc-app.itc-output-theater .itc-prompt-dock,
 .itc-app.itc-mobile-theater .itc-top-header,
 .itc-app.itc-mobile-theater .itc-sidebar,
 .itc-app.itc-mobile-theater .itc-mobile-action-dock,
@@ -2206,6 +2298,10 @@ body {
   display: none !important;
 }
 
+.itc-app.itc-output-theater .itc-main-workspace,
+.itc-app.itc-output-theater .itc-output-canvas,
+.itc-app.itc-output-theater .itc-canvas-viewport,
+.itc-app.itc-output-theater .itc-output-column,
 .itc-app.itc-mobile-theater .itc-main-workspace,
 .itc-app.itc-mobile-theater .itc-output-canvas,
 .itc-app.itc-mobile-theater .itc-canvas-viewport,
@@ -2222,6 +2318,7 @@ body {
   flex: none !important;
 }
 
+.itc-app.itc-output-theater .itc-fixed-output,
 .itc-app.itc-mobile-theater .itc-fixed-output {
   position: fixed !important;
   inset: 0 !important;
@@ -2237,6 +2334,7 @@ body {
   background: #000 !important;
 }
 
+.itc-app.itc-output-theater .itc-fixed-output video,
 .itc-app.itc-mobile-theater .itc-fixed-output video {
   width: 100% !important;
   height: 100% !important;
@@ -2248,7 +2346,10 @@ body {
   display: none;
 }
 
-.itc-app.itc-mobile-theater .itc-mobile-theater-tap-layer {
+.itc-app.itc-output-theater .itc-mobile-theater-tap-layer,
+.itc-app.itc-output-theater .itc-output-theater-tap-layer,
+.itc-app.itc-mobile-theater .itc-mobile-theater-tap-layer,
+.itc-app.itc-mobile-theater .itc-output-theater-tap-layer {
   display: block;
   position: fixed;
   inset: 0;
@@ -2257,7 +2358,25 @@ body {
   touch-action: manipulation;
 }
 
-.itc-app.itc-mobile-theater .itc-mobile-theater-stop {
+.itc-app.itc-output-theater .itc-output-fullscreen-toggle,
+.itc-app.itc-mobile-theater .itc-output-fullscreen-toggle {
+  position: fixed;
+  top: calc(12px + env(safe-area-inset-top, 0px));
+  right: calc(12px + env(safe-area-inset-right, 0px));
+  z-index: 10002;
+}
+
+.itc-app.itc-output-theater .itc-output-fullscreen-toggle.itc-theater-controls-hidden,
+.itc-app.itc-mobile-theater .itc-output-fullscreen-toggle.itc-theater-controls-hidden {
+  opacity: 0;
+  transform: translateY(-8px);
+  pointer-events: none;
+}
+
+.itc-app.itc-output-theater .itc-mobile-theater-stop,
+.itc-app.itc-output-theater .itc-output-theater-stop,
+.itc-app.itc-mobile-theater .itc-mobile-theater-stop,
+.itc-app.itc-mobile-theater .itc-output-theater-stop {
   display: flex !important;
   align-items: center;
   justify-content: center;
@@ -2278,7 +2397,18 @@ body {
   transition: opacity 0.25s ease, transform 0.25s ease;
 }
 
-.itc-app.itc-mobile-theater .itc-mobile-theater-stop.itc-theater-controls-hidden {
+.itc-app.itc-output-theater:not(.itc-app-mobile) .itc-output-theater-stop {
+  left: auto;
+  right: calc(16px + env(safe-area-inset-right, 0px));
+  bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  width: auto;
+  min-width: 180px;
+}
+
+.itc-app.itc-output-theater .itc-mobile-theater-stop.itc-theater-controls-hidden,
+.itc-app.itc-output-theater .itc-output-theater-stop.itc-theater-controls-hidden,
+.itc-app.itc-mobile-theater .itc-mobile-theater-stop.itc-theater-controls-hidden,
+.itc-app.itc-mobile-theater .itc-output-theater-stop.itc-theater-controls-hidden {
   opacity: 0;
   transform: translateY(12px);
   pointer-events: none;
