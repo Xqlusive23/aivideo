@@ -1,5 +1,15 @@
-export const LEDGER_URL =
-  import.meta.env?.VITE_LEDGER_BACKEND_URL || "http://localhost:3002";
+const PRODUCTION_LEDGER_URL = "https://aivideo-production-db98.up.railway.app";
+const LOCAL_LEDGER_URL = "http://localhost:3002";
+
+function resolveLedgerUrl() {
+  const fromEnv = String(import.meta.env?.VITE_LEDGER_BACKEND_URL || "").trim();
+  if (fromEnv.startsWith("http") && !fromEnv.includes("[SENSITIVE]")) {
+    return fromEnv.replace(/\/$/, "");
+  }
+  return import.meta.env.PROD ? PRODUCTION_LEDGER_URL : LOCAL_LEDGER_URL;
+}
+
+export const LEDGER_URL = resolveLedgerUrl();
 
 export function normalizeAccessToken(raw) {
   return String(raw || "")
