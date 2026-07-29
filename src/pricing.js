@@ -9,8 +9,8 @@ export const BASE_CREDITS_PER_SECOND = 2;
 export const DECART_CREDITS_PER_SECOND = BASE_CREDITS_PER_SECOND;
 // Credit-pack tiles: 500 credits ≈ 4 min live, 1000 ≈ 8 min, etc. (marketing only).
 export const DISPLAY_LIVE_MINUTES_PER_500_CREDITS = 4;
-// Backend anchor: 500 credits = exactly 3 min 40 sec live (220 s); other packs scale linearly.
-export const LIVE_SECONDS_PER_500_CREDITS = 3 * 60 + 40;
+// Backend anchor: 500 credits = 3 min 32 sec live (212 s); ~75 credit margin vs Decart at 2/sec.
+export const LIVE_SECONDS_PER_500_CREDITS = 212;
 export const DISPLAY_LIVE_CREDITS_PER_SECOND = 500 / (DISPLAY_LIVE_MINUTES_PER_500_CREDITS * 60);
 export const EFFECTIVE_CREDITS_PER_SECOND = 500 / LIVE_SECONDS_PER_500_CREDITS;
 export const BILLING_MULTIPLIER = EFFECTIVE_CREDITS_PER_SECOND / DECART_CREDITS_PER_SECOND;

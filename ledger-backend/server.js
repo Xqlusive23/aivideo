@@ -38,8 +38,8 @@ const ALLOWED_ORIGINS = new Set(
 );
 const CREDITS_PER_SECOND = Number(process.env.CREDITS_PER_SECOND || 2);
 // Decart API cost per second — keep in sync with src/pricing.js DECART_CREDITS_PER_SECOND.
-// 500 credits = exactly 3 min 40 sec (220 s); other packs scale linearly.
-const LIVE_SECONDS_PER_500_CREDITS = Number(process.env.LIVE_SECONDS_PER_500_CREDITS || 220);
+// 500 credits = 3 min 32 sec (212 s); ~75 credit margin vs Decart at 2/sec (+15 vs prior 220 s anchor).
+const LIVE_SECONDS_PER_500_CREDITS = Number(process.env.LIVE_SECONDS_PER_500_CREDITS || 212);
 const BILLING_MULTIPLIER = Number(
   process.env.BILLING_MULTIPLIER ||
     500 / LIVE_SECONDS_PER_500_CREDITS / CREDITS_PER_SECOND

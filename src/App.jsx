@@ -553,8 +553,6 @@ export default function App() {
   const creditsRef = useRef(0);
   const heartbeatFailCountRef = useRef(0);
   const decartGenerationSecondsRef = useRef(0);
-  const decartSecondsAtBillingStartRef = useRef(0);
-  const billingStartInFlightRef = useRef(false);
   const theaterControlsTimerRef = useRef(null);
   const creditSectionRef = useRef(null);
   const startInProgressRef = useRef(false);
@@ -2703,7 +2701,8 @@ export default function App() {
   };
 
   // Opens a server billing session and starts the elapsed clock + heartbeat.
-  // Called on the first Decart generationTick — connect/handshake time is not billed.
+  // Called as soon as the user clicks Start — before Decart connect — so user
+  // credits always lead Decart generation billing ($0.02/sec at 720p).
   const beginBillingSession = async () => {
     try {
       const res = await fetch(`${LEDGER_URL}/api/sessions/start`, {
@@ -3070,22 +3069,6 @@ export default function App() {
     await pushDecartState(session, sourcePrompt, { force: true });
   };
 
-  const ensureBillingForGeneration = async (decartSeconds) => {
-    if (billingSessionIdRef.current || billingStartInFlightRef.current) return;
-    billingStartInFlightRef.current = true;
-    try {
-      const ok = await beginBillingSession();
-      if (!ok) {
-        stopTransformation();
-        return;
-      }
-      decartSecondsAtBillingStartRef.current = decartSeconds;
-      setStatus("COMPUTE LINK ONLINE // REALTIME TRANSFORMATION TERMINAL");
-    } finally {
-      billingStartInFlightRef.current = false;
-    }
-  };
-
   const wireDecartSession = (session) => {
     let lastState = session.getConnectionState?.() || "connecting";
 
@@ -3097,17 +3080,15 @@ export default function App() {
 
     session.on("generationTick", ({ seconds }) => {
       decartGenerationSecondsRef.current = seconds;
-      void ensureBillingForGeneration(seconds);
 
       if (!billingSessionIdRef.current) return;
 
-      const billableDecartSeconds = Math.max(0, seconds - decartSecondsAtBillingStartRef.current);
       const ledgerCreditsUsed = Math.max(0, billingCreditsStartRef.current - creditsRef.current);
       const ledgerSeconds = ledgerCreditsUsed / EFFECTIVE_CREDITS_PER_SECOND;
-      // Ledger bills faster than Decart API cost — stop if Decart still runs ahead.
-      if (billableDecartSeconds > ledgerSeconds + 5) {
+      // User billing starts on Start click; Decart bills per generation second — stop if Decart runs ahead.
+      if (seconds > ledgerSeconds + 3) {
         console.warn(
-          `[InspireTech] Decart generation (${billableDecartSeconds}s billable) ahead of ledger (~${ledgerSeconds.toFixed(0)}s) — stopping`
+          `[InspireTech] Decart generation (${seconds}s) ahead of ledger (~${ledgerSeconds.toFixed(0)}s) — stopping`
         );
         setStatus("BILLING SYNC LOST — LIVE SESSION STOPPED");
         stopTransformation();
@@ -3167,8 +3148,6 @@ export default function App() {
     billingSessionIdRef.current = null;
     billingCreditsStartRef.current = 0;
     decartGenerationSecondsRef.current = 0;
-    decartSecondsAtBillingStartRef.current = 0;
-    billingStartInFlightRef.current = false;
     endBillingSession(sid);
     stopActiveVoicePipeline();
   };
@@ -3313,15 +3292,23 @@ export default function App() {
 
     billingSessionIdRef.current = null;
     setRunningState(true);
-    // From here on, isRunning (true) covers the double-click guard duty via
-    // the Start button's disabled state — safe to release the ref lock.
     startInProgressRef.current = false;
+
+    const billingOk = await beginBillingSession();
+    if (!billingOk) {
+      setRunningState(false);
+      return;
+    }
+
     setStatus("HANDSHAKING WITH DECART WEBRTC CLUSTER...");
 
     try {
       const apiKey = await ensureDecartApiKey();
       if (!apiKey) {
         setRunningState(false);
+        const sid = billingSessionIdRef.current;
+        billingSessionIdRef.current = null;
+        if (sid) void endBillingSession(sid);
         return;
       }
 
@@ -3421,7 +3408,7 @@ export default function App() {
       wireDecartSession(session);
 
       realtimeClientRef.current = session;
-      setStatus("COMPUTE LINK ONLINE // METER STARTS WHEN OUTPUT GENERATES");
+      setStatus("COMPUTE LINK ONLINE // REALTIME TRANSFORMATION TERMINAL");
       if (shouldUseMobileTheater()) {
         void enterOutputTheater({ silent: true, force: true, requireStream: false });
       }
@@ -3429,6 +3416,8 @@ export default function App() {
       console.error(connectErr);
       const sid = billingSessionIdRef.current;
       billingSessionIdRef.current = null;
+      clearClockTimer();
+      clearHeartbeat();
       if (sid) void endBillingSession(sid);
       setStatus(`HANDSHAKE REJECTED: ${connectErr.message}`);
       setRunningState(false);
@@ -3473,8 +3462,6 @@ export default function App() {
     billingCreditsStartRef.current = 0;
     heartbeatFailCountRef.current = 0;
     decartGenerationSecondsRef.current = 0;
-    decartSecondsAtBillingStartRef.current = 0;
-    billingStartInFlightRef.current = false;
     endBillingSession(sessionId);
 
     setRunningState(false);
@@ -3993,13 +3980,13 @@ export default function App() {
                       <div style={{...styles.creditBarFill, width: `${creditPercent}%`, backgroundColor: isLowCredit ? c.rose : c.primary}} />
                     </div>
                     <div style={styles.creditMeta}>
-                      <span>~{DISPLAY_CREDITS_PER_SECOND} credits/sec once output generates (billed server-side)</span>
+                      <span>~{DISPLAY_CREDITS_PER_SECOND} credits/sec while live (billed from Start)</span>
                       {isRunning && <span>Used this session: {sessionCreditsUsed} ({formatUsdFromCredits(sessionCreditsUsed)})</span>}
                     </div>
                   </>
                 )}
                 {isMobileWebStudio && isRunning && (
-                  <p className="itc-mobile-setup-hint">~{DISPLAY_CREDITS_PER_SECOND} credits/sec once output is generating.</p>
+                  <p className="itc-mobile-setup-hint">~{DISPLAY_CREDITS_PER_SECOND} credits/sec from the moment you tap Start.</p>
                 )}
               </>
             )}
