@@ -84,8 +84,8 @@ const MY_DECART_KEY = (import.meta.env?.VITE_DECART_API_KEY || "").trim();
 // context conversion; longer chunks = smoother conversion but more delay.
 const VOICE_CHUNK_MS = 500;
 const MOBILE_LAYOUT_MAX_WIDTH = 900;
-const VIRTUAL_CAM_WIDTH = 1920;
-const VIRTUAL_CAM_HEIGHT = 1080;
+const VIRTUAL_CAM_WIDTH = 1280;
+const VIRTUAL_CAM_HEIGHT = 720;
 const COMPANION_TOOLBAR_SECTIONS = [
   { id: "studio", label: "Studio", icon: "🎬" },
   { id: "credits", label: "Credits", icon: "💳" },
@@ -121,8 +121,18 @@ function drawVideoFrame(ctx, video, destWidth, destHeight, fit = "cover") {
   const srcH = video.videoHeight;
   if (!srcW || !srcH) return;
 
+  ctx.imageSmoothingEnabled = true;
+  if (typeof ctx.imageSmoothingQuality !== "undefined") {
+    ctx.imageSmoothingQuality = "high";
+  }
+
   ctx.fillStyle = "#000";
   ctx.fillRect(0, 0, destWidth, destHeight);
+
+  if (srcW === destWidth && srcH === destHeight) {
+    ctx.drawImage(video, 0, 0);
+    return;
+  }
 
   if (fit === "stretch") {
     ctx.drawImage(video, 0, 0, destWidth, destHeight);
@@ -172,7 +182,7 @@ function drawVideoFrame(ctx, video, destWidth, destHeight, fit = "cover") {
 
 const REFERENCE_UPLOAD_MAX_EDGE = 1280;
 const DECART_PREWARM_TTL_MS = 4 * 60 * 1000;
-const DECART_OUTPUT_RESOLUTION = "1080p";
+const DECART_OUTPUT_RESOLUTION = "720p";
 
 async function prepareReferenceImageForUpload(file) {
   if (!file || typeof document === "undefined") return file;
@@ -543,6 +553,8 @@ export default function App() {
   const creditsRef = useRef(0);
   const heartbeatFailCountRef = useRef(0);
   const decartGenerationSecondsRef = useRef(0);
+  const decartSecondsAtBillingStartRef = useRef(0);
+  const billingStartInFlightRef = useRef(false);
   const theaterControlsTimerRef = useRef(null);
   const creditSectionRef = useRef(null);
   const startInProgressRef = useRef(false);
@@ -2691,7 +2703,7 @@ export default function App() {
   };
 
   // Opens a server billing session and starts the elapsed clock + heartbeat.
-  // Called only once Decart is live — handshake/setup time is not billed.
+  // Called on the first Decart generationTick — connect/handshake time is not billed.
   const beginBillingSession = async () => {
     try {
       const res = await fetch(`${LEDGER_URL}/api/sessions/start`, {
@@ -3058,6 +3070,22 @@ export default function App() {
     await pushDecartState(session, sourcePrompt, { force: true });
   };
 
+  const ensureBillingForGeneration = async (decartSeconds) => {
+    if (billingSessionIdRef.current || billingStartInFlightRef.current) return;
+    billingStartInFlightRef.current = true;
+    try {
+      const ok = await beginBillingSession();
+      if (!ok) {
+        stopTransformation();
+        return;
+      }
+      decartSecondsAtBillingStartRef.current = decartSeconds;
+      setStatus("COMPUTE LINK ONLINE // REALTIME TRANSFORMATION TERMINAL");
+    } finally {
+      billingStartInFlightRef.current = false;
+    }
+  };
+
   const wireDecartSession = (session) => {
     let lastState = session.getConnectionState?.() || "connecting";
 
@@ -3069,12 +3097,17 @@ export default function App() {
 
     session.on("generationTick", ({ seconds }) => {
       decartGenerationSecondsRef.current = seconds;
+      void ensureBillingForGeneration(seconds);
+
+      if (!billingSessionIdRef.current) return;
+
+      const billableDecartSeconds = Math.max(0, seconds - decartSecondsAtBillingStartRef.current);
       const ledgerCreditsUsed = Math.max(0, billingCreditsStartRef.current - creditsRef.current);
       const ledgerSeconds = ledgerCreditsUsed / EFFECTIVE_CREDITS_PER_SECOND;
       // Ledger bills faster than Decart API cost — stop if Decart still runs ahead.
-      if (seconds > ledgerSeconds + 5) {
+      if (billableDecartSeconds > ledgerSeconds + 5) {
         console.warn(
-          `[InspireTech] Decart generation (${seconds}s) ahead of ledger (~${ledgerSeconds.toFixed(0)}s) — stopping`
+          `[InspireTech] Decart generation (${billableDecartSeconds}s billable) ahead of ledger (~${ledgerSeconds.toFixed(0)}s) — stopping`
         );
         setStatus("BILLING SYNC LOST — LIVE SESSION STOPPED");
         stopTransformation();
@@ -3132,6 +3165,10 @@ export default function App() {
     }
     const sid = billingSessionIdRef.current;
     billingSessionIdRef.current = null;
+    billingCreditsStartRef.current = 0;
+    decartGenerationSecondsRef.current = 0;
+    decartSecondsAtBillingStartRef.current = 0;
+    billingStartInFlightRef.current = false;
     endBillingSession(sid);
     stopActiveVoicePipeline();
   };
@@ -3281,7 +3318,6 @@ export default function App() {
     startInProgressRef.current = false;
     setStatus("HANDSHAKING WITH DECART WEBRTC CLUSTER...");
 
-    let billingPromise = null;
     try {
       const apiKey = await ensureDecartApiKey();
       if (!apiKey) {
@@ -3347,7 +3383,6 @@ export default function App() {
           : "single set",
       });
 
-      billingPromise = beginBillingSession();
       const session = await client.realtime.connect(streamForDecartFinal, {
         model: realtimeModel,
         mirror: resolveDecartMirrorMode(streamForDecartFinal),
@@ -3386,33 +3421,15 @@ export default function App() {
       wireDecartSession(session);
 
       realtimeClientRef.current = session;
-      const billingOk = await billingPromise;
-      if (!billingOk) {
-        try {
-          session.disconnect();
-        } catch {
-          // already disconnected
-        }
-        realtimeClientRef.current = null;
-        activeScenePromptRef.current = null;
-        activeSceneUseRefBackgroundRef.current = false;
-        setRunningState(false);
-        stopActiveVoicePipeline();
-        return;
-      }
-
-      setStatus("COMPUTE LINK ONLINE // REALTIME TRANSFORMATION TERMINAL");
+      setStatus("COMPUTE LINK ONLINE // METER STARTS WHEN OUTPUT GENERATES");
       if (shouldUseMobileTheater()) {
         void enterOutputTheater({ silent: true, force: true, requireStream: false });
       }
     } catch (connectErr) {
       console.error(connectErr);
-      if (billingPromise) {
-        await billingPromise.catch(() => false);
-        const sid = billingSessionIdRef.current;
-        billingSessionIdRef.current = null;
-        if (sid) void endBillingSession(sid);
-      }
+      const sid = billingSessionIdRef.current;
+      billingSessionIdRef.current = null;
+      if (sid) void endBillingSession(sid);
       setStatus(`HANDSHAKE REJECTED: ${connectErr.message}`);
       setRunningState(false);
       stopActiveVoicePipeline();
@@ -3456,6 +3473,8 @@ export default function App() {
     billingCreditsStartRef.current = 0;
     heartbeatFailCountRef.current = 0;
     decartGenerationSecondsRef.current = 0;
+    decartSecondsAtBillingStartRef.current = 0;
+    billingStartInFlightRef.current = false;
     endBillingSession(sessionId);
 
     setRunningState(false);
@@ -3974,13 +3993,13 @@ export default function App() {
                       <div style={{...styles.creditBarFill, width: `${creditPercent}%`, backgroundColor: isLowCredit ? c.rose : c.primary}} />
                     </div>
                     <div style={styles.creditMeta}>
-                      <span>~{DISPLAY_CREDITS_PER_SECOND} credits/sec while live (billed server-side)</span>
+                      <span>~{DISPLAY_CREDITS_PER_SECOND} credits/sec once output generates (billed server-side)</span>
                       {isRunning && <span>Used this session: {sessionCreditsUsed} ({formatUsdFromCredits(sessionCreditsUsed)})</span>}
                     </div>
                   </>
                 )}
                 {isMobileWebStudio && isRunning && (
-                  <p className="itc-mobile-setup-hint">Using ~{DISPLAY_CREDITS_PER_SECOND} credits/sec while live.</p>
+                  <p className="itc-mobile-setup-hint">~{DISPLAY_CREDITS_PER_SECOND} credits/sec once output is generating.</p>
                 )}
               </>
             )}
@@ -4323,7 +4342,7 @@ export default function App() {
             <div style={styles.canvasTitleGroup} className="itc-canvas-title-group">
               <h2 className="itc-canvas-title">{isMobileWebStudio ? "Live output" : "Output monitor"}</h2>
               {!isMobileWebStudio && (
-                <span className="itc-canvas-subtitle" style={styles.canvasSubtitle}>1080p Lucy 2.5 output</span>
+                <span className="itc-canvas-subtitle" style={styles.canvasSubtitle}>720p HD Lucy 2.5 output</span>
               )}
             </div>
             <div style={styles.actionRow} className="itc-action-row itc-desktop-action-row">
@@ -4567,7 +4586,13 @@ const styles = {
   timerBadgeRow: { display: "flex", gap: "8px", flexWrap: "wrap", justifyContent: "center" },
   timerBadgeOutside: { backgroundColor: c.surface, border: `1px solid ${c.border}`, borderRadius: r.sm, padding: "4px 12px", fontSize: "11px", fontWeight: "700", color: c.primary, letterSpacing: "0.08em" },
   fixedOutputContainer: { backgroundColor: "#000", borderRadius: r.md, border: `1px solid ${c.border}`, position: "relative", overflow: "hidden", boxShadow: `0 24px 48px -20px rgba(0,0,0,0.8), 0 0 0 1px rgba(129,140,248,0.08)` },
-  outputVideo: { width: "100%", height: "100%", objectFit: "contain", backgroundColor: "#000" },
+  outputVideo: {
+    width: "100%",
+    height: "100%",
+    objectFit: "contain",
+    backgroundColor: "#000",
+    filter: "contrast(1.05) saturate(1.03)",
+  },
   fittedImage: { width: "100%", height: "100%", objectFit: "contain" },
   canvasOverlay: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", backgroundColor: "rgba(11, 16, 32, 0.94)" },
   overlayPingWrap: { position: "relative", width: "24px", height: "24px", marginBottom: "16px", display: "flex", alignItems: "center", justifyContent: "center" },

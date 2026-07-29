@@ -1571,7 +1571,7 @@ body {
 .itc-fixed-output {
   transition: border-color 0.6s ease;
   aspect-ratio: 16 / 9;
-  width: min(960px, 100%);
+  width: min(720px, 100%);
   max-width: 100%;
   height: auto;
   flex-shrink: 0;
@@ -1587,7 +1587,7 @@ body {
 
 .itc-prompt-dock {
   flex-shrink: 0;
-  width: min(960px, 100%);
+  width: min(720px, 100%);
   max-width: 100%;
   padding: 10px 12px;
   border-radius: 10px;
