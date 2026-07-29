@@ -80,6 +80,7 @@
           "arch": ["x64"]
         }
       ],
+      "artifactName": "InspireTech-Setup-${version}.${ext}",
       "icon": "build/icon.png",
       "requestedExecutionLevel": "asInvoker",
       "signAndEditExecutable": false
