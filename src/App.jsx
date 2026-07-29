@@ -497,6 +497,27 @@ export default function App() {
   const theaterControlsTimerRef = useRef(null);
   const creditSectionRef = useRef(null);
   const startInProgressRef = useRef(false);
+  const isRunningRef = useRef(false);
+  const mobileOutputFocusRef = useRef(false);
+  const isMobileLayoutRef = useRef(
+    typeof window !== "undefined"
+      ? window.matchMedia(`(max-width: ${MOBILE_LAYOUT_MAX_WIDTH}px)`).matches
+      : false
+  );
+  const nativeVideoFullscreenRef = useRef(false);
+
+  const setRunningState = (value) => {
+    isRunningRef.current = value;
+    setIsRunning(value);
+  };
+
+  const setMobileTheaterFocus = (value) => {
+    mobileOutputFocusRef.current = value;
+    setMobileOutputFocus(value);
+  };
+
+  const shouldUseMobileTheater = () =>
+    isMobileLayoutRef.current || isMobileUserAgent();
 
   // --- Voice changer refs ---
   const voiceChangerActiveRef = useRef(false);
@@ -1050,6 +1071,10 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    isMobileLayoutRef.current = isMobileLayout;
+  }, [isMobileLayout]);
+
+  useEffect(() => {
     if (isMobileLayout && isRunning) {
       setMobileControlsOpen(false);
     } else if (isMobileLayout && !isRunning) {
@@ -1087,17 +1112,18 @@ export default function App() {
     scheduleTheaterControlsHide();
   };
 
-  const enterOutputTheater = async ({ silent = false } = {}) => {
-    if (!isRunning) {
+  const enterOutputTheater = async ({ silent = false, force = false, requireStream = true } = {}) => {
+    if (!force && !isRunningRef.current) {
       if (!silent) setStatus("START TRANSFORMATION FIRST — THEN TAP FULL SCREEN");
-      return;
+      return false;
     }
     const video = outputVideoRef.current;
-    if (!video?.srcObject) {
+    if (requireStream && !video?.srcObject) {
       if (!silent) setStatus("WAITING FOR VIDEO — TRY AGAIN IN A MOMENT");
-      return;
+      return false;
     }
-    setMobileOutputFocus(true);
+    if (mobileOutputFocusRef.current) return true;
+    setMobileTheaterFocus(true);
     setTheaterControlsVisible(true);
     scheduleTheaterControlsHide();
     try {
@@ -1106,10 +1132,11 @@ export default function App() {
     } catch {
       // ignore
     }
+    return true;
   };
 
   const exitOutputTheater = async () => {
-    setMobileOutputFocus(false);
+    setMobileTheaterFocus(false);
     setIsPoppedOut(false);
     clearTheaterControlsTimer();
     setTheaterControlsVisible(true);
@@ -1165,22 +1192,22 @@ export default function App() {
 
   // Mobile: auto edge-to-edge output when live (no manual full-screen tap).
   useEffect(() => {
-    if (!isMobileLayout || !isRunning || mobileOutputFocus) return undefined;
+    if (!shouldUseMobileTheater() || !isRunning || mobileOutputFocus) return undefined;
     let cancelled = false;
-    let attempts = 0;
     const tryAutoTheater = () => {
-      if (cancelled || attempts > 120) return;
-      attempts += 1;
-      const video = outputVideoRef.current;
-      if (video?.srcObject) {
-        void enterOutputTheater({ silent: true });
-        return;
-      }
-      requestAnimationFrame(tryAutoTheater);
+      if (cancelled || mobileOutputFocusRef.current || !isRunningRef.current) return true;
+      void enterOutputTheater({ silent: true, force: true, requireStream: false });
+      return mobileOutputFocusRef.current;
     };
-    tryAutoTheater();
+    if (tryAutoTheater()) return undefined;
+    const interval = setInterval(() => {
+      if (tryAutoTheater()) clearInterval(interval);
+    }, 200);
+    const timeout = setTimeout(() => clearInterval(interval), 15000);
     return () => {
       cancelled = true;
+      clearInterval(interval);
+      clearTimeout(timeout);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isMobileLayout, isRunning, mobileOutputFocus]);
@@ -1188,19 +1215,26 @@ export default function App() {
   useEffect(() => {
     const video = outputVideoRef.current;
     if (!video) return undefined;
-    const syncTheaterFromNativeVideo = () => {
-      if (!video.webkitDisplayingFullscreen) {
-        setMobileOutputFocus(false);
-        try {
-          document.documentElement.style.overflow = "";
-          document.body.style.overflow = "";
-        } catch {
-          // ignore
-        }
+    const onNativeFullscreenBegin = () => {
+      nativeVideoFullscreenRef.current = true;
+    };
+    const onNativeFullscreenEnd = () => {
+      if (!nativeVideoFullscreenRef.current) return;
+      nativeVideoFullscreenRef.current = false;
+      setMobileTheaterFocus(false);
+      try {
+        document.documentElement.style.overflow = "";
+        document.body.style.overflow = "";
+      } catch {
+        // ignore
       }
     };
-    video.addEventListener("webkitendfullscreen", syncTheaterFromNativeVideo);
-    return () => video.removeEventListener("webkitendfullscreen", syncTheaterFromNativeVideo);
+    video.addEventListener("webkitbeginfullscreen", onNativeFullscreenBegin);
+    video.addEventListener("webkitendfullscreen", onNativeFullscreenEnd);
+    return () => {
+      video.removeEventListener("webkitbeginfullscreen", onNativeFullscreenBegin);
+      video.removeEventListener("webkitendfullscreen", onNativeFullscreenEnd);
+    };
   }, [isRunning]);
 
   useEffect(() => () => clearTheaterControlsTimer(), []);
@@ -2949,7 +2983,7 @@ export default function App() {
   const handleDecartSessionFault = (err, label = "Decart session error") => {
     console.error(label, err);
     setStatus(`CRITICAL FAULT: ${err?.message || label}`);
-    setIsRunning(false);
+    setRunningState(false);
     clearClockTimer();
     clearHeartbeat();
     const decartSession = realtimeClientRef.current;
@@ -3098,7 +3132,7 @@ export default function App() {
     }
 
     billingSessionIdRef.current = null;
-    setIsRunning(true);
+    setRunningState(true);
     // From here on, isRunning (true) covers the double-click guard duty via
     // the Start button's disabled state — safe to release the ref lock.
     startInProgressRef.current = false;
@@ -3137,7 +3171,7 @@ export default function App() {
       const modelId = getModelId();
       const decartAuth = await fetchDecartRealtimeCredentials(modelId);
       if (!decartAuth?.apiKey) {
-        setIsRunning(false);
+        setRunningState(false);
         return;
       }
 
@@ -3179,6 +3213,11 @@ export default function App() {
           video.srcObject = remoteStream;
           video.muted = false;
           void video.play().catch(() => {});
+          if (shouldUseMobileTheater()) {
+            requestAnimationFrame(() => {
+              void enterOutputTheater({ silent: true, force: true, requireStream: false });
+            });
+          }
         },
         initialState: {
           prompt: {
@@ -3203,19 +3242,19 @@ export default function App() {
         realtimeClientRef.current = null;
         activeScenePromptRef.current = null;
         activeSceneUseRefBackgroundRef.current = false;
-        setIsRunning(false);
+        setRunningState(false);
         stopActiveVoicePipeline();
         return;
       }
 
       setStatus("COMPUTE LINK ONLINE // REALTIME TRANSFORMATION TERMINAL");
-      if (isMobileLayout) {
-        void enterOutputTheater({ silent: true });
+      if (shouldUseMobileTheater()) {
+        void enterOutputTheater({ silent: true, force: true, requireStream: false });
       }
     } catch (connectErr) {
       console.error(connectErr);
       setStatus(`HANDSHAKE REJECTED: ${connectErr.message}`);
-      setIsRunning(false);
+      setRunningState(false);
       stopActiveVoicePipeline();
     }
   };
@@ -3259,7 +3298,7 @@ export default function App() {
     decartGenerationSecondsRef.current = 0;
     endBillingSession(sessionId);
 
-    setIsRunning(false);
+    setRunningState(false);
     setStatus((prev) => (prev.startsWith("OUT OF CREDITS") ? prev : "PIPELINE DISCONNECTED"));
     setElapsedSeconds(0);
     if (mobileOutputFocus) {

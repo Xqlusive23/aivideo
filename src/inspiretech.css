@@ -2261,6 +2261,18 @@ body {
   display: none;
 }
 
+.itc-app.itc-app-mobile.itc-output-theater,
+.itc-app.itc-app-mobile.itc-mobile-theater {
+  height: 100dvh !important;
+  max-height: 100dvh !important;
+  min-height: 100dvh !important;
+  overflow: hidden !important;
+  position: fixed !important;
+  inset: 0 !important;
+  width: 100% !important;
+  padding-bottom: 0 !important;
+}
+
 .itc-app.itc-output-theater,
 .itc-app.itc-mobile-theater {
   overflow: hidden !important;
