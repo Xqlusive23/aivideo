@@ -1384,7 +1384,7 @@ export default function App() {
 
     let cancelled = false;
     const probeNetwork = async () => {
-      const result = await assessNetworkQuality({ ledgerUrl: LEDGER_URL, headers: authHeaders() });
+      const result = await assessNetworkQuality({ ledgerUrl: LEDGER_URL });
       if (!cancelled) {
         setNetworkQuality(result);
         setNetworkChecked(true);
