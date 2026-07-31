@@ -3846,8 +3846,8 @@ export default function App() {
       <header className={`itc-top-header${companionToolbar ? " itc-top-header-companion" : ""}`}>
         <div className="itc-header-brand">
           <div className="itc-header-brand-id">
-            <LogoLockup size="md" />
-            {!isMobileWebStudio && <span className="itc-header-version">v2.8</span>}
+            <LogoLockup size={companionToolbar ? "sm" : "md"} />
+            {!isMobileWebStudio && !companionToolbar && <span className="itc-header-version">v2.8</span>}
           </div>
           <div className="itc-header-actions">
             <button
@@ -3879,7 +3879,7 @@ export default function App() {
                 className="itc-header-link"
                 onClick={handleManualAppUpdateCheck}
               >
-                Check for updates
+                Updates
               </button>
             )}
             {!companionToolbar && (

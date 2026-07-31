@@ -1206,20 +1206,91 @@ body {
 .itc-top-header-companion {
   flex-wrap: nowrap;
   align-items: center;
-  gap: 12px 16px;
+  gap: 8px 10px;
+  padding: 6px 12px;
+  min-height: 48px;
+}
+
+.itc-top-header-companion .itc-header-brand {
+  flex: 0 1 auto;
+  gap: 6px;
+  min-width: 0;
+}
+
+.itc-top-header-companion .itc-header-brand-id {
+  gap: 6px;
+}
+
+.itc-top-header-companion .itc-logo-lockup {
+  gap: 6px;
+}
+
+.itc-top-header-companion .itc-logo-img-md {
+  width: 28px;
+  height: 28px;
+}
+
+.itc-top-header-companion .itc-logo-wordmark {
+  font-size: 0.75rem;
+  letter-spacing: 0.04em;
+}
+
+.itc-top-header-companion .itc-header-actions {
+  gap: 2px;
+  margin-left: 0;
+  flex-shrink: 1;
+  min-width: 0;
+}
+
+.itc-top-header-companion .itc-header-link {
+  font-size: 0.625rem;
+  padding: 2px 5px;
+  white-space: nowrap;
+}
+
+.itc-top-header-companion .itc-header-version {
+  font-size: 0.5625rem;
+  padding: 1px 5px;
+  white-space: nowrap;
 }
 
 .itc-header-companion-bar {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
   flex: 1 1 auto;
   min-width: 0;
   overflow-x: auto;
+  scrollbar-width: none;
 }
 
-.itc-top-header-companion .itc-header-brand {
-  flex: 0 0 auto;
+.itc-header-companion-bar::-webkit-scrollbar {
+  display: none;
+}
+
+.itc-top-header-companion .itc-header-companion-bar {
+  gap: 6px;
+}
+
+.itc-top-header-companion .itc-desktop-toolbar {
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.itc-top-header-companion .itc-desktop-toolbar-item {
+  padding: 3px 8px;
+  font-size: 10.5px;
+  gap: 3px;
+  letter-spacing: 0.01em;
+}
+
+.itc-top-header-companion .itc-desktop-toolbar-icon {
+  font-size: 11px;
+}
+
+.itc-top-header-companion .itc-desktop-toolbar-badge {
+  width: 5px;
+  height: 5px;
 }
 
 .itc-top-header-companion .itc-status-ribbon {
@@ -1227,11 +1298,23 @@ body {
   justify-content: flex-end;
   flex-wrap: nowrap;
   min-width: 0;
+  gap: 3px;
 }
 
 .itc-top-header-companion .itc-status-chip {
   min-width: 0;
-  padding: 5px 10px;
+  padding: 2px 6px;
+  gap: 1px;
+}
+
+.itc-top-header-companion .itc-status-chip-label {
+  font-size: 0.5625rem;
+  line-height: 1.1;
+}
+
+.itc-top-header-companion .itc-status-chip-value {
+  font-size: 0.6875rem;
+  line-height: 1.15;
 }
 
 .itc-status-ribbon {
