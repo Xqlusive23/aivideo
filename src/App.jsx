@@ -535,6 +535,9 @@ export default function App() {
   const [networkChecked, setNetworkChecked] = useState(false);
   const [sessionCreditsUsed, setSessionCreditsUsed] = useState(0);
   const [showAddCredits, setShowAddCredits] = useState(false);
+  const [checkoutEmail, setCheckoutEmail] = useState("");
+  const [checkoutPhone, setCheckoutPhone] = useState("");
+  const [checkoutContactError, setCheckoutContactError] = useState("");
   const [isPoppedOut, setIsPoppedOut] = useState(false);
   const [mobileOutputFocus, setMobileOutputFocus] = useState(false);
   const [theaterControlsVisible, setTheaterControlsVisible] = useState(true);
@@ -2096,6 +2099,12 @@ export default function App() {
       if (!res.ok) throw new Error(`Ledger responded ${res.status}`);
       const data = await res.json();
       setCredits(data.credits);
+      if (typeof data.customerEmail === "string" && data.customerEmail) {
+        setCheckoutEmail(data.customerEmail);
+      }
+      if (typeof data.customerPhone === "string" && data.customerPhone) {
+        setCheckoutPhone(data.customerPhone);
+      }
       syncTierAccessFromLedger(data);
       setCreditsLoaded(true);
       setLedgerUnreachable(false);
@@ -3678,12 +3687,23 @@ export default function App() {
   const showPromptInSidebar = isMobileLayout && isRunning && !isMobileWebStudio;
 
   const purchaseCredits = async (creditAmount) => {
+    const email = checkoutEmail.trim().toLowerCase();
+    const phone = checkoutPhone.replace(/\D/g, "");
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email === "customer@example.com") {
+      setCheckoutContactError("Enter your real email address before checkout.");
+      return;
+    }
+    if (phone.length < 7) {
+      setCheckoutContactError("Enter a valid phone number before checkout.");
+      return;
+    }
+    setCheckoutContactError("");
     try {
       setStatus("REDIRECTING TO CHECKOUT...");
       const res = await fetch(`${LEDGER_URL}/api/checkout`, {
         method: "POST",
         headers: { "Content-Type": "application/json", ...authHeaders() },
-        body: JSON.stringify({ credits: creditAmount }),
+        body: JSON.stringify({ credits: creditAmount, email, phone: checkoutPhone.trim() }),
       });
       if (res.status === 401) {
         handleTokenRejected("Your access token was rejected. Please re-enter it.");
@@ -4297,6 +4317,39 @@ export default function App() {
             {!isMobileWebStudio && (
               <p style={styles.modalSubtitle}>You can purchase more Credits to start generating</p>
             )}
+            <div style={styles.checkoutContactBlock}>
+              <div style={styles.checkoutContactTitle}>Contact for this payment</div>
+              <p style={styles.checkoutContactHint}>
+                Paystack requires your real email and phone on every transaction.
+              </p>
+              <input
+                type="email"
+                autoComplete="email"
+                placeholder="Your email address"
+                value={checkoutEmail}
+                onChange={(e) => {
+                  setCheckoutEmail(e.target.value);
+                  if (checkoutContactError) setCheckoutContactError("");
+                }}
+                style={styles.checkoutInput}
+                className="itc-checkout-input"
+              />
+              <input
+                type="tel"
+                autoComplete="tel"
+                placeholder="Your phone number"
+                value={checkoutPhone}
+                onChange={(e) => {
+                  setCheckoutPhone(e.target.value);
+                  if (checkoutContactError) setCheckoutContactError("");
+                }}
+                style={styles.checkoutInput}
+                className="itc-checkout-input"
+              />
+              {checkoutContactError && (
+                <div style={styles.checkoutContactError}>{checkoutContactError}</div>
+              )}
+            </div>
             <div style={styles.creditCardGrid} className="itc-credit-grid">
               {TOP_UP_OPTIONS.map((opt) => (
                 <div key={opt.credits} style={{...styles.creditCard, ...(opt.popular ? styles.creditCardPopular : {})}}>
@@ -4657,6 +4710,22 @@ const styles = {
   ledgerErrorNote: { fontSize: "10px", color: c.rose, lineHeight: "1.5", marginBottom: "10px" },
   topUpButton: { backgroundColor: c.bgElevated, color: c.textMuted, border: `1px dashed ${c.borderLight}`, padding: "8px 12px", borderRadius: r.sm, fontSize: "11px", fontWeight: "600", cursor: "pointer", fontFamily: "inherit" },
   modalSubtitle: { fontSize: "11px", color: c.textMuted, margin: "0 0 14px" },
+  checkoutContactBlock: { marginBottom: "14px" },
+  checkoutContactTitle: { fontSize: "11px", fontWeight: "700", color: c.textSoft, marginBottom: "4px" },
+  checkoutContactHint: { fontSize: "10px", color: c.textDim, margin: "0 0 8px", lineHeight: 1.45 },
+  checkoutInput: {
+    width: "100%",
+    boxSizing: "border-box",
+    backgroundColor: c.bg,
+    color: c.textSoft,
+    border: `1px solid ${c.border}`,
+    borderRadius: r.sm,
+    padding: "8px 10px",
+    fontFamily: "inherit",
+    fontSize: "11px",
+    marginBottom: "6px",
+  },
+  checkoutContactError: { fontSize: "10px", color: c.rose, marginTop: "2px" },
   creditCardGrid: { display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "10px" },
   creditCard: { position: "relative", backgroundColor: c.bg, border: `1px solid ${c.border}`, borderRadius: "10px", padding: "14px 8px", display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center", gap: "4px" },
   creditCardPopular: { border: `1px solid ${c.primary}`, boxShadow: "0 0 0 1px rgba(129,140,248,0.2)" },

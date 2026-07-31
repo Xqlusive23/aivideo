@@ -238,6 +238,8 @@ try {
   ensureColumn("users", "revoked", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn("users", "revoked_mobile", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn("users", "revoked_desktop", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn("users", "customer_email", "TEXT");
+  ensureColumn("users", "customer_phone", "TEXT");
 } catch (err) {
   console.error("Schema self-heal failed — this DB file is likely from an incompatible older version.");
   console.error("Fix: set DB_PATH to a new filename (e.g. /data/ledger_v2.db) and redeploy.");
@@ -255,6 +257,40 @@ function getUser(token) {
   const normalized = normalizeAccessToken(token);
   if (!normalized) return undefined;
   return db.prepare("SELECT * FROM users WHERE token = ?").get(normalized);
+}
+
+const GENERIC_CHECKOUT_EMAILS = new Set([
+  "customer@example.com",
+  "test@example.com",
+  "noreply@example.com",
+]);
+
+function normalizeCustomerEmail(raw) {
+  return String(raw || "")
+    .trim()
+    .toLowerCase();
+}
+
+function isValidCustomerEmail(email) {
+  if (!email || GENERIC_CHECKOUT_EMAILS.has(email)) return false;
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+function normalizeCustomerPhone(raw) {
+  const digits = String(raw || "").replace(/\D/g, "");
+  return digits.length >= 7 ? digits : "";
+}
+
+function saveCustomerContact(token, email, phone) {
+  const normalizedEmail = normalizeCustomerEmail(email);
+  const normalizedPhone = normalizeCustomerPhone(phone);
+  if (!isValidCustomerEmail(normalizedEmail)) return false;
+  db.prepare("UPDATE users SET customer_email = ?, customer_phone = ? WHERE token = ?").run(
+    normalizedEmail,
+    normalizedPhone || null,
+    token
+  );
+  return true;
 }
 
 function getBalance(token) {
@@ -842,11 +878,14 @@ app.get("/api/health", (_req, res) => {
 });
 
 app.get("/api/access-check", requireToken, (req, res) => {
+  const user = getUser(req.token);
   res.json({
     ok: true,
     scope: req.clientPlatformScope,
     platform: req.clientPlatform,
     credits: getBalance(req.token),
+    customerEmail: user?.customer_email || null,
+    customerPhone: user?.customer_phone || null,
     ...tierPayload(req.token),
     ...billingPayload(),
   });
@@ -1041,11 +1080,26 @@ const TIERS = {
 
 app.post("/api/checkout", requireToken, async (req, res) => {
   try {
-    const { credits } = req.body || {};
+    const { credits, email, phone } = req.body || {};
     const amountKobo = TIERS[credits];
     if (!amountKobo) {
       return res.status(400).json({ error: "Invalid credit tier" });
     }
+
+    const user = getUser(req.token);
+    const checkoutEmail = normalizeCustomerEmail(email || user?.customer_email);
+    const checkoutPhone = normalizeCustomerPhone(phone || user?.customer_phone);
+    if (!isValidCustomerEmail(checkoutEmail)) {
+      return res.status(400).json({
+        error: "A valid customer email address is required before checkout.",
+      });
+    }
+    if (!checkoutPhone) {
+      return res.status(400).json({
+        error: "A customer phone number is required before checkout.",
+      });
+    }
+    saveCustomerContact(req.token, checkoutEmail, checkoutPhone);
 
     const reference = `credits_${credits}_${randomUUID()}`;
 
@@ -1056,11 +1110,16 @@ app.post("/api/checkout", requireToken, async (req, res) => {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        email: req.body.email || "customer@example.com",
+        email: checkoutEmail,
         amount: amountKobo,
         currency: "NGN",
         reference,
-        metadata: { credits: String(credits), token: req.token }, // token carried through to the webhook/verify step
+        metadata: {
+          credits: String(credits),
+          token: req.token,
+          customer_email: checkoutEmail,
+          customer_phone: checkoutPhone,
+        },
         callback_url: `${FRONTEND_URL}/?checkout=success`,
       }),
     });
