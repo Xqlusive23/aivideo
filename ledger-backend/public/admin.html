@@ -312,6 +312,20 @@
   .badge.windows { color: #67e8f9; border-color: #155e75; background: rgba(103, 232, 249, 0.08); }
   .badge.revoked { color: #f0576a; border-color: #4a2530; background: rgba(240, 87, 106, 0.08); }
 
+  .live-metric-cell {
+    font: 600 12px/1.35 "JetBrains Mono", Consolas, monospace;
+    color: #fbbf24;
+    white-space: nowrap;
+  }
+
+  .active-sync-note {
+    margin: 0 0 12px;
+    font-size: 11px;
+    color: #5f677a;
+  }
+
+  .active-sync-note strong { color: #8b93a7; }
+
   .created-token-box {
     margin-top: 12px;
     padding: 10px;
@@ -381,6 +395,7 @@
       </label>
     </div>
     <div id="activeFlash" class="flash"></div>
+    <div id="activeSyncNote" class="active-sync-note"></div>
     <div id="activeMsg" class="msg"></div>
     <div id="activeTableWrap"></div>
   </div>
@@ -405,6 +420,7 @@
   const refreshActiveBtn = document.getElementById("refreshActiveBtn");
   const autoRefreshActive = document.getElementById("autoRefreshActive");
   const activeMsg = document.getElementById("activeMsg");
+  const activeSyncNote = document.getElementById("activeSyncNote");
   const activeTableWrap = document.getElementById("activeTableWrap");
   const newLabelInput = document.getElementById("newLabel");
   const createMsg = document.getElementById("createMsg");
@@ -441,6 +457,60 @@
     const s = seconds % 60;
     if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
     return `${m}:${String(s).padStart(2, "0")}`;
+  }
+
+  function sessionMetricKey(token, clientId) {
+    return `${token}::${clientId || ""}`;
+  }
+
+  let activeSnapshot = {
+    devices: [],
+    liveSessions: [],
+    windowSeconds: 90,
+    creditsPerSecond: 2.78,
+    syncedAt: 0,
+  };
+  let liveTicker = null;
+
+  function updateActiveSyncNote() {
+    if (!activeSyncNote) return;
+    const liveCount = activeSnapshot.liveSessions.length;
+    if (!activeSnapshot.syncedAt) {
+      activeSyncNote.textContent = "";
+      return;
+    }
+    const ago = Math.max(0, Math.floor((Date.now() - activeSnapshot.syncedAt) / 1000));
+    activeSyncNote.innerHTML = liveCount
+      ? `<strong>Live time & session credits tick every second.</strong> Server sync ${ago}s ago · auto-refresh every 5s.`
+      : `<strong>Online list</strong> synced ${ago}s ago · auto-refresh every 5s.`;
+  }
+
+  function tickLiveMetrics() {
+    if (!activeSnapshot.liveSessions.length) return;
+    const drift = Math.floor((Date.now() - activeSnapshot.syncedAt) / 1000);
+    for (const session of activeSnapshot.liveSessions) {
+      const key = sessionMetricKey(session.token, session.client_id);
+      const timeEl = activeTableWrap.querySelector(`[data-live-time="${CSS.escape(key)}"]`);
+      const credEl = activeTableWrap.querySelector(`[data-session-credits="${CSS.escape(key)}"]`);
+      if (timeEl) {
+        timeEl.textContent = formatDuration(session.elapsedSeconds + drift);
+      }
+      if (credEl) {
+        credEl.textContent = Math.round(session.creditsUsed + drift * activeSnapshot.creditsPerSecond);
+      }
+    }
+    updateActiveSyncNote();
+  }
+
+  function ensureLiveTicker() {
+    if (liveTicker) return;
+    liveTicker = setInterval(tickLiveMetrics, 1000);
+  }
+
+  function stopLiveTicker() {
+    if (!liveTicker) return;
+    clearInterval(liveTicker);
+    liveTicker = null;
   }
 
   const activeFlash = document.getElementById("activeFlash");
@@ -702,25 +772,40 @@
   }
   window.deleteToken = deleteToken;
 
-  async function loadActiveUsers() {
+  async function loadActiveUsers({ silent = false } = {}) {
     const secret = secretInput.value.trim();
     if (!secret) return setMsg(activeMsg, "Enter your ADMIN_SECRET above first.", "error");
 
-    setMsg(activeMsg, "Loading...", "");
+    if (!silent) setMsg(activeMsg, "Loading...", "");
     try {
       const res = await fetch(`${BACKEND_URL}/api/admin/active-users`, {
         headers: { "X-Admin-Secret": secret },
       });
       const data = await res.json();
       if (!res.ok) {
-        setMsg(activeMsg, data.error || "Something went wrong.", "error");
-        activeTableWrap.innerHTML = "";
+        if (!silent) setMsg(activeMsg, data.error || "Something went wrong.", "error");
+        if (!silent) activeTableWrap.innerHTML = "";
         return;
       }
       setMsg(activeMsg, "", "");
-      renderActiveUsers(data.devices || [], data.liveSessions || [], data.activeWindowSeconds || 90);
+      activeSnapshot = {
+        devices: data.devices || [],
+        liveSessions: (data.liveSessions || []).map((session) => ({
+          token: session.token,
+          client_id: session.client_id,
+          elapsedSeconds: Number(session.elapsedSeconds) || 0,
+          creditsUsed: Number(session.creditsUsed) || 0,
+        })),
+        windowSeconds: data.activeWindowSeconds || 90,
+        creditsPerSecond: Number(data.creditsPerSecond) || 2.78,
+        syncedAt: Date.now(),
+      };
+      renderActiveUsers(activeSnapshot.devices, activeSnapshot.liveSessions, activeSnapshot.windowSeconds);
+      updateActiveSyncNote();
+      if (activeSnapshot.liveSessions.length) ensureLiveTicker();
+      else stopLiveTicker();
     } catch {
-      setMsg(activeMsg, "Couldn't reach the backend at " + BACKEND_URL, "error");
+      if (!silent) setMsg(activeMsg, "Couldn't reach the backend at " + BACKEND_URL, "error");
     }
   }
 
@@ -744,6 +829,7 @@
         isLive && liveSession && Number.isFinite(liveSession.creditsUsed)
           ? Math.round(liveSession.creditsUsed)
           : "—";
+      const metricKey = liveSession ? sessionMetricKey(token, liveSession.client_id || device.client_id) : "";
       const scope = platformScope(device.platform);
       const scopeRevoked = scope === "mobile" ? device.revoked_mobile : scope === "desktop" ? device.revoked_desktop : 0;
       const rowMuted = isRevokedFlag(device.revoked) || isRevokedFlag(scopeRevoked);
@@ -755,8 +841,8 @@
           <td class="token-cell">${renderTokenCell(token)}</td>
           <td>${platformLabel(device.platform)}</td>
           <td>${statusBadge}</td>
-          <td>${liveTime}</td>
-          <td>${sessionCredits}</td>
+          <td class="live-metric-cell"${metricKey ? ` data-live-time="${escapeHtml(metricKey)}"` : ""}>${liveTime}</td>
+          <td class="live-metric-cell"${metricKey ? ` data-session-credits="${escapeHtml(metricKey)}"` : ""}>${sessionCredits}</td>
           <td>${device.credits}</td>
           <td>${new Date(device.last_seen_at).toLocaleString()}</td>
           <td class="actions-cell">${activeDeviceActions(device, scope, scopeRevoked)}</td>
@@ -854,7 +940,7 @@
 
   createBtn.addEventListener("click", createToken);
   refreshBtn.addEventListener("click", loadUsers);
-  refreshActiveBtn.addEventListener("click", loadActiveUsers);
+  refreshActiveBtn.addEventListener("click", () => loadActiveUsers({ silent: false }));
   migrateBtn.addEventListener("click", migrateToken);
 
   let activeRefreshTimer = null;
@@ -864,7 +950,7 @@
       activeRefreshTimer = null;
     }
     if (autoRefreshActive.checked && secretInput.value.trim()) {
-      activeRefreshTimer = setInterval(loadActiveUsers, 5000);
+      activeRefreshTimer = setInterval(() => loadActiveUsers({ silent: true }), 5000);
     }
   }
   autoRefreshActive.addEventListener("change", syncActiveAutoRefresh);

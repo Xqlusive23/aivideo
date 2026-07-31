@@ -723,6 +723,7 @@ app.get("/api/admin/active-users", (req, res) => {
 
   res.json({
     activeWindowSeconds: PRESENCE_ACTIVE_SECONDS,
+    creditsPerSecond: effectiveCreditsPerSecond(),
     devices,
     liveSessions,
   });
