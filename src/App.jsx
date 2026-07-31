@@ -587,6 +587,7 @@ export default function App() {
   const nativeVideoFullscreenRef = useRef(false);
   const decartPrewarmRef = useRef({ apiKey: null, fetchedAt: 0, uploadPromise: null });
   const preparedReferenceFileRef = useRef(null);
+  const stopTransformationRef = useRef(() => {});
 
   const setRunningState = (value) => {
     isRunningRef.current = value;
@@ -741,11 +742,8 @@ export default function App() {
     if (!selectedFile) setUseReferenceBackground(false);
   }, [selectedFile]);
 
-  useEffect(() => {
-    if (!accessToken || !selectedFile || !cameraActive || ledgerUnreachable) return;
-    void prewarmReferenceImageUpload();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [accessToken, selectedFile, cameraActive, ledgerUnreachable, useReferenceBackground]);
+  // Do not call Decart (token mint / upload) until the user clicks Start — idle camera
+  // + reference must not touch the Decart API or leave room for orphan realtime sessions.
 
   const stopLocalVideoStream = () => {
     if (localStreamRef.current) {
@@ -1052,50 +1050,21 @@ export default function App() {
   }, [credits]);
 
   // Closing the tab/window without Stop leaves Decart billing your API key while
-  // the ledger stops deducting — end the session and disconnect on page hide.
+  // the ledger stops deducting — tear down the full live pipeline on page hide.
   useEffect(() => {
     const cleanupLiveSession = () => {
-      clearHeartbeat();
-      clearClockTimer();
-      const sessionId = billingSessionIdRef.current;
-      const token = accessToken;
-      const decartSeconds = decartGenerationSecondsRef.current;
-      billingSessionIdRef.current = null;
-      billingCreditsStartRef.current = 0;
-      sessionCreditsUsedRef.current = 0;
-      decartGenerationSecondsRef.current = 0;
-      decartSecondsAtBillingStartRef.current = 0;
-      billingStartInFlightRef.current = false;
-      if (sessionId && token) {
-        fetch(`${LEDGER_URL}/api/sessions/${sessionId}/end`, {
-          method: "POST",
-          headers: {
-            "X-Access-Token": token,
-            "X-Client-Platform": getClientPlatform(),
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            clientId: getClientId(),
-            platform: getClientPlatform(),
-            decartGenerationSeconds: decartSeconds,
-          }),
-          keepalive: true,
-        }).catch(() => {});
-      }
-      const decartSession = realtimeClientRef.current;
-      if (decartSession) {
-        realtimeClientRef.current = null;
-        try {
-          decartSession.disconnect();
-        } catch {
-          // ignore
-        }
+      if (isRunningRef.current || realtimeClientRef.current || billingSessionIdRef.current) {
+        stopTransformationRef.current();
       }
     };
 
     window.addEventListener("pagehide", cleanupLiveSession);
-    return () => window.removeEventListener("pagehide", cleanupLiveSession);
-  }, [accessToken]);
+    window.addEventListener("beforeunload", cleanupLiveSession);
+    return () => {
+      window.removeEventListener("pagehide", cleanupLiveSession);
+      window.removeEventListener("beforeunload", cleanupLiveSession);
+    };
+  }, []);
 
   // --- Electron desktop shell integration (no-op in the normal web app) ---
   // window.inspireTechDesktop only exists when this page is running inside
@@ -3005,7 +2974,6 @@ export default function App() {
     const previewUrl = URL.createObjectURL(file);
     setImagePreview(previewUrl);
     setStatus("PAYLOAD READY FOR TRANSMISSION");
-    void prewarmReferenceImageUpload();
   };
 
   const getPromptComposeOptions = () => ({
@@ -3052,25 +3020,6 @@ export default function App() {
     preparedReferenceFileRef.current = { source: selectedFile, file: prepared };
     referenceImageSourceRef.current = prepared;
     return prepared;
-  };
-
-  const prewarmReferenceImageUpload = async () => {
-    if (!selectedFile || !accessToken || ledgerUnreachable || referenceImageRefId.current) return;
-    if (decartPrewarmRef.current.uploadPromise) return decartPrewarmRef.current.uploadPromise;
-    const run = async () => {
-      const apiKey = await ensureDecartApiKey();
-      if (!apiKey || !selectedFile) return;
-      const client = createDecartClient({ apiKey });
-      await resolveReferenceImage(client);
-    };
-    decartPrewarmRef.current.uploadPromise = run();
-    try {
-      await decartPrewarmRef.current.uploadPromise;
-    } catch (err) {
-      console.warn("[InspireTech] Reference prewarm failed:", err);
-    } finally {
-      decartPrewarmRef.current.uploadPromise = null;
-    }
   };
 
   const resolveReferenceImage = async (client) => {
@@ -3159,6 +3108,12 @@ export default function App() {
     });
 
     session.on("generationTick", ({ seconds }) => {
+      if (!isRunningRef.current) {
+        console.warn("[InspireTech] Decart still generating while not live — stopping");
+        stopTransformationRef.current();
+        return;
+      }
+
       decartGenerationSecondsRef.current = seconds;
       void ensureBillingForGeneration(seconds);
 
@@ -3553,6 +3508,35 @@ export default function App() {
     }
     if (outputVideoRef.current) outputVideoRef.current.srcObject = null;
   };
+  stopTransformationRef.current = stopTransformation;
+
+  // Kill orphan Decart/billing sessions if UI thinks we're idle (prevents silent API drain).
+  useEffect(() => {
+    if (!sessionReady) return undefined;
+    const guard = setInterval(() => {
+      if (realtimeClientRef.current && !isRunningRef.current) {
+        console.warn("[InspireTech] Orphan Decart session detected — forcing stop");
+        stopTransformationRef.current();
+        return;
+      }
+      if (billingSessionIdRef.current && !isRunningRef.current) {
+        console.warn("[InspireTech] Orphan billing session detected — forcing stop");
+        stopTransformationRef.current();
+      }
+    }, 5000);
+    return () => clearInterval(guard);
+  }, [sessionReady]);
+
+  // Desktop shell: disconnect Decart when the user closes the Electron window.
+  useEffect(() => {
+    const companion = window.inspiretechCompanion;
+    if (!companion?.onForceTeardown) return undefined;
+    return companion.onForceTeardown(() => {
+      if (isRunningRef.current || realtimeClientRef.current || billingSessionIdRef.current) {
+        stopTransformationRef.current();
+      }
+    });
+  }, []);
 
   const renderPromptDock = () => {
     if (!backgroundChangerAccess) {

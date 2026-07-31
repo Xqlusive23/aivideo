@@ -58,6 +58,12 @@ function createMainWindow() {
     scheduleUpdateCheck(500);
   });
 
+  mainWindow.on("close", () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("inspiretech:force-teardown");
+    }
+  });
+
   mainWindow.on("closed", () => {
     setUpdateMainWindow(null);
     mainWindow = null;

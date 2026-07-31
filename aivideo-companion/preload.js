@@ -35,4 +35,9 @@ contextBridge.exposeInMainWorld("inspiretechCompanion", {
   stopAudio: () => {
     ipcRenderer.send("inspiretech:audio-stop");
   },
+  onForceTeardown: (callback) => {
+    const listener = () => callback();
+    ipcRenderer.on("inspiretech:force-teardown", listener);
+    return () => ipcRenderer.removeListener("inspiretech:force-teardown", listener);
+  },
 });
