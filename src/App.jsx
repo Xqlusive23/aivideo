@@ -224,15 +224,10 @@ async function prepareReferenceImageForUpload(file) {
 }
 
 const DEFAULT_TRANSFORMATION_PROMPT =
-  "Substitute only the primary foreground person in the live video with the person shown in the reference image, matching their full appearance exactly as shown in the reference — including clothing, outfit, hat, hair, skin tone, and body shape.";
-const SINGLE_SUBJECT_CLAUSE =
-  " Apply the transformation to exactly one person — the main subject closest to the camera — and leave every other person in the scene completely unchanged.";
-const REFERENCE_IDENTITY_CLAUSE =
-  " Use the reference image for all identity and outfit details; the live camera provides motion and expression only — do not copy clothing or appearance from the live webcam feed.";
-const CHARACTER_WITH_REF_PROMPT =
-  `${DEFAULT_TRANSFORMATION_PROMPT}${SINGLE_SUBJECT_CLAUSE}${REFERENCE_IDENTITY_CLAUSE}`;
+  "Substitute the character in the video with the person in the reference image, matching their full appearance exactly as shown in the reference — including clothing, outfit, hat, hair, skin tone, and body shape.";
+const CHARACTER_WITH_REF_PROMPT = DEFAULT_TRANSFORMATION_PROMPT;
 const CHARACTER_SWAP_PATTERN =
-  /substitute the character|substitute only the primary|replace the character|transform into this character|person in the reference image|character from the reference image|with this character|primary foreground person/i;
+  /substitute the character|replace the character|transform into this character|person in the reference image|character from the reference image|with this character/i;
 const BACKGROUND_INTENT_PATTERN =
   /background|office|beach|studio|city|skyline|environment|room|setting|scene|backdrop|interior|outdoor|setup/i;
 const DEFAULT_BACKGROUND_PROMPT =
@@ -305,7 +300,7 @@ function composeLayeredPrompt(userText, hasReferenceImage = true, options = {}) 
     ? composeReferenceBackgroundPrompt(options)
     : composeBackgroundOnlyPrompt(trimmed || DEFAULT_BACKGROUND_PROMPT);
   // Decart layered edits: one sentence per edit type (see lucy-2.5-prompting guide).
-  return `${backgroundClause} ${CHARACTER_WITH_REF_PROMPT}${useReferenceBackground ? "" : TEMPORAL_STABILITY_CLAUSE}`;
+  return `${backgroundClause} ${CHARACTER_WITH_REF_PROMPT}`;
 }
 
 function composeTransformationPrompt(userText, hasReferenceImage = true, options = {}) {
@@ -327,7 +322,7 @@ function composeTransformationPrompt(userText, hasReferenceImage = true, options
   if (!trimmed || trimmed === DEFAULT_TRANSFORMATION_PROMPT) {
     return wantsBackground
       ? composeLayeredPrompt(trimmed || DEFAULT_BACKGROUND_PROMPT, true, options)
-      : `${CHARACTER_WITH_REF_PROMPT}${TEMPORAL_STABILITY_CLAUSE}`;
+      : CHARACTER_WITH_REF_PROMPT;
   }
 
   if (wantsBackground) {
@@ -369,6 +364,7 @@ export default function App() {
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
 
   const [enhanceMask, setEnhanceMask] = useState(true);
+  const [inferenceWeight, setInferenceWeight] = useState(85);
   const [useReferenceBackground, setUseReferenceBackground] = useState(false);
   const [transformationPrompt, setTransformationPrompt] = useState(DEFAULT_TRANSFORMATION_PROMPT);
   const [promptApplyBusy, setPromptApplyBusy] = useState(false);
@@ -745,8 +741,12 @@ export default function App() {
     if (!selectedFile) setUseReferenceBackground(false);
   }, [selectedFile]);
 
-  // Do not call Decart (token mint / upload) until the user clicks Start — idle camera
-  // + reference must not touch the Decart API or leave room for orphan realtime sessions.
+  // Prewarm Decart credentials + reference upload while idle — no realtime session opened.
+  useEffect(() => {
+    if (!accessToken || !selectedFile || !cameraActive || ledgerUnreachable) return;
+    void prewarmReferenceImageUpload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accessToken, selectedFile, cameraActive, ledgerUnreachable, useReferenceBackground]);
 
   const stopLocalVideoStream = () => {
     if (localStreamRef.current) {
@@ -2983,6 +2983,7 @@ export default function App() {
     const previewUrl = URL.createObjectURL(file);
     setImagePreview(previewUrl);
     setStatus("PAYLOAD READY FOR TRANSMISSION");
+    void prewarmReferenceImageUpload();
   };
 
   const getPromptComposeOptions = () => ({
@@ -3049,6 +3050,25 @@ export default function App() {
     }
   };
 
+  const prewarmReferenceImageUpload = async () => {
+    if (!selectedFile || !accessToken || ledgerUnreachable || referenceImageRefId.current) return;
+    if (decartPrewarmRef.current.uploadPromise) return decartPrewarmRef.current.uploadPromise;
+    const run = async () => {
+      const apiKey = await ensureDecartApiKey();
+      if (!apiKey || !selectedFile) return;
+      const client = createDecartClient({ apiKey });
+      await resolveReferenceImage(client);
+    };
+    decartPrewarmRef.current.uploadPromise = run();
+    try {
+      await decartPrewarmRef.current.uploadPromise;
+    } catch (err) {
+      console.warn("[InspireTech] Reference prewarm failed:", err);
+    } finally {
+      decartPrewarmRef.current.uploadPromise = null;
+    }
+  };
+
   const pushDecartState = async (session, sourcePrompt, { force = false } = {}) => {
     if (!session?.isConnected?.()) return;
 
@@ -3084,10 +3104,15 @@ export default function App() {
     });
 
     try {
+      const promptPayload = {
+        text: promptText,
+        enhance: useEnhance,
+        weight: inferenceWeight / 100,
+      };
       if (hasRef) {
-        await session.set({ prompt: promptText, image: imagePayload, enhance: useEnhance });
+        await session.set({ prompt: promptPayload, image: imagePayload });
       } else {
-        await session.set({ prompt: promptText, enhance: useEnhance });
+        await session.set({ prompt: promptPayload });
       }
       decartSetGuardRef.current.lastKey = setKey;
       decartSetGuardRef.current.lastAt = Date.now();
@@ -3441,6 +3466,7 @@ export default function App() {
           prompt: {
             text: connectPrompt,
             enhance: connectEnhance,
+            weight: inferenceWeight / 100,
           },
           ...(referenceImage ? { image: referenceImage } : {}),
           passthrough: false,
