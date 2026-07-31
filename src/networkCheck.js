@@ -5,8 +5,10 @@ export const NETWORK_QUALITY = {
   UNKNOWN: "unknown",
 };
 
-const LATENCY_GOOD_MS = 350;
-const LATENCY_FAIR_MS = 900;
+// Ledger lives on a remote cloud host — international RTT is normal and fine for
+// billing heartbeats. Score from measured server round-trip, not browser guesses.
+const LATENCY_GOOD_MS = 900;
+const LATENCY_FAIR_MS = 2200;
 
 function readConnectionHint() {
   if (typeof navigator === "undefined") return null;
@@ -15,20 +17,16 @@ function readConnectionHint() {
   return {
     effectiveType: conn.effectiveType || "",
     downlinkMbps: Number.isFinite(conn.downlink) ? conn.downlink : null,
-    rttMs: Number.isFinite(conn.rtt) ? conn.rtt : null,
   };
 }
 
 function scoreFromBrowserHint(hint) {
   if (!hint) return null;
   const type = String(hint.effectiveType || "").toLowerCase();
+  // Network Information API often mislabels desktop Wi‑Fi as "3g" — only treat
+  // clearly bad link types as a downgrade signal.
   if (type === "slow-2g" || type === "2g") return NETWORK_QUALITY.POOR;
-  if (type === "3g") return NETWORK_QUALITY.FAIR;
-  if (type === "4g") return NETWORK_QUALITY.GOOD;
-  if (hint.downlinkMbps != null && hint.downlinkMbps < 1.5) return NETWORK_QUALITY.POOR;
-  if (hint.downlinkMbps != null && hint.downlinkMbps < 4) return NETWORK_QUALITY.FAIR;
-  if (hint.rttMs != null && hint.rttMs > LATENCY_FAIR_MS) return NETWORK_QUALITY.POOR;
-  if (hint.rttMs != null && hint.rttMs > LATENCY_GOOD_MS) return NETWORK_QUALITY.FAIR;
+  if (hint.downlinkMbps != null && hint.downlinkMbps < 0.5) return NETWORK_QUALITY.POOR;
   return null;
 }
 
@@ -89,10 +87,11 @@ export async function assessNetworkQuality({ ledgerUrl, headers = {}, timeoutMs 
     }
     const latencyLevel = scoreFromLatency(latencyMs);
     const hintLevel = scoreFromBrowserHint(hint);
+    // Measured server RTT is authoritative; browser hints only flag severe offline links.
     const level =
       latencyLevel === NETWORK_QUALITY.POOR || hintLevel === NETWORK_QUALITY.POOR
         ? NETWORK_QUALITY.POOR
-        : latencyLevel === NETWORK_QUALITY.FAIR || hintLevel === NETWORK_QUALITY.FAIR
+        : latencyLevel === NETWORK_QUALITY.FAIR
           ? NETWORK_QUALITY.FAIR
           : NETWORK_QUALITY.GOOD;
     return {
