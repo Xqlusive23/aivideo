@@ -318,6 +318,10 @@
     white-space: nowrap;
   }
 
+  .live-metric-cell.frozen {
+    color: #94a3b8;
+  }
+
   .active-sync-note {
     margin: 0 0 12px;
     font-size: 11px;
@@ -475,14 +479,21 @@
   function updateActiveSyncNote() {
     if (!activeSyncNote) return;
     const liveCount = activeSnapshot.liveSessions.length;
+    const frozenCount = activeSnapshot.devices.filter(
+      (device) => device.sessionMetrics && !device.sessionMetrics.isLive
+    ).length;
     if (!activeSnapshot.syncedAt) {
       activeSyncNote.textContent = "";
       return;
     }
     const ago = Math.max(0, Math.floor((Date.now() - activeSnapshot.syncedAt) / 1000));
-    activeSyncNote.innerHTML = liveCount
-      ? `<strong>Live time & session credits tick every second.</strong> Server sync ${ago}s ago · auto-refresh every 5s.`
-      : `<strong>Online list</strong> synced ${ago}s ago · auto-refresh every 5s.`;
+    if (liveCount) {
+      activeSyncNote.innerHTML = `<strong>Live time & session credits tick every second.</strong> Server sync ${ago}s ago · auto-refresh every 5s.`;
+    } else if (frozenCount) {
+      activeSyncNote.innerHTML = `<strong>Last session time & credits stay visible until a new transformation starts.</strong> Server sync ${ago}s ago · auto-refresh every 5s.`;
+    } else {
+      activeSyncNote.innerHTML = `<strong>Online list</strong> synced ${ago}s ago · auto-refresh every 5s.`;
+    }
   }
 
   function tickLiveMetrics() {
@@ -788,19 +799,22 @@
         return;
       }
       setMsg(activeMsg, "", "");
+      const devices = data.devices || [];
       activeSnapshot = {
-        devices: data.devices || [],
-        liveSessions: (data.liveSessions || []).map((session) => ({
-          token: session.token,
-          client_id: session.client_id,
-          elapsedSeconds: Number(session.elapsedSeconds) || 0,
-          creditsUsed: Number(session.creditsUsed) || 0,
-        })),
+        devices,
+        liveSessions: devices
+          .filter((device) => device.sessionMetrics?.isLive)
+          .map((device) => ({
+            token: device.token,
+            client_id: device.client_id,
+            elapsedSeconds: Number(device.sessionMetrics.elapsedSeconds) || 0,
+            creditsUsed: Number(device.sessionMetrics.creditsUsed) || 0,
+          })),
         windowSeconds: data.activeWindowSeconds || 90,
         creditsPerSecond: Number(data.creditsPerSecond) || 2.78,
         syncedAt: Date.now(),
       };
-      renderActiveUsers(activeSnapshot.devices, activeSnapshot.liveSessions, activeSnapshot.windowSeconds);
+      renderActiveUsers(activeSnapshot.devices, activeSnapshot.windowSeconds);
       updateActiveSyncNote();
       if (activeSnapshot.liveSessions.length) ensureLiveTicker();
       else stopLiveTicker();
@@ -809,7 +823,7 @@
     }
   }
 
-  function renderActiveUsers(devices, liveSessions, windowSeconds) {
+  function renderActiveUsers(devices, windowSeconds) {
     if (!devices.length) {
       activeTableWrap.innerHTML = `<div class="empty">No one online in the last ${windowSeconds} seconds.</div>`;
       return;
@@ -817,19 +831,20 @@
 
     const rows = devices.map((device) => {
       const token = device.token;
-      const liveSession =
-        liveSessions.find((session) => session.client_id === device.client_id && session.token === token) ||
-        (device.is_transforming ? liveSessions.find((session) => session.token === token) : null);
-      const isLive = Boolean(device.is_transforming || liveSession);
+      const metrics = device.sessionMetrics;
+      const isLive = Boolean(metrics?.isLive);
+      const hasFrozenMetrics = Boolean(metrics && !metrics.isLive);
       const statusBadge = isLive
         ? '<span class="badge transform">Live</span>'
-        : '<span class="badge live">Online</span>';
-      const liveTime = isLive && liveSession ? formatDuration(liveSession.elapsedSeconds) : "—";
+        : hasFrozenMetrics
+          ? '<span class="badge live">Online · last session</span>'
+          : '<span class="badge live">Online</span>';
+      const liveTime = metrics ? formatDuration(metrics.elapsedSeconds) : "—";
       const sessionCredits =
-        isLive && liveSession && Number.isFinite(liveSession.creditsUsed)
-          ? Math.round(liveSession.creditsUsed)
-          : "—";
-      const metricKey = liveSession ? sessionMetricKey(token, liveSession.client_id || device.client_id) : "";
+        metrics && Number.isFinite(metrics.creditsUsed) ? Math.round(metrics.creditsUsed) : "—";
+      const metricKey = isLive ? sessionMetricKey(token, device.client_id) : "";
+      const frozenClass = hasFrozenMetrics ? " frozen" : "";
+      const frozenTitle = hasFrozenMetrics ? ' title="Last session — clears when they start again"' : "";
       const scope = platformScope(device.platform);
       const scopeRevoked = scope === "mobile" ? device.revoked_mobile : scope === "desktop" ? device.revoked_desktop : 0;
       const rowMuted = isRevokedFlag(device.revoked) || isRevokedFlag(scopeRevoked);
@@ -841,8 +856,8 @@
           <td class="token-cell">${renderTokenCell(token)}</td>
           <td>${platformLabel(device.platform)}</td>
           <td>${statusBadge}</td>
-          <td class="live-metric-cell"${metricKey ? ` data-live-time="${escapeHtml(metricKey)}"` : ""}>${liveTime}</td>
-          <td class="live-metric-cell"${metricKey ? ` data-session-credits="${escapeHtml(metricKey)}"` : ""}>${sessionCredits}</td>
+          <td class="live-metric-cell${frozenClass}"${frozenTitle}${metricKey ? ` data-live-time="${escapeHtml(metricKey)}"` : ""}>${liveTime}</td>
+          <td class="live-metric-cell${frozenClass}"${frozenTitle}${metricKey ? ` data-session-credits="${escapeHtml(metricKey)}"` : ""}>${sessionCredits}</td>
           <td>${device.credits}</td>
           <td>${new Date(device.last_seen_at).toLocaleString()}</td>
           <td class="actions-cell">${activeDeviceActions(device, scope, scopeRevoked)}</td>

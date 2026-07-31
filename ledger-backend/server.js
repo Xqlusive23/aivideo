@@ -95,7 +95,8 @@ function decartMintErrorResponse(err) {
   if (status === 401 || status === 403) {
     return {
       status: 503,
-      error: "Decart API key is invalid on the server. Set DECART_API_KEY on the ledger backend.",
+      error:
+        "Decart API key is invalid or expired. Generate a new key at decart.ai and set DECART_API_KEY in ledger-backend/.env (then restart the backend).",
     };
   }
   if (status === 402 || /insufficient|balance|credit/i.test(message)) {
@@ -387,12 +388,30 @@ function creditsToBillSinceLastHeartbeat(session, asOf = new Date(), options = {
 
 function sessionLiveMetrics(session, asOf = new Date()) {
   const started = new Date(session.started_at);
-  const elapsedSeconds = Math.max(0, Math.floor((asOf - started) / 1000));
+  const endInstant = session.ended_at ? new Date(session.ended_at) : asOf;
+  const elapsedSeconds = Math.max(0, Math.floor((endInstant - started) / 1000));
   const pending = session.ended_at
     ? 0
     : creditsToBillSinceLastHeartbeat(session, asOf, { maxCatchUpSeconds: Infinity });
   const creditsUsed = Number(session.credits_used || 0) + pending;
   return { elapsedSeconds, creditsUsed };
+}
+
+function sessionMetricsForDevice(device, liveByClientKey, asOf = new Date()) {
+  const clientKey = device.client_id ? `${device.token}::${device.client_id}` : null;
+  const live = clientKey ? liveByClientKey.get(clientKey) : null;
+  if (live) {
+    return { ...sessionLiveMetrics(live, asOf), isLive: true, sessionId: live.id };
+  }
+  if (device.session_id && !device.is_transforming) {
+    const ended = db
+      .prepare("SELECT * FROM usage_sessions WHERE id = ? AND token = ?")
+      .get(device.session_id, device.token);
+    if (ended?.ended_at) {
+      return { ...sessionLiveMetrics(ended, asOf), isLive: false, sessionId: ended.id };
+    }
+  }
+  return null;
 }
 
 function applySessionBilling(
@@ -716,15 +735,28 @@ app.get("/api/admin/active-users", (req, res) => {
     .all(cutoff);
 
   const now = new Date();
+  const liveByClientKey = new Map();
+  for (const session of liveSessionRows) {
+    if (session.client_id) {
+      liveByClientKey.set(`${session.token}::${session.client_id}`, session);
+    }
+  }
+
   const liveSessions = liveSessionRows.map((session) => ({
     ...session,
     ...sessionLiveMetrics(session, now),
+    isLive: true,
+  }));
+
+  const devicesWithMetrics = devices.map((device) => ({
+    ...device,
+    sessionMetrics: sessionMetricsForDevice(device, liveByClientKey, now),
   }));
 
   res.json({
     activeWindowSeconds: PRESENCE_ACTIVE_SECONDS,
     creditsPerSecond: effectiveCreditsPerSecond(),
-    devices,
+    devices: devicesWithMetrics,
     liveSessions,
   });
 });
@@ -1165,6 +1197,21 @@ app.get("/api/verify/:reference", async (req, res) => {
 function upsertClientPresence({ token, clientId, platform, userAgent, isTransforming, sessionId }) {
   if (!clientId || !platform) return;
   const now = new Date().toISOString();
+  const existing = db
+    .prepare("SELECT session_id FROM client_presence WHERE token = ? AND client_id = ?")
+    .get(token, clientId);
+
+  // Keep the last ended session id on presence until a new transformation starts —
+  // admin can still read final live time / session credits after Stop.
+  let resolvedSessionId = null;
+  if (isTransforming && sessionId) {
+    resolvedSessionId = sessionId;
+  } else if (sessionId) {
+    resolvedSessionId = sessionId;
+  } else if (existing?.session_id) {
+    resolvedSessionId = existing.session_id;
+  }
+
   db.prepare(
     `INSERT INTO client_presence (token, client_id, platform, user_agent, last_seen_at, is_transforming, session_id)
      VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -1181,7 +1228,7 @@ function upsertClientPresence({ token, clientId, platform, userAgent, isTransfor
     userAgent ? String(userAgent).slice(0, 240) : null,
     now,
     isTransforming ? 1 : 0,
-    sessionId || null
+    resolvedSessionId
   );
 }
 
@@ -1298,7 +1345,7 @@ app.post("/api/sessions/:id/end", requireToken, (req, res) => {
       platform,
       userAgent: req.headers["user-agent"] || "",
       isTransforming: false,
-      sessionId: null,
+      sessionId: req.params.id,
     });
   }
 

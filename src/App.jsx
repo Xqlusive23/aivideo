@@ -185,9 +185,10 @@ function drawVideoFrame(ctx, video, destWidth, destHeight, fit = "cover") {
   ctx.drawImage(video, sx, sy, sw, sh, 0, 0, destWidth, destHeight);
 }
 
-const REFERENCE_UPLOAD_MAX_EDGE = 1280;
+const REFERENCE_UPLOAD_MAX_EDGE = 1920;
 const DECART_PREWARM_TTL_MS = 4 * 60 * 1000;
 const DECART_OUTPUT_RESOLUTION = "720p";
+const BILLING_OPEN_FALLBACK_MS = 2500;
 
 async function prepareReferenceImageForUpload(file) {
   if (!file || typeof document === "undefined") return file;
@@ -212,7 +213,7 @@ async function prepareReferenceImageForUpload(file) {
     const ctx = canvas.getContext("2d");
     if (!ctx) return file;
     ctx.drawImage(image, 0, 0, width, height);
-    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.88));
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.92));
     if (!blob) return file;
     const baseName = file.name.replace(/\.[^.]+$/, "") || "reference";
     return new File([blob], `${baseName}.jpg`, { type: "image/jpeg" });
@@ -364,7 +365,7 @@ export default function App() {
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
 
   const [enhanceMask, setEnhanceMask] = useState(true);
-  const [inferenceWeight, setInferenceWeight] = useState(85);
+  const [inferenceWeight, setInferenceWeight] = useState(90);
   const [useReferenceBackground, setUseReferenceBackground] = useState(false);
   const [transformationPrompt, setTransformationPrompt] = useState(DEFAULT_TRANSFORMATION_PROMPT);
   const [promptApplyBusy, setPromptApplyBusy] = useState(false);
@@ -558,6 +559,9 @@ export default function App() {
   const realtimeClientRef = useRef(null);
   const referenceImageRefId = useRef(null);
   const referenceImageSourceRef = useRef(null);
+  const referenceBoundToFileRef = useRef(null);
+  const referenceUploadGenerationRef = useRef(0);
+  const imagePreviewUrlRef = useRef(null);
   const activeScenePromptRef = useRef(null);
   const activeSceneUseRefBackgroundRef = useRef(false);
   const decartSetGuardRef = useRef({ inFlight: false, lastKey: "", lastAt: 0, reconnectAt: 0 });
@@ -573,6 +577,8 @@ export default function App() {
   const decartGenerationSecondsRef = useRef(0);
   const decartSecondsAtBillingStartRef = useRef(0);
   const billingStartInFlightRef = useRef(false);
+  const billingEndInFlightRef = useRef(null);
+  const billingOpenFallbackRef = useRef(null);
   const theaterControlsTimerRef = useRef(null);
   const creditSectionRef = useRef(null);
   const startInProgressRef = useRef(false);
@@ -2729,9 +2735,21 @@ export default function App() {
     }
   };
 
+  const clearBillingOpenFallback = () => {
+    if (billingOpenFallbackRef.current) {
+      clearTimeout(billingOpenFallbackRef.current);
+      billingOpenFallbackRef.current = null;
+    }
+  };
+
+  const waitForBillingEnd = async () => {
+    if (!billingEndInFlightRef.current) return;
+    await billingEndInFlightRef.current.catch(() => {});
+  };
+
   // Opens a server billing session and starts the elapsed clock + heartbeat.
   // Called on the first Decart generationTick — connect/handshake time is not billed.
-  const beginBillingSession = async (decartBaselineSeconds = 0) => {
+  const beginBillingSession = async (_decartBaselineSeconds = 0) => {
     try {
       const res = await fetch(`${LEDGER_URL}/api/sessions/start`, {
         method: "POST",
@@ -2739,7 +2757,7 @@ export default function App() {
         body: JSON.stringify({
           clientId: getClientId(),
           platform: getClientPlatform(),
-          decartBaselineSeconds,
+          decartBaselineSeconds: 0,
         }),
       });
       const data = await res.json();
@@ -2973,17 +2991,31 @@ export default function App() {
     }
   };
 
-  const handleFileChange = (file) => {
-    if (!file) return;
+  const invalidateReferenceCache = () => {
+    referenceUploadGenerationRef.current += 1;
     referenceImageRefId.current = null;
-    referenceImageSourceRef.current = file;
+    referenceBoundToFileRef.current = null;
+    referenceImageSourceRef.current = null;
     preparedReferenceFileRef.current = null;
     decartPrewarmRef.current.uploadPromise = null;
+  };
+
+  const referenceCacheMatchesCurrentFile = () =>
+    Boolean(selectedFile && referenceBoundToFileRef.current === selectedFile && referenceImageRefId.current);
+
+  const handleFileChange = (file) => {
+    if (!file) return;
+    invalidateReferenceCache();
+    referenceImageSourceRef.current = file;
     setSelectedFile(file);
+    if (imagePreviewUrlRef.current) {
+      URL.revokeObjectURL(imagePreviewUrlRef.current);
+    }
     const previewUrl = URL.createObjectURL(file);
+    imagePreviewUrlRef.current = previewUrl;
     setImagePreview(previewUrl);
     setStatus("PAYLOAD READY FOR TRANSMISSION");
-    void prewarmReferenceImageUpload();
+    void prewarmReferenceImageUpload(file);
   };
 
   const getPromptComposeOptions = () => ({
@@ -3018,31 +3050,46 @@ export default function App() {
     return auth.apiKey;
   };
 
-  const getReferenceUploadFile = async () => {
-    if (!selectedFile) return null;
+  const getReferenceUploadFile = async (fileOverride) => {
+    const sourceFile = fileOverride ?? selectedFile;
+    if (!sourceFile) return null;
     if (
       preparedReferenceFileRef.current &&
-      preparedReferenceFileRef.current.source === selectedFile
+      preparedReferenceFileRef.current.source === sourceFile
     ) {
       return preparedReferenceFileRef.current.file;
     }
-    const prepared = await prepareReferenceImageForUpload(selectedFile);
-    preparedReferenceFileRef.current = { source: selectedFile, file: prepared };
-    referenceImageSourceRef.current = prepared;
+    const prepareGeneration = referenceUploadGenerationRef.current;
+    const prepared = await prepareReferenceImageForUpload(sourceFile);
+    if (prepareGeneration !== referenceUploadGenerationRef.current) return prepared;
+    preparedReferenceFileRef.current = { source: sourceFile, file: prepared };
     return prepared;
   };
 
-  const resolveReferenceImage = async (client) => {
-    if (!selectedFile) return null;
-    const uploadFile = await getReferenceUploadFile();
-    if (referenceImageSourceRef.current !== uploadFile) {
-      referenceImageRefId.current = null;
-      referenceImageSourceRef.current = uploadFile;
+  const resolveReferenceImage = async (client, fileOverride) => {
+    const sourceFile = fileOverride ?? selectedFile;
+    if (!sourceFile) return null;
+    const uploadGeneration = referenceUploadGenerationRef.current;
+    const uploadFile = await getReferenceUploadFile(sourceFile);
+    if (uploadGeneration !== referenceUploadGenerationRef.current) {
+      return uploadFile;
     }
-    if (referenceImageRefId.current) return referenceImageRefId.current;
+
+    if (
+      referenceImageRefId.current &&
+      referenceBoundToFileRef.current === sourceFile
+    ) {
+      return referenceImageRefId.current;
+    }
+
     try {
       const uploaded = await client.files.upload(uploadFile, { ttlSeconds: "persistent" });
+      if (uploadGeneration !== referenceUploadGenerationRef.current) {
+        return uploadFile;
+      }
       referenceImageRefId.current = uploaded.id;
+      referenceBoundToFileRef.current = sourceFile;
+      referenceImageSourceRef.current = uploadFile;
       return uploaded.id;
     } catch (err) {
       console.warn("[InspireTech] Reference image upload failed — using inline bytes", err);
@@ -3050,14 +3097,17 @@ export default function App() {
     }
   };
 
-  const prewarmReferenceImageUpload = async () => {
-    if (!selectedFile || !accessToken || ledgerUnreachable || referenceImageRefId.current) return;
+  const prewarmReferenceImageUpload = async (fileOverride) => {
+    const sourceFile = fileOverride ?? selectedFile;
+    if (!sourceFile || !accessToken || ledgerUnreachable) return;
+    if (referenceCacheMatchesCurrentFile() && referenceBoundToFileRef.current === sourceFile) return;
     if (decartPrewarmRef.current.uploadPromise) return decartPrewarmRef.current.uploadPromise;
     const run = async () => {
       const apiKey = await ensureDecartApiKey();
-      if (!apiKey || !selectedFile) return;
+      if (!apiKey || !sourceFile) return;
+      if (referenceBoundToFileRef.current === sourceFile && referenceImageRefId.current) return;
       const client = createDecartClient({ apiKey });
-      await resolveReferenceImage(client);
+      await resolveReferenceImage(client, sourceFile);
     };
     decartPrewarmRef.current.uploadPromise = run();
     try {
@@ -3076,7 +3126,9 @@ export default function App() {
     const composeOptions = getPromptComposeOptions();
     const promptText = composeTransformationPrompt(sourcePrompt, hasRef, composeOptions);
     const useEnhance = getDecartEnhance(sourcePrompt);
-    const imagePayload = hasRef ? referenceImageRefId.current || selectedFile : null;
+    const imagePayload = hasRef
+      ? (referenceCacheMatchesCurrentFile() ? referenceImageRefId.current : null) || selectedFile
+      : null;
     const setKey = `${promptText}|${Boolean(imagePayload)}|${useEnhance}|${composeOptions.useReferenceBackground}`;
     const now = Date.now();
 
@@ -3156,7 +3208,7 @@ export default function App() {
       const billableDecartSeconds = Math.max(0, seconds - decartSecondsAtBillingStartRef.current);
       const ledgerSeconds = sessionCreditsUsedRef.current / EFFECTIVE_CREDITS_PER_SECOND;
       // Ledger bills ~39% above Decart API cost — stop immediately if Decart runs ahead.
-      if (billableDecartSeconds > ledgerSeconds + 3) {
+      if (billableDecartSeconds > ledgerSeconds + 8) {
         console.warn(
           `[InspireTech] Decart generation (${billableDecartSeconds.toFixed(0)}s billable) ahead of ledger (~${ledgerSeconds.toFixed(0)}s) — stopping`
         );
@@ -3290,8 +3342,12 @@ export default function App() {
       }
       return data;
     } catch (err) {
-      if (MY_DECART_KEY && import.meta.env.DEV) {
-        console.warn("[InspireTech] Using local VITE_DECART_API_KEY fallback for dev");
+      const message = String(err?.message || err || "");
+      const ledgerUnreachable =
+        err instanceof TypeError ||
+        /failed to fetch|networkerror|fetch failed|load failed/i.test(message);
+      if (MY_DECART_KEY && import.meta.env.DEV && ledgerUnreachable) {
+        console.warn("[InspireTech] Ledger unreachable in dev — trying VITE_DECART_API_KEY fallback");
         return { apiKey: MY_DECART_KEY, fallback: true };
       }
       throw err;
@@ -3321,6 +3377,8 @@ export default function App() {
       startInProgressRef.current = false;
       return;
     }
+
+    await waitForBillingEnd();
 
     // Pre-check balance only — billing opens on first Decart generation tick.
     const needsAccessCheck = !creditsLoaded || credits <= 0 || !tierAccessLoaded;
@@ -3393,7 +3451,9 @@ export default function App() {
       const hasValidVoiceNow =
         voiceAllowedNow &&
         (voiceEngine === "realtime" ? !!rtcSelectedVoiceId : !!selectedVoiceId);
-      const referenceImagePromise = selectedFile ? resolveReferenceImage(client) : Promise.resolve(null);
+      const referenceImagePromise = selectedFile
+        ? resolveReferenceImage(client, selectedFile)
+        : Promise.resolve(null);
       const voicePromise =
         hasValidVoiceNow && voiceEngine === "realtime"
           ? startRealtimeVoiceCapture(localStreamRef.current)
@@ -3406,13 +3466,14 @@ export default function App() {
         voicePromise,
       ]);
 
-      let streamForDecartFinal = localStreamRef.current;
+      let streamForDecartFinal;
+      const videoTrack = localStreamRef.current.getVideoTracks()[0];
       if (convertedAudioStream) {
-        const videoTrack = localStreamRef.current.getVideoTracks()[0];
         const convertedAudioTrack = convertedAudioStream.getAudioTracks()[0];
         streamForDecartFinal = new MediaStream([videoTrack, convertedAudioTrack].filter(Boolean));
-      } else if (hasValidVoiceNow) {
-        setStatus("VOICE CHANGER UNAVAILABLE — CONTINUING WITH ORIGINAL AUDIO");
+      } else {
+        // Video-only to Decart — mic audio in the stream makes Lucy react to sound as motion.
+        streamForDecartFinal = new MediaStream([videoTrack].filter(Boolean));
       }
 
       const companionAudioStream = convertedAudioStream || localStreamRef.current;
@@ -3476,6 +3537,13 @@ export default function App() {
       wireDecartSession(session);
 
       realtimeClientRef.current = session;
+      clearBillingOpenFallback();
+      billingOpenFallbackRef.current = setTimeout(() => {
+        if (isRunningRef.current && !billingSessionIdRef.current) {
+          console.warn("[InspireTech] Opening billing session (Decart generationTick delayed)");
+          void ensureBillingForGeneration(decartGenerationSecondsRef.current || 0);
+        }
+      }, BILLING_OPEN_FALLBACK_MS);
       if (shouldUseMobileTheater()) {
         void enterOutputTheater({ silent: true, force: true, requireStream: false });
       }
@@ -3515,6 +3583,7 @@ export default function App() {
     activeScenePromptRef.current = null;
     activeSceneUseRefBackgroundRef.current = false;
     decartSetGuardRef.current = { inFlight: false, lastKey: "", lastAt: 0, reconnectAt: 0 };
+    clearBillingOpenFallback();
     const session = realtimeClientRef.current;
     realtimeClientRef.current = null;
     if (session) {
@@ -3533,7 +3602,11 @@ export default function App() {
     decartGenerationSecondsRef.current = 0;
     decartSecondsAtBillingStartRef.current = 0;
     billingStartInFlightRef.current = false;
-    endBillingSession(sessionId);
+    if (sessionId) {
+      billingEndInFlightRef.current = endBillingSession(sessionId).finally(() => {
+        billingEndInFlightRef.current = null;
+      });
+    }
 
     setRunningState(false);
     setStatus((prev) => (prev.startsWith("OUT OF CREDITS") ? prev : "PIPELINE DISCONNECTED"));
@@ -4512,7 +4585,7 @@ export default function App() {
             <div style={styles.canvasTitleGroup} className="itc-canvas-title-group">
               <h2 className="itc-canvas-title">{isMobileWebStudio ? "Live output" : "Output monitor"}</h2>
               {!isMobileWebStudio && (
-                <span className="itc-canvas-subtitle" style={styles.canvasSubtitle}>720p HD Lucy 2.5 output</span>
+                <span className="itc-canvas-subtitle" style={styles.canvasSubtitle}>Enhanced 720p Lucy 2.5 (full quality, scaled to fit)</span>
               )}
             </div>
             <div style={styles.actionRow} className="itc-action-row itc-desktop-action-row">
@@ -4784,7 +4857,8 @@ const styles = {
     height: "100%",
     objectFit: "contain",
     backgroundColor: "#000",
-    filter: "contrast(1.05) saturate(1.03)",
+    filter: "contrast(1.06) saturate(1.05)",
+    transform: "translateZ(0)",
   },
   fittedImage: { width: "100%", height: "100%", objectFit: "contain" },
   canvasOverlay: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", backgroundColor: "rgba(11, 16, 32, 0.94)" },
