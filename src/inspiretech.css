@@ -1850,6 +1850,23 @@ body {
   text-align: center;
 }
 
+.itc-network-hint {
+  margin: 10px 0 0;
+  max-width: 28rem;
+  color: var(--itc-text-muted);
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  text-align: center;
+}
+
+.itc-network-hint.is-fair {
+  color: var(--itc-amber);
+}
+
+.itc-network-hint.is-poor {
+  color: var(--itc-rose);
+}
+
 .itc-mobile-ref-empty {
   padding: 24px 16px;
 }

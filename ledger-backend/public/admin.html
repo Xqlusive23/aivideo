@@ -434,6 +434,15 @@
       .replace(/"/g, "&quot;");
   }
 
+  function formatDuration(totalSeconds) {
+    const seconds = Math.max(0, Math.floor(Number(totalSeconds) || 0));
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = seconds % 60;
+    if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+    return `${m}:${String(s).padStart(2, "0")}`;
+  }
+
   const activeFlash = document.getElementById("activeFlash");
   const usersFlash = document.getElementById("usersFlash");
 
@@ -723,10 +732,18 @@
 
     const rows = devices.map((device) => {
       const token = device.token;
-      const liveSession = liveSessions.find((session) => session.token === token);
-      const statusBadge = device.is_transforming || liveSession
+      const liveSession =
+        liveSessions.find((session) => session.client_id === device.client_id && session.token === token) ||
+        (device.is_transforming ? liveSessions.find((session) => session.token === token) : null);
+      const isLive = Boolean(device.is_transforming || liveSession);
+      const statusBadge = isLive
         ? '<span class="badge transform">Live</span>'
         : '<span class="badge live">Online</span>';
+      const liveTime = isLive && liveSession ? formatDuration(liveSession.elapsedSeconds) : "—";
+      const sessionCredits =
+        isLive && liveSession && Number.isFinite(liveSession.creditsUsed)
+          ? Math.round(liveSession.creditsUsed)
+          : "—";
       const scope = platformScope(device.platform);
       const scopeRevoked = scope === "mobile" ? device.revoked_mobile : scope === "desktop" ? device.revoked_desktop : 0;
       const rowMuted = isRevokedFlag(device.revoked) || isRevokedFlag(scopeRevoked);
@@ -738,6 +755,8 @@
           <td class="token-cell">${renderTokenCell(token)}</td>
           <td>${platformLabel(device.platform)}</td>
           <td>${statusBadge}</td>
+          <td>${liveTime}</td>
+          <td>${sessionCredits}</td>
           <td>${device.credits}</td>
           <td>${new Date(device.last_seen_at).toLocaleString()}</td>
           <td class="actions-cell">${activeDeviceActions(device, scope, scopeRevoked)}</td>
@@ -754,6 +773,8 @@
               <th>Access token</th>
               <th>Device</th>
               <th>Status</th>
+              <th>Live time</th>
+              <th>Session credits</th>
               <th>Credits</th>
               <th>Last seen</th>
               <th>Access</th>

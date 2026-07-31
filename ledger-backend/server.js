@@ -312,12 +312,71 @@ function creditsOwedForTotalElapsed(totalElapsedSeconds) {
   return Math.round(Math.max(0, totalElapsedSeconds) * effectiveCreditsPerSecond());
 }
 
-function creditsToBillForSession(session, asOf = new Date()) {
+// Bill only time since the last heartbeat (not total elapsed minus credits_used).
+// The old total-minus-used approach double-billed when concurrent heartbeats read
+// the same credits_used before either UPDATE landed.
+const HEARTBEAT_MAX_CATCHUP_SECONDS = 15;
+
+function creditsToBillSinceLastHeartbeat(session, asOf = new Date(), { maxCatchUpSeconds = HEARTBEAT_MAX_CATCHUP_SECONDS } = {}) {
+  const lastBeat = new Date(session.last_heartbeat_at || session.started_at);
+  const elapsedSeconds = Math.max(0, (asOf - lastBeat) / 1000);
+  const billableSeconds =
+    maxCatchUpSeconds === Infinity ? elapsedSeconds : Math.min(elapsedSeconds, maxCatchUpSeconds);
+  return creditsOwedForTotalElapsed(billableSeconds);
+}
+
+function sessionLiveMetrics(session, asOf = new Date()) {
   const started = new Date(session.started_at);
-  const totalElapsedSeconds = Math.max(0, (asOf - started) / 1000);
-  const totalOwed = creditsOwedForTotalElapsed(totalElapsedSeconds);
-  const alreadyUsed = Number(session.credits_used || 0);
-  return Math.max(0, totalOwed - alreadyUsed);
+  const elapsedSeconds = Math.max(0, Math.floor((asOf - started) / 1000));
+  const pending = session.ended_at
+    ? 0
+    : creditsToBillSinceLastHeartbeat(session, asOf, { maxCatchUpSeconds: Infinity });
+  const creditsUsed = Number(session.credits_used || 0) + pending;
+  return { elapsedSeconds, creditsUsed };
+}
+
+function applySessionBilling(sessionId, token, asOf = new Date(), { endSession = false, maxCatchUpSeconds } = {}) {
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const session = db
+      .prepare("SELECT * FROM usage_sessions WHERE id = ? AND token = ?")
+      .get(sessionId, token);
+    if (!session) {
+      db.exec("ROLLBACK");
+      return null;
+    }
+    if (session.ended_at) {
+      db.exec("ROLLBACK");
+      return { credits: getBalance(token), alreadyEnded: true, creditsToDeduct: 0, depleted: getBalance(token) <= 0 };
+    }
+
+    const catchUp =
+      maxCatchUpSeconds ??
+      (endSession ? Infinity : HEARTBEAT_MAX_CATCHUP_SECONDS);
+    const creditsToDeduct = creditsToBillSinceLastHeartbeat(session, asOf, {
+      maxCatchUpSeconds: catchUp,
+    });
+    const remaining = adjustBalance(token, -creditsToDeduct);
+    if (creditsToDeduct > 0) {
+      recordTransaction({ token, type: "usage", credits: -creditsToDeduct });
+    }
+
+    if (endSession) {
+      db.prepare(
+        "UPDATE usage_sessions SET ended_at = ?, last_heartbeat_at = ?, credits_used = credits_used + ? WHERE id = ?"
+      ).run(asOf.toISOString(), asOf.toISOString(), creditsToDeduct, sessionId);
+    } else {
+      db.prepare(
+        "UPDATE usage_sessions SET last_heartbeat_at = ?, credits_used = credits_used + ? WHERE id = ?"
+      ).run(asOf.toISOString(), creditsToDeduct, sessionId);
+    }
+
+    db.exec("COMMIT");
+    return { credits: remaining, creditsToDeduct, depleted: remaining <= 0 };
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
 }
 
 function maxLiveSecondsForCredits(credits) {
@@ -578,9 +637,9 @@ app.get("/api/admin/active-users", (req, res) => {
     )
     .all(cutoff);
 
-  const liveSessions = db
+  const liveSessionRows = db
     .prepare(
-      `SELECT s.id, s.token, s.started_at, s.last_heartbeat_at, s.client_platform, s.client_id,
+      `SELECT s.id, s.token, s.started_at, s.last_heartbeat_at, s.credits_used, s.client_platform, s.client_id,
               u.label, u.revoked, u.revoked_mobile, u.revoked_desktop, u.credits
        FROM usage_sessions s
        JOIN users u ON u.token = s.token
@@ -588,6 +647,12 @@ app.get("/api/admin/active-users", (req, res) => {
        ORDER BY s.last_heartbeat_at DESC`
     )
     .all(cutoff);
+
+  const now = new Date();
+  const liveSessions = liveSessionRows.map((session) => ({
+    ...session,
+    ...sessionLiveMetrics(session, now),
+  }));
 
   res.json({
     activeWindowSeconds: PRESENCE_ACTIVE_SECONDS,
@@ -740,6 +805,11 @@ app.delete("/api/admin/tokens/:token", (req, res) => {
 });
 
 // Lightweight access check for frequent client polling (revoke detection).
+// Lightweight ping for client network checks (no auth).
+app.get("/api/health", (_req, res) => {
+  res.json({ ok: true });
+});
+
 app.get("/api/access-check", requireToken, (req, res) => {
   res.json({
     ok: true,
@@ -1055,16 +1125,12 @@ app.post("/api/sessions/start", requireToken, (req, res) => {
     .prepare("SELECT * FROM usage_sessions WHERE token = ? AND ended_at IS NULL")
     .all(req.token);
   for (const session of orphaned) {
-    const now = new Date();
-    const creditsToDeduct = creditsToBillForSession(session, now);
-    adjustBalance(req.token, -creditsToDeduct);
-    if (creditsToDeduct > 0) {
-      recordTransaction({ token: req.token, type: "usage", credits: -creditsToDeduct });
+    const result = applySessionBilling(session.id, req.token, new Date(), { endSession: true });
+    if (result?.creditsToDeduct > 0) {
+      console.warn(
+        `⚠️  Auto-closed an orphaned session (${session.id}) for token ${req.token.slice(0, 8)}... before starting a new one.`
+      );
     }
-    db.prepare(
-      "UPDATE usage_sessions SET ended_at = ?, credits_used = credits_used + ? WHERE id = ?"
-    ).run(now.toISOString(), creditsToDeduct, session.id);
-    console.warn(`⚠️  Auto-closed an orphaned session (${session.id}) for token ${req.token.slice(0, 8)}... before starting a new one.`);
   }
 
   const freshCredits = getBalance(req.token);
@@ -1091,24 +1157,14 @@ app.post("/api/sessions/start", requireToken, (req, res) => {
 });
 
 app.post("/api/sessions/:id/heartbeat", requireToken, (req, res) => {
-  const session = db
-    .prepare("SELECT * FROM usage_sessions WHERE id = ? AND token = ?")
-    .get(req.params.id, req.token);
-  if (!session || session.ended_at) {
+  const now = new Date();
+  const result = applySessionBilling(req.params.id, req.token, now);
+  if (!result) {
     return res.status(404).json({ error: "Session not found or already ended" });
   }
-
-  const now = new Date();
-  const creditsToDeduct = creditsToBillForSession(session, now);
-
-  const remaining = adjustBalance(req.token, -creditsToDeduct);
-  if (creditsToDeduct > 0) {
-    recordTransaction({ token: req.token, type: "usage", credits: -creditsToDeduct });
+  if (result.alreadyEnded) {
+    return res.json({ credits: result.credits, depleted: result.depleted });
   }
-
-  db.prepare(
-    "UPDATE usage_sessions SET last_heartbeat_at = ?, credits_used = credits_used + ? WHERE id = ?"
-  ).run(now.toISOString(), creditsToDeduct, req.params.id);
 
   const { clientId, platform } = req.body || {};
   upsertClientPresence({
@@ -1120,26 +1176,14 @@ app.post("/api/sessions/:id/heartbeat", requireToken, (req, res) => {
     sessionId: req.params.id,
   });
 
-  res.json({ credits: remaining, depleted: remaining <= 0 });
+  res.json({ credits: result.credits, depleted: result.depleted });
 });
 
 app.post("/api/sessions/:id/end", requireToken, (req, res) => {
-  const session = db
-    .prepare("SELECT * FROM usage_sessions WHERE id = ? AND token = ?")
-    .get(req.params.id, req.token);
-  if (!session) return res.status(404).json({ error: "Session not found" });
-  if (session.ended_at) return res.json({ credits: getBalance(req.token) });
-
   const now = new Date();
-  const creditsToDeduct = creditsToBillForSession(session, now);
-  const remaining = adjustBalance(req.token, -creditsToDeduct);
-  if (creditsToDeduct > 0) {
-    recordTransaction({ token: req.token, type: "usage", credits: -creditsToDeduct });
-  }
-
-  db.prepare(
-    "UPDATE usage_sessions SET ended_at = ?, credits_used = credits_used + ? WHERE id = ?"
-  ).run(now.toISOString(), creditsToDeduct, req.params.id);
+  const result = applySessionBilling(req.params.id, req.token, now, { endSession: true });
+  if (!result) return res.status(404).json({ error: "Session not found" });
+  if (result.alreadyEnded) return res.json({ credits: result.credits });
 
   const { clientId, platform } = req.body || {};
   if (clientId) {
@@ -1153,7 +1197,7 @@ app.post("/api/sessions/:id/end", requireToken, (req, res) => {
     });
   }
 
-  res.json({ credits: remaining });
+  res.json({ credits: result.credits });
 });
 
 // --- Decart realtime (short-lived client tokens) -----------------------------

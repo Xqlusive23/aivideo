@@ -24,6 +24,11 @@ import {
   formatLiveTimeFromCredits,
 } from "./pricing.js";
 import { checkForNewerShellRelease } from "./shellUpdate.js";
+import {
+  assessNetworkQuality,
+  NETWORK_QUALITY,
+  networkQualityLabel,
+} from "./networkCheck.js";
 
 const { colors: c, gradients: g, fonts: f, radius: r, shadow: s } = theme;
 const fd = f.display;
@@ -219,10 +224,15 @@ async function prepareReferenceImageForUpload(file) {
 }
 
 const DEFAULT_TRANSFORMATION_PROMPT =
-  "Substitute the character in the video with the person in the reference image, matching their full appearance exactly as shown in the reference — including clothing, outfit, hat, hair, skin tone, and body shape.";
-const CHARACTER_WITH_REF_PROMPT = DEFAULT_TRANSFORMATION_PROMPT;
+  "Substitute only the primary foreground person in the live video with the person shown in the reference image, matching their full appearance exactly as shown in the reference — including clothing, outfit, hat, hair, skin tone, and body shape.";
+const SINGLE_SUBJECT_CLAUSE =
+  " Apply the transformation to exactly one person — the main subject closest to the camera — and leave every other person in the scene completely unchanged.";
+const REFERENCE_IDENTITY_CLAUSE =
+  " Use the reference image for all identity and outfit details; the live camera provides motion and expression only — do not copy clothing or appearance from the live webcam feed.";
+const CHARACTER_WITH_REF_PROMPT =
+  `${DEFAULT_TRANSFORMATION_PROMPT}${SINGLE_SUBJECT_CLAUSE}${REFERENCE_IDENTITY_CLAUSE}`;
 const CHARACTER_SWAP_PATTERN =
-  /substitute the character|replace the character|transform into this character|person in the reference image|character from the reference image|with this character/i;
+  /substitute the character|substitute only the primary|replace the character|transform into this character|person in the reference image|character from the reference image|with this character|primary foreground person/i;
 const BACKGROUND_INTENT_PATTERN =
   /background|office|beach|studio|city|skyline|environment|room|setting|scene|backdrop|interior|outdoor|setup/i;
 const DEFAULT_BACKGROUND_PROMPT =
@@ -516,6 +526,13 @@ export default function App() {
   const [backgroundChangerAccess, setBackgroundChangerAccess] = useState(false);
   const [tierAccessLoaded, setTierAccessLoaded] = useState(false);
   const [ledgerUnreachable, setLedgerUnreachable] = useState(false);
+  const [networkQuality, setNetworkQuality] = useState({
+    level: NETWORK_QUALITY.UNKNOWN,
+    latencyMs: null,
+    message: "Checking connection…",
+    checkedAt: 0,
+  });
+  const [networkChecked, setNetworkChecked] = useState(false);
   const [sessionCreditsUsed, setSessionCreditsUsed] = useState(0);
   const [showAddCredits, setShowAddCredits] = useState(false);
   const [isPoppedOut, setIsPoppedOut] = useState(false);
@@ -551,7 +568,9 @@ export default function App() {
   const billingSessionIdRef = useRef(null);
   const billingCreditsStartRef = useRef(0);
   const creditsRef = useRef(0);
+  const sessionCreditsUsedRef = useRef(0);
   const heartbeatFailCountRef = useRef(0);
+  const heartbeatInFlightRef = useRef(false);
   const decartGenerationSecondsRef = useRef(0);
   const theaterControlsTimerRef = useRef(null);
   const creditSectionRef = useRef(null);
@@ -1034,8 +1053,13 @@ export default function App() {
   // the ledger stops deducting — end the session and disconnect on page hide.
   useEffect(() => {
     const cleanupLiveSession = () => {
+      clearHeartbeat();
+      clearClockTimer();
       const sessionId = billingSessionIdRef.current;
       const token = accessToken;
+      billingSessionIdRef.current = null;
+      billingCreditsStartRef.current = 0;
+      sessionCreditsUsedRef.current = 0;
       if (sessionId && token) {
         fetch(`${LEDGER_URL}/api/sessions/${sessionId}/end`, {
           method: "POST",
@@ -1050,7 +1074,6 @@ export default function App() {
           }),
           keepalive: true,
         }).catch(() => {});
-        billingSessionIdRef.current = null;
       }
       const decartSession = realtimeClientRef.current;
       if (decartSession) {
@@ -1376,6 +1399,26 @@ export default function App() {
       window.removeEventListener("focus", onFocus);
     };
   }, [accessToken, isRunning]);
+
+  useEffect(() => {
+    if (!accessToken || !sessionReady || isRunning) return undefined;
+
+    let cancelled = false;
+    const probeNetwork = async () => {
+      const result = await assessNetworkQuality({ ledgerUrl: LEDGER_URL, headers: authHeaders() });
+      if (!cancelled) {
+        setNetworkQuality(result);
+        setNetworkChecked(true);
+      }
+    };
+
+    probeNetwork();
+    const interval = setInterval(probeNetwork, 15000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [accessToken, sessionReady, isRunning]);
 
   // Voice changer (1,000+) and background changer (2,000+) are tier-gated separately.
   useEffect(() => {
@@ -2056,6 +2099,7 @@ export default function App() {
 
   const refreshBalance = async (tokenOverride) => {
     if (accessCheckPausedRef.current) return;
+    if (billingSessionIdRef.current || isRunningRef.current) return;
     const token = normalizeAccessToken(tokenOverride ?? accessToken);
     if (!token) return;
     try {
@@ -2754,9 +2798,20 @@ export default function App() {
   const startHeartbeat = (sessionId) => {
     clearHeartbeat();
     setSessionCreditsUsed(0);
-    const startedAtCredits = credits;
+    sessionCreditsUsedRef.current = 0;
+    const startedAtCredits = creditsRef.current;
+
+    const scheduleNext = () => {
+      heartbeatTimerRef.current = setTimeout(sendHeartbeat, HEARTBEAT_INTERVAL_MS);
+    };
 
     const sendHeartbeat = async () => {
+      if (billingSessionIdRef.current !== sessionId) return;
+      if (heartbeatInFlightRef.current) {
+        scheduleNext();
+        return;
+      }
+      heartbeatInFlightRef.current = true;
       try {
         const res = await fetch(`${LEDGER_URL}/api/sessions/${sessionId}/heartbeat`, {
           method: "POST",
@@ -2783,7 +2838,9 @@ export default function App() {
         heartbeatFailCountRef.current = 0;
         const data = await res.json();
         setCredits(data.credits);
-        setSessionCreditsUsed(Math.max(0, startedAtCredits - data.credits));
+        const used = Math.max(0, startedAtCredits - data.credits);
+        sessionCreditsUsedRef.current = used;
+        setSessionCreditsUsed(used);
 
         if (data.depleted) {
           clearHeartbeat();
@@ -2798,18 +2855,21 @@ export default function App() {
           setStatus("LEDGER UNREACHABLE — STOPPING LIVE SESSION");
           stopTransformation();
         }
+      } finally {
+        heartbeatInFlightRef.current = false;
+        if (billingSessionIdRef.current === sessionId) scheduleNext();
       }
     };
 
-    heartbeatTimerRef.current = setInterval(sendHeartbeat, HEARTBEAT_INTERVAL_MS);
     void sendHeartbeat();
   };
 
   const clearHeartbeat = () => {
     if (heartbeatTimerRef.current) {
-      clearInterval(heartbeatTimerRef.current);
+      clearTimeout(heartbeatTimerRef.current);
       heartbeatTimerRef.current = null;
     }
+    heartbeatInFlightRef.current = false;
   };
 
   const formatTime = (totalSeconds) => {
@@ -3083,10 +3143,9 @@ export default function App() {
 
       if (!billingSessionIdRef.current) return;
 
-      const ledgerCreditsUsed = Math.max(0, billingCreditsStartRef.current - creditsRef.current);
-      const ledgerSeconds = ledgerCreditsUsed / EFFECTIVE_CREDITS_PER_SECOND;
-      // User billing starts on Start click; Decart bills per generation second — stop if Decart runs ahead.
-      if (seconds > ledgerSeconds + 3) {
+      const ledgerSeconds = sessionCreditsUsedRef.current / EFFECTIVE_CREDITS_PER_SECOND;
+      // Heartbeat is the billing source of truth while live — allow slack for network bursts (e.g. PiP/OBS focus changes).
+      if (seconds > ledgerSeconds + 8) {
         console.warn(
           `[InspireTech] Decart generation (${seconds}s) ahead of ledger (~${ledgerSeconds.toFixed(0)}s) — stopping`
         );
@@ -3241,6 +3300,11 @@ export default function App() {
     }
     if (ledgerUnreachable) {
       setStatus("LEDGER BACKEND UNREACHABLE — CHECK IT'S RUNNING");
+      startInProgressRef.current = false;
+      return;
+    }
+    if (networkChecked && networkQuality.level === NETWORK_QUALITY.POOR) {
+      setStatus("WEAK NETWORK — FIX CONNECTION BEFORE STARTING");
       startInProgressRef.current = false;
       return;
     }
@@ -3460,6 +3524,7 @@ export default function App() {
     const sessionId = billingSessionIdRef.current;
     billingSessionIdRef.current = null;
     billingCreditsStartRef.current = 0;
+    sessionCreditsUsedRef.current = 0;
     heartbeatFailCountRef.current = 0;
     decartGenerationSecondsRef.current = 0;
     endBillingSession(sessionId);
@@ -3644,6 +3709,17 @@ export default function App() {
 
   const creditPercent = Math.min(100, (credits / 500) * 100);
   const isLowCredit = credits <= LOW_CREDIT_THRESHOLD;
+  const weakNetwork = networkChecked && networkQuality.level === NETWORK_QUALITY.POOR;
+  const startBlocked =
+    isRunning || !selectedFile || credits <= 0 || ledgerUnreachable || weakNetwork;
+  const networkChipTone =
+    networkQuality.level === NETWORK_QUALITY.GOOD
+      ? " is-live"
+      : networkQuality.level === NETWORK_QUALITY.FAIR
+        ? " is-warn"
+        : networkQuality.level === NETWORK_QUALITY.POOR
+          ? " is-danger"
+          : "";
   const companionSectionClass = (section) => {
     if (!companionToolbar) return "";
     if (COMPANION_STUDIO_SECTIONS.has(section)) {
@@ -3660,6 +3736,12 @@ export default function App() {
             <span className="itc-status-chip-label">Status</span>
             <span className={`itc-status-chip-value${isRunning ? " is-live" : ""}`} style={!isRunning ? { color: c.amber } : undefined}>
               {formatStatusDisplay(status)}
+            </span>
+          </div>
+          <div className="itc-status-chip">
+            <span className="itc-status-chip-label">Network</span>
+            <span className={`itc-status-chip-value${networkChipTone}`} title={networkQuality.message}>
+              {networkChecked ? networkQualityLabel(networkQuality.level) : "…"}
             </span>
           </div>
           <div className="itc-status-chip">
@@ -3695,6 +3777,17 @@ export default function App() {
         <span className="itc-status-chip-label">Session</span>
         <span className="itc-status-chip-value itc-mono">
           {isRunning ? formatTime(elapsedSeconds) : "00:00"}
+        </span>
+      </div>
+      <div className="itc-status-chip">
+        <span className="itc-status-chip-label">Network</span>
+        <span
+          className={`itc-status-chip-value itc-mono${networkChipTone}`}
+          title={networkQuality.message}
+        >
+          {networkChecked
+            ? `${networkQualityLabel(networkQuality.level)}${Number.isFinite(networkQuality.latencyMs) ? ` · ${Math.round(networkQuality.latencyMs)} ms` : ""}`
+            : "…"}
         </span>
       </div>
       <div className="itc-status-chip">
@@ -3861,6 +3954,15 @@ export default function App() {
                   {!cameraActive && (
                     <p className="itc-mobile-setup-hint">Allow camera access when your browser asks.</p>
                   )}
+                  {networkChecked && !isRunning && (
+                    <p
+                      className={`itc-mobile-setup-hint itc-network-hint${
+                        weakNetwork ? " is-poor" : networkQuality.level === NETWORK_QUALITY.FAIR ? " is-fair" : ""
+                      }`}
+                    >
+                      {networkQuality.message}
+                    </p>
+                  )}
                   {!isRunning && (
                     <div className="itc-mobile-setup-background">
                       {renderPromptDock()}
@@ -3929,6 +4031,8 @@ export default function App() {
             <div style={styles.paramsLockedNote}>
               {isRunning
                 ? "Camera locked while live — stop transformation to switch"
+                : weakNetwork
+                ? networkQuality.message
                 : cameraActive
                 ? "Change the dropdowns to switch camera or mic instantly."
                 : "Pick devices, then click Start Hardware Camera. Names appear after permission is granted."}
@@ -4334,10 +4438,11 @@ export default function App() {
             </div>
             <div style={styles.actionRow} className="itc-action-row itc-desktop-action-row">
               <button
-                style={{...styles.actionButton, ...styles.startButton, opacity: (isRunning || !selectedFile || credits <= 0 || ledgerUnreachable) ? 0.5 : 1}}
+                style={{...styles.actionButton, ...styles.startButton, opacity: startBlocked ? 0.5 : 1}}
                 className="itc-btn itc-btn-start"
                 onClick={startTransformation}
-                disabled={isRunning || !selectedFile || credits <= 0 || ledgerUnreachable}
+                disabled={startBlocked}
+                title={weakNetwork ? networkQuality.message : undefined}
               >
                 Start transformation
               </button>
@@ -4420,10 +4525,15 @@ export default function App() {
                     <div style={styles.overlaySubtext}>
                       {credits <= 0 && creditsLoaded
                         ? "Add credits to continue."
+                        : weakNetwork
+                        ? networkQuality.message
                         : isMobileWebStudio
                         ? "Choose a photo and turn on your camera, then tap Go live."
                         : "Upload a reference image, start your camera, then hit Start transformation."}
                     </div>
+                    {networkChecked && !weakNetwork && networkQuality.level === NETWORK_QUALITY.FAIR && (
+                      <p className="itc-network-hint is-fair">{networkQuality.message}</p>
+                    )}
                   </div>
                 )}
               </div>
@@ -4470,7 +4580,8 @@ export default function App() {
             type="button"
             className="itc-btn itc-btn-start"
             onClick={startTransformation}
-            disabled={isRunning || !selectedFile || credits <= 0 || ledgerUnreachable}
+            disabled={startBlocked}
+            title={weakNetwork ? networkQuality.message : undefined}
           >
             {isMobileWebStudio ? "Go live" : "Start"}
           </button>
