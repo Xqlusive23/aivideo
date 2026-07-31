@@ -572,6 +572,8 @@ export default function App() {
   const heartbeatFailCountRef = useRef(0);
   const heartbeatInFlightRef = useRef(false);
   const decartGenerationSecondsRef = useRef(0);
+  const decartSecondsAtBillingStartRef = useRef(0);
+  const billingStartInFlightRef = useRef(false);
   const theaterControlsTimerRef = useRef(null);
   const creditSectionRef = useRef(null);
   const startInProgressRef = useRef(false);
@@ -1057,9 +1059,13 @@ export default function App() {
       clearClockTimer();
       const sessionId = billingSessionIdRef.current;
       const token = accessToken;
+      const decartSeconds = decartGenerationSecondsRef.current;
       billingSessionIdRef.current = null;
       billingCreditsStartRef.current = 0;
       sessionCreditsUsedRef.current = 0;
+      decartGenerationSecondsRef.current = 0;
+      decartSecondsAtBillingStartRef.current = 0;
+      billingStartInFlightRef.current = false;
       if (sessionId && token) {
         fetch(`${LEDGER_URL}/api/sessions/${sessionId}/end`, {
           method: "POST",
@@ -1071,6 +1077,7 @@ export default function App() {
           body: JSON.stringify({
             clientId: getClientId(),
             platform: getClientPlatform(),
+            decartGenerationSeconds: decartSeconds,
           }),
           keepalive: true,
         }).catch(() => {});
@@ -2745,9 +2752,8 @@ export default function App() {
   };
 
   // Opens a server billing session and starts the elapsed clock + heartbeat.
-  // Called as soon as the user clicks Start — before Decart connect — so user
-  // credits always lead Decart generation billing ($0.02/sec at 720p).
-  const beginBillingSession = async () => {
+  // Called on the first Decart generationTick — connect/handshake time is not billed.
+  const beginBillingSession = async (decartBaselineSeconds = 0) => {
     try {
       const res = await fetch(`${LEDGER_URL}/api/sessions/start`, {
         method: "POST",
@@ -2755,6 +2761,7 @@ export default function App() {
         body: JSON.stringify({
           clientId: getClientId(),
           platform: getClientPlatform(),
+          decartBaselineSeconds,
         }),
       });
       const data = await res.json();
@@ -2780,7 +2787,6 @@ export default function App() {
       billingSessionIdRef.current = data.sessionId;
       billingCreditsStartRef.current = data.credits;
       heartbeatFailCountRef.current = 0;
-      decartGenerationSecondsRef.current = 0;
       setCredits(data.credits);
       startClockTimer();
       startHeartbeat(data.sessionId);
@@ -2790,6 +2796,22 @@ export default function App() {
       setStatus("LEDGER BACKEND UNREACHABLE — CHECK IT'S RUNNING");
       setLedgerUnreachable(true);
       return false;
+    }
+  };
+
+  const ensureBillingForGeneration = async (decartSeconds) => {
+    if (billingSessionIdRef.current || billingStartInFlightRef.current) return;
+    billingStartInFlightRef.current = true;
+    try {
+      const ok = await beginBillingSession(decartSeconds);
+      if (!ok) {
+        stopTransformation();
+        return;
+      }
+      decartSecondsAtBillingStartRef.current = decartSeconds;
+      setStatus("COMPUTE LINK ONLINE // REALTIME TRANSFORMATION TERMINAL");
+    } finally {
+      billingStartInFlightRef.current = false;
     }
   };
 
@@ -2807,10 +2829,7 @@ export default function App() {
 
     const sendHeartbeat = async () => {
       if (billingSessionIdRef.current !== sessionId) return;
-      if (heartbeatInFlightRef.current) {
-        scheduleNext();
-        return;
-      }
+      if (heartbeatInFlightRef.current) return;
       heartbeatInFlightRef.current = true;
       try {
         const res = await fetch(`${LEDGER_URL}/api/sessions/${sessionId}/heartbeat`, {
@@ -2819,6 +2838,7 @@ export default function App() {
           body: JSON.stringify({
             clientId: getClientId(),
             platform: getClientPlatform(),
+            decartGenerationSeconds: decartGenerationSecondsRef.current,
           }),
         });
         if (res.status === 401) {
@@ -3140,14 +3160,16 @@ export default function App() {
 
     session.on("generationTick", ({ seconds }) => {
       decartGenerationSecondsRef.current = seconds;
+      void ensureBillingForGeneration(seconds);
 
       if (!billingSessionIdRef.current) return;
 
+      const billableDecartSeconds = Math.max(0, seconds - decartSecondsAtBillingStartRef.current);
       const ledgerSeconds = sessionCreditsUsedRef.current / EFFECTIVE_CREDITS_PER_SECOND;
-      // Heartbeat is the billing source of truth while live — allow slack for network bursts (e.g. PiP/OBS focus changes).
-      if (seconds > ledgerSeconds + 8) {
+      // Ledger bills ~39% above Decart API cost — stop immediately if Decart runs ahead.
+      if (billableDecartSeconds > ledgerSeconds + 3) {
         console.warn(
-          `[InspireTech] Decart generation (${seconds}s) ahead of ledger (~${ledgerSeconds.toFixed(0)}s) — stopping`
+          `[InspireTech] Decart generation (${billableDecartSeconds.toFixed(0)}s billable) ahead of ledger (~${ledgerSeconds.toFixed(0)}s) — stopping`
         );
         setStatus("BILLING SYNC LOST — LIVE SESSION STOPPED");
         stopTransformation();
@@ -3207,6 +3229,8 @@ export default function App() {
     billingSessionIdRef.current = null;
     billingCreditsStartRef.current = 0;
     decartGenerationSecondsRef.current = 0;
+    decartSecondsAtBillingStartRef.current = 0;
+    billingStartInFlightRef.current = false;
     endBillingSession(sid);
     stopActiveVoicePipeline();
   };
@@ -3309,7 +3333,7 @@ export default function App() {
       return;
     }
 
-    // Pre-check balance only — billing session opens when Decart is actually live.
+    // Pre-check balance only — billing opens on first Decart generation tick.
     const needsAccessCheck = !creditsLoaded || credits <= 0 || !tierAccessLoaded;
     if (needsAccessCheck) {
       try {
@@ -3357,22 +3381,12 @@ export default function App() {
     billingSessionIdRef.current = null;
     setRunningState(true);
     startInProgressRef.current = false;
-
-    const billingOk = await beginBillingSession();
-    if (!billingOk) {
-      setRunningState(false);
-      return;
-    }
-
     setStatus("HANDSHAKING WITH DECART WEBRTC CLUSTER...");
 
     try {
       const apiKey = await ensureDecartApiKey();
       if (!apiKey) {
         setRunningState(false);
-        const sid = billingSessionIdRef.current;
-        billingSessionIdRef.current = null;
-        if (sid) void endBillingSession(sid);
         return;
       }
 
@@ -3472,7 +3486,6 @@ export default function App() {
       wireDecartSession(session);
 
       realtimeClientRef.current = session;
-      setStatus("COMPUTE LINK ONLINE // REALTIME TRANSFORMATION TERMINAL");
       if (shouldUseMobileTheater()) {
         void enterOutputTheater({ silent: true, force: true, requireStream: false });
       }
@@ -3498,6 +3511,7 @@ export default function App() {
         body: JSON.stringify({
           clientId: getClientId(),
           platform: getClientPlatform(),
+          decartGenerationSeconds: decartGenerationSecondsRef.current,
         }),
       });
       const data = await res.json();
@@ -3527,6 +3541,8 @@ export default function App() {
     sessionCreditsUsedRef.current = 0;
     heartbeatFailCountRef.current = 0;
     decartGenerationSecondsRef.current = 0;
+    decartSecondsAtBillingStartRef.current = 0;
+    billingStartInFlightRef.current = false;
     endBillingSession(sessionId);
 
     setRunningState(false);
@@ -4084,13 +4100,13 @@ export default function App() {
                       <div style={{...styles.creditBarFill, width: `${creditPercent}%`, backgroundColor: isLowCredit ? c.rose : c.primary}} />
                     </div>
                     <div style={styles.creditMeta}>
-                      <span>~{DISPLAY_CREDITS_PER_SECOND} credits/sec while live (billed from Start)</span>
+                      <span>~{DISPLAY_CREDITS_PER_SECOND} credits/sec while live (billed when output starts)</span>
                       {isRunning && <span>Used this session: {sessionCreditsUsed} ({formatUsdFromCredits(sessionCreditsUsed)})</span>}
                     </div>
                   </>
                 )}
                 {isMobileWebStudio && isRunning && (
-                  <p className="itc-mobile-setup-hint">~{DISPLAY_CREDITS_PER_SECOND} credits/sec from the moment you tap Start.</p>
+                  <p className="itc-mobile-setup-hint">~{DISPLAY_CREDITS_PER_SECOND} credits/sec once live output begins.</p>
                 )}
               </>
             )}

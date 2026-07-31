@@ -38,8 +38,8 @@ const ALLOWED_ORIGINS = new Set(
 );
 const CREDITS_PER_SECOND = Number(process.env.CREDITS_PER_SECOND || 2);
 // Decart API cost per second — keep in sync with src/pricing.js DECART_CREDITS_PER_SECOND.
-// 500 credits = 3 min 32 sec (212 s); ~75 credit margin vs Decart at 2/sec (+15 vs prior 220 s anchor).
-const LIVE_SECONDS_PER_500_CREDITS = Number(process.env.LIVE_SECONDS_PER_500_CREDITS || 212);
+// 500 credits = 3 min (180 s); ~39% margin vs Decart at 2/sec — keeps API cost below user credits.
+const LIVE_SECONDS_PER_500_CREDITS = Number(process.env.LIVE_SECONDS_PER_500_CREDITS || 180);
 const BILLING_MULTIPLIER = Number(
   process.env.BILLING_MULTIPLIER ||
     500 / LIVE_SECONDS_PER_500_CREDITS / CREDITS_PER_SECOND
@@ -231,6 +231,7 @@ try {
   ensureColumn("usage_sessions", "token", "TEXT DEFAULT ''");
   ensureColumn("usage_sessions", "client_platform", "TEXT DEFAULT ''");
   ensureColumn("usage_sessions", "client_id", "TEXT DEFAULT ''");
+  ensureColumn("usage_sessions", "last_decart_seconds", "REAL NOT NULL DEFAULT 0");
   // Lets you cut off a customer's access without deleting their history —
   // a revoked token keeps its balance/transactions on record, it just can't
   // be used to start sessions, buy credits, or check balance anymore.
@@ -312,16 +313,39 @@ function creditsOwedForTotalElapsed(totalElapsedSeconds) {
   return Math.round(Math.max(0, totalElapsedSeconds) * effectiveCreditsPerSecond());
 }
 
-// Bill only time since the last heartbeat (not total elapsed minus credits_used).
-// The old total-minus-used approach double-billed when concurrent heartbeats read
-// the same credits_used before either UPDATE landed.
-const HEARTBEAT_MAX_CATCHUP_SECONDS = 15;
+// Bill only time since the last heartbeat. Prefer Decart generation seconds from the
+// client when provided so user credits track Decart API usage 1:1 (+ margin).
+const HEARTBEAT_MAX_CATCHUP_SECONDS = 30;
 
-function creditsToBillSinceLastHeartbeat(session, asOf = new Date(), { maxCatchUpSeconds = HEARTBEAT_MAX_CATCHUP_SECONDS } = {}) {
+function billableSecondsForTick(
+  session,
+  asOf = new Date(),
+  { maxCatchUpSeconds = HEARTBEAT_MAX_CATCHUP_SECONDS, decartGenerationSeconds = null } = {}
+) {
   const lastBeat = new Date(session.last_heartbeat_at || session.started_at);
-  const elapsedSeconds = Math.max(0, (asOf - lastBeat) / 1000);
+  const wallSeconds = Math.max(0, (asOf - lastBeat) / 1000);
+  const lastDecart = Number(session.last_decart_seconds || 0);
+  let rawSeconds = wallSeconds;
+  let nextDecartSeconds = lastDecart;
+
+  if (Number.isFinite(decartGenerationSeconds) && decartGenerationSeconds >= 0) {
+    if (decartGenerationSeconds + 0.001 < lastDecart) {
+      // Decart counter reset after reconnect — realign baseline; wall clock covers this tick.
+      nextDecartSeconds = decartGenerationSeconds;
+    } else {
+      const decartDelta = Math.max(0, decartGenerationSeconds - lastDecart);
+      rawSeconds = Math.max(wallSeconds, decartDelta);
+      nextDecartSeconds = decartGenerationSeconds;
+    }
+  }
+
   const billableSeconds =
-    maxCatchUpSeconds === Infinity ? elapsedSeconds : Math.min(elapsedSeconds, maxCatchUpSeconds);
+    maxCatchUpSeconds === Infinity ? rawSeconds : Math.min(rawSeconds, maxCatchUpSeconds);
+  return { billableSeconds, nextDecartSeconds };
+}
+
+function creditsToBillSinceLastHeartbeat(session, asOf = new Date(), options = {}) {
+  const { billableSeconds } = billableSecondsForTick(session, asOf, options);
   return creditsOwedForTotalElapsed(billableSeconds);
 }
 
@@ -335,7 +359,12 @@ function sessionLiveMetrics(session, asOf = new Date()) {
   return { elapsedSeconds, creditsUsed };
 }
 
-function applySessionBilling(sessionId, token, asOf = new Date(), { endSession = false, maxCatchUpSeconds } = {}) {
+function applySessionBilling(
+  sessionId,
+  token,
+  asOf = new Date(),
+  { endSession = false, maxCatchUpSeconds, decartGenerationSeconds = null } = {}
+) {
   db.exec("BEGIN IMMEDIATE");
   try {
     const session = db
@@ -353,9 +382,11 @@ function applySessionBilling(sessionId, token, asOf = new Date(), { endSession =
     const catchUp =
       maxCatchUpSeconds ??
       (endSession ? Infinity : HEARTBEAT_MAX_CATCHUP_SECONDS);
-    const creditsToDeduct = creditsToBillSinceLastHeartbeat(session, asOf, {
+    const { billableSeconds, nextDecartSeconds } = billableSecondsForTick(session, asOf, {
       maxCatchUpSeconds: catchUp,
+      decartGenerationSeconds,
     });
+    const creditsToDeduct = creditsOwedForTotalElapsed(billableSeconds);
     const remaining = adjustBalance(token, -creditsToDeduct);
     if (creditsToDeduct > 0) {
       recordTransaction({ token, type: "usage", credits: -creditsToDeduct });
@@ -363,12 +394,12 @@ function applySessionBilling(sessionId, token, asOf = new Date(), { endSession =
 
     if (endSession) {
       db.prepare(
-        "UPDATE usage_sessions SET ended_at = ?, last_heartbeat_at = ?, credits_used = credits_used + ? WHERE id = ?"
-      ).run(asOf.toISOString(), asOf.toISOString(), creditsToDeduct, sessionId);
+        "UPDATE usage_sessions SET ended_at = ?, last_heartbeat_at = ?, last_decart_seconds = ?, credits_used = credits_used + ? WHERE id = ?"
+      ).run(asOf.toISOString(), asOf.toISOString(), nextDecartSeconds, creditsToDeduct, sessionId);
     } else {
       db.prepare(
-        "UPDATE usage_sessions SET last_heartbeat_at = ?, credits_used = credits_used + ? WHERE id = ?"
-      ).run(asOf.toISOString(), creditsToDeduct, sessionId);
+        "UPDATE usage_sessions SET last_heartbeat_at = ?, last_decart_seconds = ?, credits_used = credits_used + ? WHERE id = ?"
+      ).run(asOf.toISOString(), nextDecartSeconds, creditsToDeduct, sessionId);
     }
 
     db.exec("COMMIT");
@@ -1140,11 +1171,14 @@ app.post("/api/sessions/start", requireToken, (req, res) => {
 
   const id = randomUUID();
   const now = new Date().toISOString();
-  const { clientId, platform } = req.body || {};
+  const { clientId, platform, decartBaselineSeconds } = req.body || {};
+  const decartBaseline = Number.isFinite(Number(decartBaselineSeconds))
+    ? Math.max(0, Number(decartBaselineSeconds))
+    : 0;
   const userAgent = req.headers["user-agent"] || "";
   db.prepare(
-    "INSERT INTO usage_sessions (id, token, started_at, last_heartbeat_at, client_platform, client_id) VALUES (?, ?, ?, ?, ?, ?)"
-  ).run(id, req.token, now, now, platform || null, clientId || null);
+    "INSERT INTO usage_sessions (id, token, started_at, last_heartbeat_at, client_platform, client_id, last_decart_seconds) VALUES (?, ?, ?, ?, ?, ?, ?)"
+  ).run(id, req.token, now, now, platform || null, clientId || null, decartBaseline);
   upsertClientPresence({
     token: req.token,
     clientId,
@@ -1158,7 +1192,11 @@ app.post("/api/sessions/start", requireToken, (req, res) => {
 
 app.post("/api/sessions/:id/heartbeat", requireToken, (req, res) => {
   const now = new Date();
-  const result = applySessionBilling(req.params.id, req.token, now);
+  const { decartGenerationSeconds } = req.body || {};
+  const decartSeconds = Number.isFinite(Number(decartGenerationSeconds))
+    ? Math.max(0, Number(decartGenerationSeconds))
+    : null;
+  const result = applySessionBilling(req.params.id, req.token, now, { decartGenerationSeconds: decartSeconds });
   if (!result) {
     return res.status(404).json({ error: "Session not found or already ended" });
   }
@@ -1181,7 +1219,14 @@ app.post("/api/sessions/:id/heartbeat", requireToken, (req, res) => {
 
 app.post("/api/sessions/:id/end", requireToken, (req, res) => {
   const now = new Date();
-  const result = applySessionBilling(req.params.id, req.token, now, { endSession: true });
+  const { decartGenerationSeconds } = req.body || {};
+  const decartSeconds = Number.isFinite(Number(decartGenerationSeconds))
+    ? Math.max(0, Number(decartGenerationSeconds))
+    : null;
+  const result = applySessionBilling(req.params.id, req.token, now, {
+    endSession: true,
+    decartGenerationSeconds: decartSeconds,
+  });
   if (!result) return res.status(404).json({ error: "Session not found" });
   if (result.alreadyEnded) return res.json({ credits: result.credits });
 
