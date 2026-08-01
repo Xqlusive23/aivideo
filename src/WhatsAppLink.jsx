@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { WHATSAPP_NUMBER } from "./siteConfig.js";
+import { WHATSAPP_NUMBER, WHATSAPP_NUMBERS } from "./siteConfig.js";
 import {
   buildWhatsAppDeepLink,
   buildWhatsAppUrl,
@@ -14,9 +14,9 @@ export default function WhatsAppLink({
   children,
   showFallback = true,
 }) {
-  const [copied, setCopied] = useState(false);
+  const [copiedNumber, setCopiedNumber] = useState("");
   const href = buildWhatsAppUrl(message) || "#";
-  const displayNumber = formatWhatsAppDisplay(WHATSAPP_NUMBER);
+  const contactNumbers = WHATSAPP_NUMBERS.length ? WHATSAPP_NUMBERS : WHATSAPP_NUMBER ? [WHATSAPP_NUMBER] : [];
 
   const openWhatsApp = (event) => {
     if (!buildWhatsAppUrl(message)) {
@@ -34,14 +34,14 @@ export default function WhatsAppLink({
     // Desktop: api.whatsapp.com opens WhatsApp Web when available.
   };
 
-  const handleCopy = async (event) => {
+  const handleCopy = async (event, number) => {
     event.preventDefault();
     event.stopPropagation();
     try {
-      const ok = await copyWhatsAppNumber();
+      const ok = await copyWhatsAppNumber(number);
       if (!ok) return;
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 2000);
+      setCopiedNumber(number);
+      window.setTimeout(() => setCopiedNumber(""), 2000);
     } catch {
       // ignore
     }
@@ -58,13 +58,28 @@ export default function WhatsAppLink({
       >
         {children}
       </a>
-      {showFallback && displayNumber && (
+      {showFallback && contactNumbers.length > 0 && (
         <p className="itc-whatsapp-fallback">
-          Or save{" "}
-          <button type="button" className="itc-whatsapp-copy" onClick={handleCopy}>
-            {displayNumber}
-          </button>{" "}
-          {copied ? "copied — paste in WhatsApp" : "to contacts, then message us there"}
+          Or message{" "}
+          {contactNumbers.map((number, index) => {
+            const displayNumber = formatWhatsAppDisplay(number);
+            const chatUrl = buildWhatsAppUrl(message, number);
+            return (
+              <React.Fragment key={number}>
+                {index > 0 ? " or " : ""}
+                {chatUrl ? (
+                  <a href={chatUrl} target="_blank" rel="noopener noreferrer" className="itc-whatsapp-copy">
+                    {displayNumber}
+                  </a>
+                ) : (
+                  <button type="button" className="itc-whatsapp-copy" onClick={(event) => handleCopy(event, number)}>
+                    {displayNumber}
+                  </button>
+                )}
+              </React.Fragment>
+            );
+          })}
+          {copiedNumber ? " — copied" : ""}
         </p>
       )}
     </div>
