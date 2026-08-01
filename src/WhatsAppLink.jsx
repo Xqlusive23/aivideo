@@ -47,8 +47,10 @@ export default function WhatsAppLink({
     }
   };
 
+  const isButtonLayout = /\bitc-btn\b/.test(className);
+
   return (
-    <div className="itc-whatsapp-contact">
+    <div className={`itc-whatsapp-contact${isButtonLayout ? " itc-whatsapp-contact-btn" : ""}`}>
       <a
         href={href}
         target="_blank"
@@ -59,27 +61,29 @@ export default function WhatsAppLink({
         {children}
       </a>
       {showFallback && contactNumbers.length > 0 && (
-        <p className="itc-whatsapp-fallback">
-          Or message{" "}
-          {contactNumbers.map((number, index) => {
-            const displayNumber = formatWhatsAppDisplay(number);
-            const chatUrl = buildWhatsAppUrl(message, number);
-            return (
-              <React.Fragment key={number}>
-                {index > 0 ? " or " : ""}
-                {chatUrl ? (
-                  <a href={chatUrl} target="_blank" rel="noopener noreferrer" className="itc-whatsapp-copy">
-                    {displayNumber}
-                  </a>
-                ) : (
-                  <button type="button" className="itc-whatsapp-copy" onClick={(event) => handleCopy(event, number)}>
-                    {displayNumber}
-                  </button>
-                )}
-              </React.Fragment>
-            );
-          })}
-          {copiedNumber ? " — copied" : ""}
+        <p className={`itc-whatsapp-fallback${isButtonLayout ? " itc-whatsapp-fallback-stack" : ""}`}>
+          <span className="itc-whatsapp-fallback-label">Or message</span>
+          <span className="itc-whatsapp-fallback-numbers">
+            {contactNumbers.map((number, index) => {
+              const displayNumber = formatWhatsAppDisplay(number);
+              const chatUrl = buildWhatsAppUrl(message, number);
+              return (
+                <React.Fragment key={number}>
+                  {index > 0 ? <span className="itc-whatsapp-fallback-sep">or</span> : null}
+                  {chatUrl ? (
+                    <a href={chatUrl} target="_blank" rel="noopener noreferrer" className="itc-whatsapp-copy">
+                      {displayNumber}
+                    </a>
+                  ) : (
+                    <button type="button" className="itc-whatsapp-copy" onClick={(event) => handleCopy(event, number)}>
+                      {displayNumber}
+                    </button>
+                  )}
+                </React.Fragment>
+              );
+            })}
+            {copiedNumber ? <span className="itc-whatsapp-fallback-copied"> — copied</span> : null}
+          </span>
         </p>
       )}
     </div>

@@ -832,6 +832,20 @@ body {
   margin-top: 18px;
 }
 
+.itc-whatsapp-contact-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  margin-top: 16px;
+  width: 100%;
+  max-width: 360px;
+}
+
+.itc-whatsapp-contact-btn > .itc-btn {
+  width: 100%;
+}
+
 .itc-whatsapp-contact .itc-access-whatsapp {
   margin-top: 0;
 }
@@ -844,7 +858,43 @@ body {
   color: var(--itc-text-muted);
 }
 
+.itc-whatsapp-fallback-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  width: 100%;
+}
+
+.itc-whatsapp-fallback-stack .itc-whatsapp-fallback-label {
+  display: block;
+}
+
+.itc-whatsapp-fallback:not(.itc-whatsapp-fallback-stack) .itc-whatsapp-fallback-label::after {
+  content: " ";
+}
+
+.itc-whatsapp-fallback-numbers {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 4px 8px;
+}
+
+.itc-whatsapp-fallback-sep {
+  color: var(--itc-text-muted);
+  font-weight: 500;
+}
+
+.itc-whatsapp-fallback-copied {
+  color: var(--itc-emerald);
+  font-weight: 600;
+}
+
 .itc-whatsapp-copy {
+  display: inline;
   border: none;
   background: none;
   padding: 0;
@@ -854,6 +904,7 @@ body {
   cursor: pointer;
   text-decoration: underline;
   text-underline-offset: 2px;
+  white-space: nowrap;
 }
 
 .itc-landing-footer-link {
