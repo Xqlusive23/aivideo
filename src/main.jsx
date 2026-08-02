@@ -5,6 +5,7 @@ import "./index.css";
 import "./inspiretech.css";
 import LandingPage from "./LandingPage.jsx";
 import App from "./App.jsx";
+import LiveChatInit from "./LiveChatInit.jsx";
 
 function isCompanionApp() {
   return typeof window !== "undefined" && Boolean(window.inspiretechCompanion?.isDesktop);
@@ -24,6 +25,7 @@ function DefaultRedirect() {
 createRoot(document.getElementById("root")).render(
   <StrictMode>
     <HashRouter>
+      <LiveChatInit />
       <Routes>
         <Route path="/" element={<LandingRoute />} />
         <Route path="/app" element={<App />} />

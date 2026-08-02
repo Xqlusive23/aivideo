@@ -21,6 +21,8 @@ import {
   getPricingTierFeatures,
 } from "./pricing.js";
 import WhatsAppLink from "./WhatsAppLink.jsx";
+import ContactSupport from "./ContactSupport.jsx";
+import { isLiveChatEnabled, openLiveChat } from "./liveChat.js";
 
 function WindowsIcon() {
   return (
@@ -341,13 +343,13 @@ export default function LandingPage() {
             <p className="itc-landing-section-lead">
               InspireTech is invite-only. Request an access token — we'll create your account and send you a personal token to paste below or in the studio.
             </p>
-            <WhatsAppLink
-              message={WHATSAPP_ACCESS_REQUEST_MESSAGE}
-              className="itc-btn itc-btn-primary"
-              showFallback
-            >
-              Request access on WhatsApp
-            </WhatsAppLink>
+            <ContactSupport
+              whatsappMessage={WHATSAPP_ACCESS_REQUEST_MESSAGE}
+              chatMessage={WHATSAPP_ACCESS_REQUEST_MESSAGE}
+              chatLabel="Request access — live chat"
+              whatsappLabel="Request access on WhatsApp"
+              layout="landing"
+            />
             <p className="itc-landing-fine-print">
               Already received a token? Enter it on the right to open the studio instantly.
             </p>
@@ -396,9 +398,20 @@ export default function LandingPage() {
 
       <footer className="itc-landing-footer">
         <span>© {new Date().getFullYear()} {SITE_NAME}</span>
-        <WhatsAppLink message={WHATSAPP_ACCESS_REQUEST_MESSAGE} className="itc-landing-footer-link" showFallback={false}>
-          Contact on WhatsApp
-        </WhatsAppLink>
+        <span className="itc-landing-footer-links">
+          {isLiveChatEnabled() ? (
+            <button
+              type="button"
+              className="itc-landing-footer-link itc-landing-footer-btn"
+              onClick={() => openLiveChat(WHATSAPP_ACCESS_REQUEST_MESSAGE)}
+            >
+              Live chat
+            </button>
+          ) : null}
+          <WhatsAppLink message={WHATSAPP_ACCESS_REQUEST_MESSAGE} className="itc-landing-footer-link" showFallback={false}>
+            WhatsApp
+          </WhatsAppLink>
+        </span>
       </footer>
     </div>
   );

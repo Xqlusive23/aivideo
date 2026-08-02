@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { WHATSAPP_DEFAULT_MESSAGE } from "./siteConfig";
 import { LogoLockup } from "./Logo.jsx";
 import WhatsAppLink from "./WhatsAppLink.jsx";
+import { isLiveChatEnabled, openLiveChat } from "./liveChat.js";
 
 export default function AccessGate({
   onAuthenticated,
@@ -91,8 +92,17 @@ export default function AccessGate({
               : "Continue & install camera"
             : "Open Studio"}
         </button>
+        {isLiveChatEnabled() ? (
+          <button
+            type="button"
+            className="itc-access-livechat"
+            onClick={() => openLiveChat(WHATSAPP_DEFAULT_MESSAGE)}
+          >
+            Live chat — need help?
+          </button>
+        ) : null}
         <WhatsAppLink message={WHATSAPP_DEFAULT_MESSAGE}>
-          💬 Need help? Message us on WhatsApp
+          💬 Or message us on WhatsApp
         </WhatsAppLink>
         {!embedded && !companionMode && (
           <Link to="/" className="itc-access-back">

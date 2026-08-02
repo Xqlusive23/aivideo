@@ -54,6 +54,12 @@ export const WHATSAPP_DEFAULT_MESSAGE = "Hi, I need help getting access to Inspi
 export const WHATSAPP_ACCESS_REQUEST_MESSAGE =
   "Hi, I'd like to request access to InspireTech. Please send me an access token.";
 
+/** Tawk.to widget IDs — from embed URL https://embed.tawk.to/PROPERTY_ID/WIDGET_ID */
+export const TAWK_PROPERTY_ID = String(
+  import.meta.env?.VITE_TAWK_PROPERTY_ID || "6a6f1bd63d515d1d445ae8d0"
+).trim();
+export const TAWK_WIDGET_ID = String(import.meta.env?.VITE_TAWK_WIDGET_ID || "1jv109gb2").trim();
+
 export const WINDOWS_DOWNLOAD_FALLBACK =
   "https://github.com/Xqlusive23/aivideo/releases/download/v0.3.23/InspireTech.Setup.0.3.23.exe";
 

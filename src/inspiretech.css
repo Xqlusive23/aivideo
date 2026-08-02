@@ -917,6 +917,66 @@ body {
   text-decoration: underline;
 }
 
+.itc-landing-footer-links {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.itc-landing-footer-btn {
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+}
+
+.itc-contact-support-landing {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  max-width: 360px;
+  margin-top: 16px;
+}
+
+.itc-contact-support-landing .itc-contact-chat-btn {
+  width: 100%;
+}
+
+.itc-contact-support-landing .itc-whatsapp-contact-btn {
+  width: 100%;
+  max-width: none;
+  margin-top: 0;
+}
+
+.itc-contact-support-landing .itc-whatsapp-contact-btn > .itc-btn {
+  width: 100%;
+}
+
+.itc-access-livechat {
+  display: block;
+  width: 100%;
+  margin-top: 14px;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--itc-primary);
+  cursor: pointer;
+  text-align: center;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.itc-access-livechat:hover {
+  color: var(--itc-cyan);
+}
+
 .itc-access-back {
   display: block;
   text-align: center;
