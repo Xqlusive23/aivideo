@@ -2749,7 +2749,8 @@ export default function App() {
 
   // Opens a server billing session and starts the elapsed clock + heartbeat.
   // Called on the first Decart generationTick — connect/handshake time is not billed.
-  const beginBillingSession = async (_decartBaselineSeconds = 0) => {
+  const beginBillingSession = async (decartBaselineSeconds = 0) => {
+    const decartBaseline = Math.max(0, Number(decartBaselineSeconds) || 0);
     try {
       const res = await fetch(`${LEDGER_URL}/api/sessions/start`, {
         method: "POST",
@@ -2757,7 +2758,7 @@ export default function App() {
         body: JSON.stringify({
           clientId: getClientId(),
           platform: getClientPlatform(),
-          decartBaselineSeconds: 0,
+          decartBaselineSeconds: decartBaseline,
         }),
       });
       const data = await res.json();

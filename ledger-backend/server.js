@@ -39,11 +39,20 @@ const ALLOWED_ORIGINS = new Set(
 const CREDITS_PER_SECOND = Number(process.env.CREDITS_PER_SECOND || 2);
 // Decart API cost per second — keep in sync with src/pricing.js DECART_CREDITS_PER_SECOND.
 // 500 credits = 3 min (180 s); ~39% margin vs Decart at 2/sec — keeps API cost below user credits.
-const LIVE_SECONDS_PER_500_CREDITS = Number(process.env.LIVE_SECONDS_PER_500_CREDITS || 180);
-const BILLING_MULTIPLIER = Number(
-  process.env.BILLING_MULTIPLIER ||
-    500 / LIVE_SECONDS_PER_500_CREDITS / CREDITS_PER_SECOND
+const LIVE_SECONDS_PER_500_CREDITS = Math.min(
+  300,
+  Math.max(120, Number(process.env.LIVE_SECONDS_PER_500_CREDITS || 180))
 );
+// Always derive from the 500-credit anchor — a stale BILLING_MULTIPLIER env (e.g. 5 → 10 credits/s) caused overbilling.
+const BILLING_MULTIPLIER = 500 / LIVE_SECONDS_PER_500_CREDITS / CREDITS_PER_SECOND;
+if (process.env.BILLING_MULTIPLIER) {
+  const envMultiplier = Number(process.env.BILLING_MULTIPLIER);
+  if (Number.isFinite(envMultiplier) && Math.abs(envMultiplier - BILLING_MULTIPLIER) > 0.05) {
+    console.warn(
+      `⚠️  Ignoring BILLING_MULTIPLIER=${process.env.BILLING_MULTIPLIER} — using anchor value ${BILLING_MULTIPLIER.toFixed(3)} (${(CREDITS_PER_SECOND * BILLING_MULTIPLIER).toFixed(2)} credits/s)`
+    );
+  }
+}
 const PRESENCE_ACTIVE_SECONDS = 90; // admin "online now" window
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY || "";
 const ADMIN_SECRET = process.env.ADMIN_SECRET || "";
@@ -350,9 +359,10 @@ function creditsOwedForTotalElapsed(totalElapsedSeconds) {
   return Math.round(Math.max(0, totalElapsedSeconds) * effectiveCreditsPerSecond());
 }
 
-// Bill only time since the last heartbeat. Prefer Decart generation seconds from the
-// client when provided so user credits track Decart API usage 1:1 (+ margin).
-const HEARTBEAT_MAX_CATCHUP_SECONDS = 30;
+// Bill only wall-clock time since the last heartbeat. Decart generation seconds are
+// tracked for client sync guards — using max(wall, decartDelta) overbilled when Decart's
+// tick counter runs faster than real time (users saw ~10 credits/s instead of ~3).
+const HEARTBEAT_MAX_CATCHUP_SECONDS = 10;
 
 function billableSecondsForTick(
   session,
@@ -370,8 +380,6 @@ function billableSecondsForTick(
       // Decart counter reset after reconnect — realign baseline; wall clock covers this tick.
       nextDecartSeconds = decartGenerationSeconds;
     } else {
-      const decartDelta = Math.max(0, decartGenerationSeconds - lastDecart);
-      rawSeconds = Math.max(wallSeconds, decartDelta);
       nextDecartSeconds = decartGenerationSeconds;
     }
   }
@@ -1411,4 +1419,7 @@ app.post("/api/decart/realtime-token", requireToken, async (req, res) => {
 app.listen(PORT, () => {
   console.log(`Credit ledger backend listening on http://localhost:${PORT}`);
   console.log(`Admin page: http://localhost:${PORT}/admin.html`);
+  console.log(
+    `Billing: ${effectiveCreditsPerSecond().toFixed(2)} credits/s (500 credits ≈ ${Math.round(LIVE_SECONDS_PER_500_CREDITS / 60)} min live)`
+  );
 });
