@@ -16,7 +16,6 @@ import {
   TOP_UP_OPTIONS,
   formatCredits,
   formatLiveTimePerMonth,
-  formatNaira,
   formatUsdFromNaira,
   getPricingTierFeatures,
 } from "./pricing.js";
@@ -128,7 +127,7 @@ const FEATURES = [
   {
     icon: "💳",
     title: "Pay-as-you-go credits",
-    body: "Usage is metered per second while live. Top up via Paystack when you need more time — prices shown in USD, checkout in Nigerian Naira.",
+    body: "Usage is metered per second while live. Top up via Paystack when you need more time — prices shown in USD.",
   },
 ];
 
@@ -248,7 +247,7 @@ export default function LandingPage() {
         <p className="itc-landing-section-lead">
           Credits are used while your live transformation is running — {DISPLAY_CREDITS_PER_SECOND} credits
           per second ({DISPLAY_CREDITS_PER_SECOND * 60} credits per minute). Top up in the studio after you
-          have access; Paystack checkout charges Nigerian Naira (international cards accepted).
+          have access.
         </p>
         <div className="itc-landing-pricing-row">
           {TOP_UP_OPTIONS.map((tier) => (
@@ -263,7 +262,6 @@ export default function LandingPage() {
                   {formatUsdFromNaira(tier.naira)}
                   <span className="itc-landing-pricing-period"> / month</span>
                 </p>
-                <p className="itc-landing-pricing-naira">{formatNaira(tier.naira)} via Paystack</p>
                 <p className="itc-landing-pricing-time">{formatLiveTimePerMonth(tier.credits)}</p>
               </div>
               <ul className="itc-landing-pricing-features">
@@ -311,8 +309,7 @@ export default function LandingPage() {
       <section id="payments" className="itc-landing-section">
         <h2 className="itc-landing-section-title">Payments worldwide</h2>
         <p className="itc-landing-section-lead">
-          InspireTech uses Paystack for credit top-ups. USD prices above are for reference; checkout always
-          shows the exact Naira amount.
+          InspireTech uses Paystack for credit top-ups. International cards are accepted worldwide.
         </p>
         <ul className="itc-landing-download-list">
           <li><strong>Outside Nigeria:</strong> pay with international Visa or Mastercard — your bank converts at their rate.</li>
