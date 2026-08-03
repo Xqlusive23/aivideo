@@ -127,7 +127,7 @@ const FEATURES = [
   {
     icon: "💳",
     title: "Pay-as-you-go credits",
-    body: "Usage is metered per second while live. Top up via Paystack when you need more time — prices shown in USD.",
+    body: "Usage is metered per second while live. Top up via Flutterwave when you need more time — prices shown in USD.",
   },
 ];
 
@@ -144,6 +144,15 @@ export default function LandingPage() {
   const [gateLoading, setGateLoading] = useState(false);
   const [gateError, setGateError] = useState("");
   const [navOpen, setNavOpen] = useState(false);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const txRef = params.get("tx_ref") || params.get("reference");
+    const paymentStatus = params.get("status");
+    if (txRef || paymentStatus || params.get("checkout") === "success") {
+      navigate(`/app?${params.toString()}`, { replace: true });
+    }
+  }, [navigate]);
 
   const handleAuthenticated = async (token) => {
     setGateLoading(true);
@@ -309,11 +318,11 @@ export default function LandingPage() {
       <section id="payments" className="itc-landing-section">
         <h2 className="itc-landing-section-title">Payments worldwide</h2>
         <p className="itc-landing-section-lead">
-          InspireTech uses Paystack for credit top-ups. International cards are accepted worldwide.
+          InspireTech uses Flutterwave for credit top-ups. Pay with card, mobile money, or bank transfer across Africa.
         </p>
         <ul className="itc-landing-download-list">
-          <li><strong>Outside Nigeria:</strong> pay with international Visa or Mastercard — your bank converts at their rate.</li>
-          <li><strong>In Nigeria:</strong> card, bank transfer, and USSD are supported on the same checkout.</li>
+          <li><strong>Across Africa:</strong> cards, mobile money (M-Pesa, MTN MoMo, etc.), and bank transfer where supported.</li>
+          <li><strong>International:</strong> Visa and Mastercard accepted on the same checkout.</li>
           <li><strong>Credits:</strong> added to your account automatically after payment succeeds.</li>
         </ul>
         <p className="itc-landing-fine-print">

@@ -766,22 +766,29 @@ export default function App() {
     setMirrorLocalPreview(false);
   };
 
-  // --- Fetch the real balance on load, and handle returning from Paystack Checkout ---
+  // --- Fetch the real balance on load, and handle returning from Flutterwave Checkout ---
   useEffect(() => {
     if (!accessToken || !sessionReady) return;
     refreshBalance();
 
-    const params = new URLSearchParams(window.location.search);
+    const hashQuery = window.location.hash.includes("?")
+      ? window.location.hash.slice(window.location.hash.indexOf("?") + 1)
+      : "";
+    const params = new URLSearchParams(window.location.search || hashQuery);
     const checkoutResult = params.get("checkout");
-    const reference = params.get("reference") || params.get("trxref"); // Paystack appends one or both of these
+    const paymentStatus = params.get("status");
+    const reference =
+      params.get("tx_ref") || params.get("reference") || params.get("trxref");
+    const transactionId = params.get("transaction_id");
 
-    if (checkoutResult || reference) {
-      window.history.replaceState({}, "", window.location.pathname);
+    if (checkoutResult || reference || paymentStatus) {
+      const cleanPath = window.location.pathname + window.location.hash.split("?")[0];
+      window.history.replaceState({}, "", cleanPath);
 
-      if (checkoutResult === "success" && reference) {
+      if ((checkoutResult === "success" || paymentStatus === "successful") && reference) {
         setStatus("PAYMENT RECEIVED — VERIFYING...");
-        verifyPurchase(reference);
-      } else if (checkoutResult === "cancel") {
+        verifyPurchase(reference, transactionId);
+      } else if (checkoutResult === "cancel" || paymentStatus === "cancelled") {
         setStatus("CHECKOUT CANCELLED");
       }
     }
@@ -2121,11 +2128,12 @@ export default function App() {
   };
 
   // Note: verify-on-return intentionally does NOT send the token header — the
-  // backend recovers it from the Paystack transaction's own metadata instead,
+  // backend recovers it from the Flutterwave transaction meta instead,
   // since this fires right after a browser redirect (no custom headers there).
-  const verifyPurchase = async (reference) => {
+  const verifyPurchase = async (reference, transactionId) => {
     try {
-      const res = await fetch(`${LEDGER_URL}/api/verify/${encodeURIComponent(reference)}`);
+      const query = transactionId ? `?transaction_id=${encodeURIComponent(transactionId)}` : "";
+      const res = await fetch(`${LEDGER_URL}/api/verify/${encodeURIComponent(reference)}${query}`);
       const data = await res.json();
       if (!res.ok) {
         setStatus(`PAYMENT VERIFICATION FAILED: ${data.error || "unknown error"}`);
@@ -3820,7 +3828,7 @@ export default function App() {
       }
       const data = await res.json();
       if (!res.ok || !data.url) throw new Error(data.error || "Checkout failed");
-      window.location.href = data.url; // real Paystack Checkout page
+      window.location.href = data.url;
     } catch (err) {
       console.error("Checkout error:", err);
       setStatus(`CHECKOUT ERROR: ${err.message}`);
@@ -4420,7 +4428,7 @@ export default function App() {
             <div style={styles.checkoutContactBlock}>
               <div style={styles.checkoutContactTitle}>Contact for this payment</div>
               <p style={styles.checkoutContactHint}>
-                Paystack requires your real email and phone on every transaction.
+                Flutterwave requires your real email and phone on every transaction.
               </p>
               <input
                 type="email"
@@ -4469,8 +4477,8 @@ export default function App() {
             </div>
             <div style={styles.modalNote}>
               {isMobileWebStudio
-                ? "Charged in naira via Paystack."
-                : `USD is approximate (₦${DISPLAY_NAIRA_PER_USD.toLocaleString()} ≈ $1). Paystack Checkout charges the exact naira amount (e.g. ₦22,400).`}
+                ? "Pay with card, mobile money, or bank transfer via Flutterwave."
+                : "Checkout via Flutterwave — cards, mobile money, and bank transfer across Africa. Prices shown in USD."}
             </div>
           </div>
           </div>

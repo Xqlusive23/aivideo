@@ -54,7 +54,10 @@ if (process.env.BILLING_MULTIPLIER) {
   }
 }
 const PRESENCE_ACTIVE_SECONDS = 90; // admin "online now" window
-const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY || "";
+const FLUTTERWAVE_SECRET_KEY = (process.env.FLUTTERWAVE_SECRET_KEY || "").trim();
+const FLUTTERWAVE_WEBHOOK_HASH = (process.env.FLUTTERWAVE_WEBHOOK_HASH || "").trim();
+const CHECKOUT_CURRENCY = String(process.env.FLUTTERWAVE_CURRENCY || "USD").trim().toUpperCase();
+const NAIRA_PER_DOLLAR = 1600;
 const ADMIN_SECRET = process.env.ADMIN_SECRET || "";
 const DECART_API_KEY = (process.env.DECART_API_KEY || "").trim();
 
@@ -159,8 +162,10 @@ function mintRtcTicket(token) {
 // forwarded to ElevenLabs, not stored.
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
-if (!PAYSTACK_SECRET_KEY) {
-  console.warn("\n⚠️  PAYSTACK_SECRET_KEY is not set — checkout will fail until you add it to .env\n");
+if (!FLUTTERWAVE_SECRET_KEY) {
+  console.warn(
+    "\n⚠️  FLUTTERWAVE_SECRET_KEY is not set — checkout will fail until you add it to .env\n"
+  );
 }
 if (!ADMIN_SECRET) {
   console.warn("⚠️  ADMIN_SECRET is not set — anyone could mint themselves a token. Set this before deploying.\n");
@@ -498,13 +503,14 @@ function hasProcessedReference(reference) {
   return Boolean(row);
 }
 
-// Credits a successful Paystack transaction exactly once. The token being
+// Credits a successful Flutterwave transaction exactly once. The token being
 // credited comes from the metadata attached at checkout time, NOT from
 // whoever happens to be calling this — that's what makes it safe to call
 // from both the webhook and the verify-on-return endpoint.
-function creditFromPaystackTransaction(data) {
-  const reference = data.reference;
-  const token = data.metadata?.token;
+function creditFromFlutterwaveTransaction(data) {
+  const reference = data.tx_ref;
+  const meta = data.meta || {};
+  const token = meta.token || meta.access_token;
   const user = token ? getUser(token) : null;
 
   if (!user) {
@@ -519,14 +525,49 @@ function creditFromPaystackTransaction(data) {
     return { credits: getBalance(token), alreadyProcessed: true, ...tierPayload(token) };
   }
 
-  const credits = Number(data.metadata?.credits || 0);
-  const amountNgn = (data.amount || 0) / 100; // Paystack amounts are in kobo
+  const credits = Number(meta.credits || 0);
+  const chargedAmount = Number(data.amount || data.charged_amount || 0);
+  const currency = String(data.currency || CHECKOUT_CURRENCY).toUpperCase();
+  const amountNgn =
+    currency === "NGN"
+      ? chargedAmount
+      : currency === "USD"
+        ? chargedAmount * NAIRA_PER_DOLLAR
+        : null;
   if (credits > 0) {
     const newBalance = adjustBalance(token, credits);
     recordTransaction({ token, type: "purchase", credits, amount_ngn: amountNgn, provider_reference: reference });
-    console.log(`✅ Credited ${credits} credits (balance now ${newBalance}) for token ${token.slice(0, 8)}... ref ${reference}`);
+    console.log(
+      `✅ Credited ${credits} credits (balance now ${newBalance}) for token ${token.slice(0, 8)}... ref ${reference}`
+    );
   }
   return { credits: getBalance(token), alreadyProcessed: false, ...tierPayload(token) };
+}
+
+async function verifyFlutterwaveTransaction({ txRef, transactionId }) {
+  const headers = {
+    Authorization: `Bearer ${FLUTTERWAVE_SECRET_KEY}`,
+    "Content-Type": "application/json",
+  };
+  let verifyRes;
+  if (transactionId) {
+    verifyRes = await fetch(`https://api.flutterwave.com/v3/transactions/${transactionId}/verify`, { headers });
+  } else if (txRef) {
+    verifyRes = await fetch(
+      `https://api.flutterwave.com/v3/transactions/verify_by_reference?tx_ref=${encodeURIComponent(txRef)}`,
+      { headers }
+    );
+  } else {
+    throw new Error("Missing transaction reference");
+  }
+  const payload = await verifyRes.json();
+  if (payload.status !== "success" || !payload.data) {
+    throw new Error(payload.message || "Flutterwave verification failed");
+  }
+  if (payload.data.status !== "successful") {
+    throw new Error("Payment not verified as successful");
+  }
+  return payload.data;
 }
 
 // --- Middleware -------------------------------------------------------------
@@ -541,25 +582,31 @@ app.use(cors({
   },
 }));
 
-// Paystack webhooks need the RAW body for signature verification, so this
-// route must be registered BEFORE the global express.json() middleware.
-app.post("/api/webhooks/paystack", express.raw({ type: "application/json" }), (req, res) => {
-  const signature = req.headers["x-paystack-signature"];
-  const computedHash = crypto
-    .createHmac("sha512", PAYSTACK_SECRET_KEY)
-    .update(req.body)
-    .digest("hex");
-
-  if (!signature || computedHash !== signature) {
-    console.error("Paystack webhook signature verification failed");
-    return res.status(401).json({ error: "Invalid signature" });
+// Flutterwave webhooks need the RAW body; register before express.json().
+app.post("/api/webhooks/flutterwave", express.raw({ type: "application/json" }), async (req, res) => {
+  if (FLUTTERWAVE_WEBHOOK_HASH) {
+    const signature = req.headers["verif-hash"];
+    if (!signature || signature !== FLUTTERWAVE_WEBHOOK_HASH) {
+      console.error("Flutterwave webhook signature verification failed");
+      return res.status(401).json({ error: "Invalid signature" });
+    }
   }
 
-  const event = JSON.parse(req.body.toString("utf8"));
-  if (event.event === "charge.success") {
-    creditFromPaystackTransaction(event.data);
+  try {
+    const event = JSON.parse(req.body.toString("utf8"));
+    const eventType = String(event.event || event.type || "").toLowerCase();
+    if (eventType.includes("charge") && event.data?.status === "successful") {
+      const verified = await verifyFlutterwaveTransaction({
+        txRef: event.data.tx_ref,
+        transactionId: event.data.id,
+      });
+      creditFromFlutterwaveTransaction(verified);
+    }
+    res.status(200).json({ received: true });
+  } catch (err) {
+    console.error("Flutterwave webhook error:", err);
+    res.status(500).json({ error: "Webhook processing failed" });
   }
-  res.status(200).json({ received: true });
 });
 
 app.use(express.json());
@@ -675,7 +722,7 @@ app.post("/api/admin/tokens", (req, res) => {
 
 // Manually add (or remove, with a negative delta) credits on an existing
 // token — for migrations, comps, refunds, or correcting a mistake. This
-// bypasses Paystack entirely, so it's protected the same way as the other
+// bypasses Flutterwave entirely, so it's protected the same way as the other
 // admin routes: your ADMIN_SECRET, never exposed to customers.
 app.post("/api/admin/tokens/:token/adjust-credits", (req, res) => {
   if (!ADMIN_SECRET || req.headers["x-admin-secret"] !== ADMIN_SECRET) {
@@ -1107,23 +1154,26 @@ app.get("/api/voice/rtc-preview/:voiceId", requireToken, requireVoiceChangerAcce
 });
 
 // --- Checkout (purchases) ----------------------------------------------------
-// Exchange rate: ₦1,600 per $1, and 100 credits per $1 (1 credit = ₦16 at list; tiers priced in USD below).
-// Amounts are in KOBO (Paystack's subunit for NGN — 1 naira = 100 kobo).
-const NAIRA_PER_DOLLAR = 1600;
+// USD list prices — Flutterwave checkout accepts cards, mobile money, and bank
+// transfer across Africa (NG, GH, KE, ZA, UG, TZ, RW, and more).
 const TIERS = {
-  500: 7 * NAIRA_PER_DOLLAR * 100,     // $7   -> ₦11,200   -> 500 credits
-  1000: 14 * NAIRA_PER_DOLLAR * 100,   // $14  -> ₦22,400   -> 1,000 credits
-  2000: 28 * NAIRA_PER_DOLLAR * 100,   // $28  -> ₦44,800   -> 2,000 credits
-  5000: 70 * NAIRA_PER_DOLLAR * 100,   // $70  -> ₦112,000  -> 5,000 credits
-  10000: 140 * NAIRA_PER_DOLLAR * 100, // $140 -> ₦224,000  -> 10,000 credits
-  50000: 700 * NAIRA_PER_DOLLAR * 100, // $700 -> ₦1,120,000 -> 50,000 credits
+  500: 7,
+  1000: 14,
+  2000: 28,
+  5000: 70,
+  10000: 140,
+  50000: 700,
 };
 
 app.post("/api/checkout", requireToken, async (req, res) => {
   try {
+    if (!FLUTTERWAVE_SECRET_KEY) {
+      return res.status(503).json({ error: "Payment provider is not configured on the server." });
+    }
+
     const { credits, email, phone } = req.body || {};
-    const amountKobo = TIERS[credits];
-    if (!amountKobo) {
+    const amount = TIERS[credits];
+    if (!amount) {
       return res.status(400).json({ error: "Invalid credit tier" });
     }
 
@@ -1142,35 +1192,43 @@ app.post("/api/checkout", requireToken, async (req, res) => {
     }
     saveCustomerContact(req.token, checkoutEmail, checkoutPhone);
 
-    const reference = `credits_${credits}_${randomUUID()}`;
+    const txRef = `credits_${credits}_${randomUUID()}`;
 
-    const paystackRes = await fetch("https://api.paystack.co/transaction/initialize", {
+    const flutterwaveRes = await fetch("https://api.flutterwave.com/v3/payments", {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
+        Authorization: `Bearer ${FLUTTERWAVE_SECRET_KEY}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        email: checkoutEmail,
-        amount: amountKobo,
-        currency: "NGN",
-        reference,
-        metadata: {
+        tx_ref: txRef,
+        amount: String(amount),
+        currency: CHECKOUT_CURRENCY,
+        redirect_url: `${FRONTEND_URL}/?checkout=success`,
+        customer: {
+          email: checkoutEmail,
+          phonenumber: checkoutPhone,
+        },
+        meta: {
           credits: String(credits),
           token: req.token,
           customer_email: checkoutEmail,
           customer_phone: checkoutPhone,
         },
-        callback_url: `${FRONTEND_URL}/?checkout=success`,
+        customizations: {
+          title: "InspireTech Credits",
+          description: `${credits.toLocaleString()} live transformation credits`,
+          logo: `${FRONTEND_URL}/logo.png`,
+        },
       }),
     });
 
-    const data = await paystackRes.json();
-    if (!data.status) {
-      throw new Error(data.message || "Paystack initialization failed");
+    const data = await flutterwaveRes.json();
+    if (data.status !== "success" || !data.data?.link) {
+      throw new Error(data.message || "Flutterwave initialization failed");
     }
 
-    res.json({ url: data.data.authorization_url });
+    res.json({ url: data.data.link, reference: txRef });
   } catch (err) {
     console.error("Checkout initialization failed:", err);
     res.status(500).json({ error: err.message || "Checkout failed" });
@@ -1178,22 +1236,14 @@ app.post("/api/checkout", requireToken, async (req, res) => {
 });
 
 // Verify-on-return doesn't require the token header — the token travels
-// inside the Paystack transaction's own metadata instead, since this is
+// inside the Flutterwave transaction meta instead, since this is
 // called right after a redirect where custom headers aren't practical.
 app.get("/api/verify/:reference", async (req, res) => {
   try {
     const { reference } = req.params;
-    const verifyRes = await fetch(
-      `https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`,
-      { headers: { Authorization: `Bearer ${PAYSTACK_SECRET_KEY}` } }
-    );
-    const data = await verifyRes.json();
-
-    if (!data.status || data.data.status !== "success") {
-      return res.status(400).json({ error: "Payment not verified as successful" });
-    }
-
-    const result = creditFromPaystackTransaction(data.data);
+    const transactionId = req.query.transaction_id;
+    const verified = await verifyFlutterwaveTransaction({ txRef: reference, transactionId });
+    const result = creditFromFlutterwaveTransaction(verified);
     res.json(result);
   } catch (err) {
     console.error("Verification failed:", err);
