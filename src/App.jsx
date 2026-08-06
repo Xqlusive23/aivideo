@@ -29,6 +29,17 @@ import {
   NETWORK_QUALITY,
   networkQualityLabel,
 } from "./networkCheck.js";
+import {
+  BACKGROUND_SCENES,
+  OUTPUT_QUALITY_OPTIONS,
+  OUTPUT_QUALITY_STORAGE_KEY,
+  SCENE_APPLY_TARGET_MS,
+  STUDIO_PANEL_SECTIONS,
+  findBackgroundScene,
+  getOutputQualityConfig,
+  readStoredOutputQuality,
+  studioNavSections,
+} from "./backgroundScenes.js";
 
 const { colors: c, gradients: g, fonts: f, radius: r, shadow: s } = theme;
 const fd = f.display;
@@ -41,6 +52,8 @@ function formatStatusDisplay(raw) {
     "PROVISIONING MEDIA INPUTS...": "Starting camera…",
     "HANDSHAKING WITH DECART WEBRTC CLUSTER...": "Connecting…",
     "COMPUTE LINK ONLINE // REALTIME TRANSFORMATION TERMINAL": "Live",
+    "PROMPT UPDATED // LIVE TRANSFORMATION": "Prompt updated",
+    "SCENE UPDATED // LIVE TRANSFORMATION": "Scene updated",
     "PIPELINE DISCONNECTED": "Stopped",
     "PIPELINE TERMINATED": "Stopped",
     "INSTALLING DRIVERS — APPROVE UAC": "Installing drivers…",
@@ -89,15 +102,6 @@ const MY_DECART_KEY = (import.meta.env?.VITE_DECART_API_KEY || "").trim();
 // context conversion; longer chunks = smoother conversion but more delay.
 const VOICE_CHUNK_MS = 500;
 const MOBILE_LAYOUT_MAX_WIDTH = 900;
-const VIRTUAL_CAM_WIDTH = 1280;
-const VIRTUAL_CAM_HEIGHT = 720;
-const COMPANION_TOOLBAR_SECTIONS = [
-  { id: "studio", label: "Studio", icon: "🎬" },
-  { id: "credits", label: "Credits", icon: "💳" },
-  { id: "drivers", label: "Drivers", icon: "🖥️" },
-  { id: "account", label: "Account", icon: "⚙️" },
-];
-const COMPANION_STUDIO_SECTIONS = new Set(["devices", "studio", "voice"]);
 
 function isMobileUserAgent() {
   if (typeof navigator === "undefined") return false;
@@ -187,8 +191,84 @@ function drawVideoFrame(ctx, video, destWidth, destHeight, fit = "cover") {
 
 const REFERENCE_UPLOAD_MAX_EDGE = 1920;
 const DECART_PREWARM_TTL_MS = 4 * 60 * 1000;
-const DECART_OUTPUT_RESOLUTION = "720p";
 const BILLING_OPEN_FALLBACK_MS = 2500;
+const DECART_PRESET_DEDUP_MS = 900;
+
+async function loadImageFile(file) {
+  const objectUrl = URL.createObjectURL(file);
+  try {
+    return await new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error("Could not decode image"));
+      img.src = objectUrl;
+    });
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
+function drawHtmlImageCover(ctx, img, destX, destY, destWidth, destHeight) {
+  const srcW = img.naturalWidth || 1;
+  const srcH = img.naturalHeight || 1;
+  const srcAspect = srcW / srcH;
+  const dstAspect = destWidth / destHeight;
+  let sx;
+  let sy;
+  let sw;
+  let sh;
+  if (srcAspect > dstAspect) {
+    sh = srcH;
+    sw = srcH * dstAspect;
+    sx = (srcW - sw) / 2;
+    sy = 0;
+  } else {
+    sw = srcW;
+    sh = srcW / dstAspect;
+    sx = 0;
+    sy = (srcH - sh) / 2;
+  }
+  ctx.drawImage(img, sx, sy, sw, sh, destX, destY, destWidth, destHeight);
+}
+
+/**
+ * Decart accepts only one reference image. Scene presets are empty rooms, so we
+ * composite the character photo onto the scene JPG — same structure as a
+ * reference photo that already has person + environment.
+ */
+async function composeSceneReferenceImage(sceneFile, characterFile) {
+  const [sceneImg, charImg] = await Promise.all([
+    loadImageFile(sceneFile),
+    loadImageFile(characterFile),
+  ]);
+  const width = 1280;
+  const height = 720;
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Could not compose scene reference");
+
+  drawHtmlImageCover(ctx, sceneImg, 0, 0, width, height);
+
+  // Soften the character crop edges slightly so Lucy reads it as one photo, not a sticker.
+  const charMaxH = Math.round(height * 0.72);
+  const charAspect = (charImg.naturalWidth || 1) / (charImg.naturalHeight || 1);
+  let charH = charMaxH;
+  let charW = Math.round(charH * charAspect);
+  if (charW > width * 0.55) {
+    charW = Math.round(width * 0.55);
+    charH = Math.round(charW / charAspect);
+  }
+  const charX = Math.round((width - charW) / 2);
+  const charY = height - charH;
+  ctx.drawImage(charImg, charX, charY, charW, charH);
+
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.93));
+  if (!blob) throw new Error("Could not encode scene reference");
+  const sceneStem = sceneFile.name.replace(/\.[^.]+$/, "") || "scene";
+  return new File([blob], `${sceneStem}-with-character.jpg`, { type: "image/jpeg" });
+}
 
 async function prepareReferenceImageForUpload(file) {
   if (!file || typeof document === "undefined") return file;
@@ -230,7 +310,7 @@ const CHARACTER_WITH_REF_PROMPT = DEFAULT_TRANSFORMATION_PROMPT;
 const CHARACTER_SWAP_PATTERN =
   /substitute the character|replace the character|transform into this character|person in the reference image|character from the reference image|with this character/i;
 const BACKGROUND_INTENT_PATTERN =
-  /background|office|beach|studio|city|skyline|environment|room|setting|scene|backdrop|interior|outdoor|setup/i;
+  /background|office|beach|studio|city|skyline|environment|room|setting|scene|backdrop|interior|outdoor|setup|suite|hotel|luxury|presidential|executive|broadcast|penthouse/i;
 const DEFAULT_BACKGROUND_PROMPT =
   "Change the background to a bright modern office with desk, chair, window light, soft afternoon shadows, coworkers passing in the background, and sunlight on the floor.";
 const REFERENCE_BACKGROUND_PROMPT =
@@ -239,25 +319,6 @@ const REFERENCE_BACKGROUND_ENHANCE_SUFFIX =
   " Maximize environmental fidelity with rich textures, crisp depth, accurate colors, fine surface detail, consistent ambient lighting, and stable background geometry that stays aligned with the reference scene.";
 const TEMPORAL_STABILITY_CLAUSE =
   " Keep the subject and background spatially stable frame-to-frame when the input camera is still — no sway, drift, idle motion, breathing wobble on static poses, or background shimmer.";
-const PROMPT_PRESETS = [
-  {
-    label: "Office",
-    text: "Change the background to a bright modern office with desk, chair, window light, and soft afternoon shadows.",
-  },
-  {
-    label: "Beach",
-    text: "Change the background to a sunny beach at sunset with waves on the shore and sunlight reflecting on the water.",
-  },
-  {
-    label: "Studio",
-    text: "Change the background to a professional green screen studio with soft key lighting and a clean floor.",
-  },
-  {
-    label: "City night",
-    text: "Change the background to a neon city skyline at night with bokeh lights and light traffic below.",
-  },
-];
-
 function hasBackgroundIntent(text) {
   return BACKGROUND_INTENT_PATTERN.test(String(text || "").trim());
 }
@@ -302,6 +363,11 @@ function composeLayeredPrompt(userText, hasReferenceImage = true, options = {}) 
     : composeBackgroundOnlyPrompt(trimmed || DEFAULT_BACKGROUND_PROMPT);
   // Decart layered edits: one sentence per edit type (see lucy-2.5-prompting guide).
   return `${backgroundClause} ${CHARACTER_WITH_REF_PROMPT}`;
+}
+
+/** Scene library uses a composite (character + room) — same layered prompt as reference photo background. */
+function composeSceneLibraryPrompt() {
+  return composeLayeredPrompt("", true, { useReferenceBackground: true });
 }
 
 function composeTransformationPrompt(userText, hasReferenceImage = true, options = {}) {
@@ -358,16 +424,21 @@ export default function App() {
   const [selectedFile, setSelectedFile] = useState(null);
   const [imagePreview, setImagePreview] = useState(null);
 
-  const [bitrate, setBitrate] = useState("Adaptive (4.2 Mbps)");
   const [latency, setLatency] = useState("0 ms");
   const [fps, setFps] = useState(0);
 
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
 
+  const [outputQuality, setOutputQuality] = useState(readStoredOutputQuality);
   const [enhanceMask, setEnhanceMask] = useState(true);
-  const [inferenceWeight, setInferenceWeight] = useState(90);
+  const [inferenceWeight, setInferenceWeight] = useState(98);
   const [useReferenceBackground, setUseReferenceBackground] = useState(false);
   const [transformationPrompt, setTransformationPrompt] = useState(DEFAULT_TRANSFORMATION_PROMPT);
+  const [activeBackgroundSceneId, setActiveBackgroundSceneId] = useState("");
+  const [applyingSceneId, setApplyingSceneId] = useState("");
+  const [sceneTransitionActive, setSceneTransitionActive] = useState(false);
+  const [backgroundUpdatedNote, setBackgroundUpdatedNote] = useState("");
+  const [showCustomPrompt, setShowCustomPrompt] = useState(false);
   const [promptApplyBusy, setPromptApplyBusy] = useState(false);
   const [promptApplyNote, setPromptApplyNote] = useState("");
   const [activeModel, setActiveModel] = useState("lucy-realtime-v2.5");
@@ -545,6 +616,8 @@ export default function App() {
       : false
   );
   const isMobileWebStudio = isMobileLayout && !companionToolbar;
+  const proStudioShell = !isMobileLayout && !isMobileWebStudio;
+  const studioNavItems = studioNavSections(companionToolbar);
   const pipSupported = typeof document !== "undefined" && document.pictureInPictureEnabled;
   const outputTheaterSupported = typeof document !== "undefined";
 
@@ -564,6 +637,8 @@ export default function App() {
   const imagePreviewUrlRef = useRef(null);
   const activeScenePromptRef = useRef(null);
   const activeSceneUseRefBackgroundRef = useRef(false);
+  const activeSceneImageIdRef = useRef("");
+  const sceneCompositeCacheRef = useRef(new Map());
   const decartSetGuardRef = useRef({ inFlight: false, lastKey: "", lastAt: 0, reconnectAt: 0 });
   const fpsIntervalRef = useRef(null);
   const clockTimerRef = useRef(null); // the local 5-min UX countdown (not billing)
@@ -746,6 +821,11 @@ export default function App() {
   useEffect(() => {
     if (!selectedFile) setUseReferenceBackground(false);
   }, [selectedFile]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(OUTPUT_QUALITY_STORAGE_KEY, outputQuality);
+  }, [outputQuality]);
 
   // Prewarm Decart credentials + reference upload while idle — no realtime session opened.
   useEffect(() => {
@@ -1110,8 +1190,7 @@ export default function App() {
     const startCapture = async () => {
       const video = outputVideoRef.current;
       if (!video) return;
-      const width = VIRTUAL_CAM_WIDTH;
-      const height = VIRTUAL_CAM_HEIGHT;
+      const { virtualWidth: width, virtualHeight: height } = getOutputQualityConfig(outputQuality);
 
       await window.inspireTechDesktop.startVirtualCam(width, height, TARGET_FPS);
 
@@ -1138,7 +1217,7 @@ export default function App() {
     }
 
     return () => stopCapture();
-  }, [isRunning]);
+  }, [isRunning, outputQuality]);
 
   // Keep the button label in sync if the user closes the PiP window
   // directly (its own native close control) rather than clicking our button.
@@ -1598,11 +1677,12 @@ export default function App() {
   const COMPANION_CAPTURE_FPS = 20; // must match virtualcam_feeder.py's --fps
   useEffect(() => {
     if (typeof window === "undefined" || !window.inspiretechCompanion?.configureVirtualCam) return;
+    const { virtualWidth, virtualHeight } = getOutputQualityConfig(outputQuality);
     void window.inspiretechCompanion.configureVirtualCam({
-      width: VIRTUAL_CAM_WIDTH,
-      height: VIRTUAL_CAM_HEIGHT,
+      width: virtualWidth,
+      height: virtualHeight,
     });
-  }, []);
+  }, [outputQuality]);
 
   useEffect(() => {
     if (typeof window === "undefined" || !window.inspiretechCompanion) return;
@@ -1616,16 +1696,17 @@ export default function App() {
 
     const canvas = companionCanvasRef.current || document.createElement("canvas");
     companionCanvasRef.current = canvas;
-    canvas.width = VIRTUAL_CAM_WIDTH;
-    canvas.height = VIRTUAL_CAM_HEIGHT;
+    const { virtualWidth, virtualHeight } = getOutputQualityConfig(outputQuality);
+    canvas.width = virtualWidth;
+    canvas.height = virtualHeight;
     const ctx = canvas.getContext("2d", { willReadFrequently: true });
     let cancelled = false;
 
     const beginCapture = async () => {
       if (window.inspiretechCompanion.configureVirtualCam) {
         await window.inspiretechCompanion.configureVirtualCam({
-          width: VIRTUAL_CAM_WIDTH,
-          height: VIRTUAL_CAM_HEIGHT,
+          width: virtualWidth,
+          height: virtualHeight,
         });
       }
       if (cancelled) return;
@@ -1648,7 +1729,7 @@ export default function App() {
         companionCaptureIntervalRef.current = null;
       }
     };
-  }, [isRunning]);
+  }, [isRunning, outputQuality]);
 
   // Single place that handles "the server no longer accepts this token" —
   // covers both an invalid token (401) and a revoked one (403). Always safe
@@ -3007,6 +3088,7 @@ export default function App() {
     referenceImageSourceRef.current = null;
     preparedReferenceFileRef.current = null;
     decartPrewarmRef.current.uploadPromise = null;
+    sceneCompositeCacheRef.current.clear();
   };
 
   const referenceCacheMatchesCurrentFile = () =>
@@ -3128,18 +3210,85 @@ export default function App() {
     }
   };
 
-  const pushDecartState = async (session, sourcePrompt, { force = false } = {}) => {
+  const fetchSceneImageFile = async (scene) => {
+    if (!scene?.image) throw new Error("Scene has no preview image");
+    const response = await fetch(scene.image);
+    if (!response.ok) {
+      throw new Error(`Could not load scene image (${response.status})`);
+    }
+    const blob = await response.blob();
+    return new File([blob], `${scene.id}.jpg`, { type: blob.type || "image/jpeg" });
+  };
+
+  const resolveSceneCompositeReference = async (client, scene) => {
+    if (!scene?.id || !scene?.image || !selectedFile) return null;
+
+    const characterFile = await getReferenceUploadFile(selectedFile);
+    const cacheKey = `${scene.id}|${selectedFile.name}|${selectedFile.size}|${selectedFile.lastModified}`;
+    const cached = sceneCompositeCacheRef.current.get(cacheKey);
+    if (cached?.fileId) return cached.fileId;
+
+    const sceneFile = await fetchSceneImageFile(scene);
+    const compositeFile = await composeSceneReferenceImage(sceneFile, characterFile);
+
+    try {
+      const uploaded = await client.files.upload(compositeFile, { ttlSeconds: "persistent" });
+      sceneCompositeCacheRef.current.set(cacheKey, { fileId: uploaded.id, uploadedAt: Date.now() });
+      return uploaded.id;
+    } catch (err) {
+      console.warn("[InspireTech] Scene composite upload failed — using inline bytes", err);
+      return compositeFile;
+    }
+  };
+
+  const ensureReferenceImagePayload = async (client) => {
+    if (!selectedFile) return null;
+    if (referenceCacheMatchesCurrentFile() && referenceImageRefId.current) {
+      return referenceImageRefId.current;
+    }
+    return resolveReferenceImage(client, selectedFile);
+  };
+
+  const getDecartClientForPush = async () => {
+    const apiKey = await ensureDecartApiKey();
+    if (!apiKey) throw new Error("Could not reach Decart");
+    return createDecartClient({ apiKey });
+  };
+
+  const pushDecartState = async (
+    session,
+    sourcePrompt,
+    { force = false, rapid = false, scene = null, useSceneReference = false } = {}
+  ) => {
     if (!session?.isConnected?.()) return;
 
     const hasRef = Boolean(selectedFile);
     const composeOptions = getPromptComposeOptions();
-    const promptText = composeTransformationPrompt(sourcePrompt, hasRef, composeOptions);
-    const useEnhance = getDecartEnhance(sourcePrompt);
-    const imagePayload = hasRef
-      ? (referenceCacheMatchesCurrentFile() ? referenceImageRefId.current : null) || selectedFile
-      : null;
-    const setKey = `${promptText}|${Boolean(imagePayload)}|${useEnhance}|${composeOptions.useReferenceBackground}`;
+    const sceneReferenceMode = Boolean(
+      useSceneReference && scene?.id && !composeOptions.useReferenceBackground && hasRef
+    );
+    const referenceBackgroundMode = Boolean(composeOptions.useReferenceBackground && hasRef);
+
+    // Scene composite has person + room — use the same layered prompt as reference photo background.
+    const promptText = sceneReferenceMode
+      ? composeSceneLibraryPrompt()
+      : composeTransformationPrompt(sourcePrompt, hasRef, composeOptions);
+    const useEnhance =
+      sceneReferenceMode || referenceBackgroundMode ? true : getDecartEnhance(sourcePrompt);
+
+    const client = await getDecartClientForPush();
+    let imagePayload = null;
+    if (sceneReferenceMode) {
+      imagePayload = await resolveSceneCompositeReference(client, scene);
+      if (!imagePayload) throw new Error("Could not build scene + character reference");
+    } else if (hasRef) {
+      imagePayload = await ensureReferenceImagePayload(client);
+      if (!imagePayload) throw new Error("Could not load character reference image");
+    }
+
+    const setKey = `${promptText}|${Boolean(imagePayload)}|${useEnhance}|refBg:${referenceBackgroundMode}|scene:${scene?.id || ""}|sceneRef:${sceneReferenceMode}`;
     const now = Date.now();
+    const dedupWindow = rapid ? DECART_PRESET_DEDUP_MS : 4000;
 
     if (!force) {
       if (decartSetGuardRef.current.inFlight) {
@@ -3148,33 +3297,31 @@ export default function App() {
       }
       if (
         decartSetGuardRef.current.lastKey === setKey &&
-        now - decartSetGuardRef.current.lastAt < 4000
+        now - decartSetGuardRef.current.lastAt < dedupWindow
       ) {
-        console.info("[InspireTech] Decart set skipped (duplicate within 4s)");
+        console.info("[InspireTech] Decart set skipped (duplicate within window)");
         return;
       }
     }
 
     decartSetGuardRef.current.inFlight = true;
     console.info("[InspireTech] Decart set →", {
-      promptText,
+      promptText: promptText.slice(0, 180) + (promptText.length > 180 ? "…" : ""),
       enhance: useEnhance,
-      hasRef,
-      useReferenceBackground: composeOptions.useReferenceBackground,
+      hasImage: Boolean(imagePayload),
+      referenceBackgroundMode,
+      sceneReferenceMode,
+      sceneId: scene?.id,
       force,
     });
 
     try {
-      const promptPayload = {
-        text: promptText,
+      // Decart set() replaces the entire state — always include image when we have one or it gets cleared (fade).
+      await session.set({
+        prompt: promptText,
         enhance: useEnhance,
-        weight: inferenceWeight / 100,
-      };
-      if (hasRef) {
-        await session.set({ prompt: promptPayload, image: imagePayload });
-      } else {
-        await session.set({ prompt: promptPayload });
-      }
+        ...(imagePayload ? { image: imagePayload } : {}),
+      });
       decartSetGuardRef.current.lastKey = setKey;
       decartSetGuardRef.current.lastAt = Date.now();
     } finally {
@@ -3189,6 +3336,16 @@ export default function App() {
 
   const reapplyDecartScene = async (session, sourcePrompt) => {
     if (!session?.isConnected?.()) return;
+    const sceneId = activeSceneImageIdRef.current;
+    const scene = sceneId ? findBackgroundScene(sceneId) : null;
+    if (scene) {
+      await pushDecartState(session, sourcePrompt, {
+        force: true,
+        scene,
+        useSceneReference: true,
+      });
+      return;
+    }
     if (!sourcePrompt && !activeSceneUseRefBackgroundRef.current) return;
     await pushDecartState(session, sourcePrompt, { force: true });
   };
@@ -3243,7 +3400,7 @@ export default function App() {
         const now = Date.now();
         if (
           realtimeClientRef.current === session &&
-          (scenePrompt || activeSceneUseRefBackgroundRef.current) &&
+          (scenePrompt || activeSceneUseRefBackgroundRef.current || activeSceneImageIdRef.current) &&
           now - decartSetGuardRef.current.reconnectAt >= 8000
         ) {
           decartSetGuardRef.current.reconnectAt = now;
@@ -3285,6 +3442,67 @@ export default function App() {
     stopActiveVoicePipeline();
   };
 
+  const applyBackgroundScene = async (scene) => {
+    if (!scene?.prompt) return;
+    if (!selectedFile) {
+      setPromptApplyNote("Upload a reference photo first — scenes combine your character with the preset room.");
+      return;
+    }
+
+    setUseReferenceBackground(false);
+    setActiveBackgroundSceneId(scene.id);
+    setApplyingSceneId(scene.id);
+    setSceneTransitionActive(true);
+    setTransformationPrompt(scene.prompt);
+    setPromptApplyNote("");
+    setBackgroundUpdatedNote("");
+
+    const finishTransition = () => {
+      setApplyingSceneId("");
+      setTimeout(() => setSceneTransitionActive(false), 320);
+    };
+
+    const session = realtimeClientRef.current;
+    if (session?.isConnected?.()) {
+      setPromptApplyBusy(true);
+      try {
+        activeScenePromptRef.current = scene.prompt;
+        activeSceneUseRefBackgroundRef.current = false;
+        activeSceneImageIdRef.current = scene.id;
+        await pushDecartState(session, "", {
+          force: true,
+          rapid: true,
+          scene,
+          useSceneReference: true,
+        });
+        setBackgroundUpdatedNote("Background updated");
+        setPromptApplyNote(`${scene.label} — character + scene room applied like reference photo background.`);
+        setStatus("SCENE UPDATED // LIVE TRANSFORMATION");
+        setTimeout(() => setBackgroundUpdatedNote(""), 3200);
+      } catch (err) {
+        console.error("Failed to apply background scene:", err);
+        setPromptApplyNote(err?.message || "Could not switch scene.");
+        setActiveBackgroundSceneId("");
+        activeSceneImageIdRef.current = "";
+      } finally {
+        setPromptApplyBusy(false);
+        setTimeout(finishTransition, SCENE_APPLY_TARGET_MS);
+      }
+    } else {
+      activeSceneImageIdRef.current = scene.id;
+      setPromptApplyNote(`${scene.label} selected — scene photo applies when you go live.`);
+      void (async () => {
+        try {
+          const client = await getDecartClientForPush();
+          await resolveSceneCompositeReference(client, scene);
+        } catch (err) {
+          console.warn("[InspireTech] Scene prewarm failed:", err);
+        }
+      })();
+      setTimeout(finishTransition, 480);
+    }
+  };
+
   const applyTransformationPrompt = async (promptOverride) => {
     const sourcePrompt = promptOverride ?? getPromptText();
     const session = realtimeClientRef.current;
@@ -3308,7 +3526,18 @@ export default function App() {
     try {
       activeScenePromptRef.current = sourcePrompt;
       activeSceneUseRefBackgroundRef.current = composeOptions.useReferenceBackground;
-      await pushDecartState(session, sourcePrompt);
+      const activeScene = activeSceneImageIdRef.current
+        ? findBackgroundScene(activeSceneImageIdRef.current)
+        : null;
+      if (activeScene && !composeOptions.useReferenceBackground) {
+        await pushDecartState(session, sourcePrompt, {
+          force: true,
+          scene: activeScene,
+          useSceneReference: true,
+        });
+      } else {
+        await pushDecartState(session, sourcePrompt, { force: true });
+      }
       setPromptApplyNote("Prompt applied to the live stream.");
       setStatus("PROMPT UPDATED // LIVE TRANSFORMATION");
     } catch (err) {
@@ -3317,6 +3546,13 @@ export default function App() {
     } finally {
       setPromptApplyBusy(false);
     }
+  };
+
+  const handleCustomPromptChange = (value) => {
+    setTransformationPrompt(value);
+    setActiveBackgroundSceneId("");
+    activeSceneImageIdRef.current = "";
+    if (promptApplyNote) setPromptApplyNote("");
   };
 
   const fetchDecartRealtimeCredentials = async (modelId) => {
@@ -3450,18 +3686,27 @@ export default function App() {
       const realtimeModel = getRealtimeModel();
       const sourcePrompt = getPromptText();
       const composeOptions = getPromptComposeOptions();
-      const wantsScene = needsSceneBackground(sourcePrompt);
-      const connectPrompt = wantsScene
-        ? composeLayeredPrompt(sourcePrompt, true, composeOptions)
-        : composeTransformationPrompt(sourcePrompt, Boolean(selectedFile), composeOptions);
-      const connectEnhance = getDecartEnhance(sourcePrompt);
+      const pendingScene = activeBackgroundSceneId ? findBackgroundScene(activeBackgroundSceneId) : null;
+      const sceneReferenceAtStart = Boolean(
+        pendingScene && !composeOptions.useReferenceBackground && selectedFile
+      );
+      const referenceBackgroundAtStart = Boolean(composeOptions.useReferenceBackground && selectedFile);
+
+      // Scene mode: connect with composite (character + room) + same layered prompt as reference photo background.
+      const connectPrompt =
+        referenceBackgroundAtStart || sceneReferenceAtStart
+          ? composeLayeredPrompt("", true, { useReferenceBackground: true })
+          : CHARACTER_WITH_REF_PROMPT;
+      const connectEnhance = referenceBackgroundAtStart || sceneReferenceAtStart ? true : getDecartEnhance(sourcePrompt);
 
       const voiceAllowedNow = voiceChangerAccess && voiceChangerEnabled;
       const hasValidVoiceNow =
         voiceAllowedNow &&
         (voiceEngine === "realtime" ? !!rtcSelectedVoiceId : !!selectedVoiceId);
       const referenceImagePromise = selectedFile
-        ? resolveReferenceImage(client, selectedFile)
+        ? sceneReferenceAtStart
+          ? resolveSceneCompositeReference(client, pendingScene)
+          : resolveReferenceImage(client, selectedFile)
         : Promise.resolve(null);
       const voicePromise =
         hasValidVoiceNow && voiceEngine === "realtime"
@@ -3495,32 +3740,34 @@ export default function App() {
       decartSetGuardRef.current = { inFlight: false, lastKey: "", lastAt: 0, reconnectAt: 0 };
 
       console.info("[InspireTech] Decart connect →", {
-        connectPrompt,
+        connectPrompt: connectPrompt.slice(0, 160) + (connectPrompt.length > 160 ? "…" : ""),
         enhance: connectEnhance,
         hasReference: Boolean(selectedFile),
-        useReferenceBackground: composeOptions.useReferenceBackground,
-        wantsScene,
-        strategy: wantsScene
-          ? composeOptions.useReferenceBackground
-            ? "reference scene + character in initialState"
-            : "layered prompt + image in initialState only"
-          : "single set",
+        referenceBackgroundAtStart,
+        sceneReferenceAtStart,
+        sceneId: pendingScene?.id,
+        strategy: referenceBackgroundAtStart
+          ? "reference photo background (character + environment from photo)"
+          : sceneReferenceAtStart
+          ? "scene composite (character photo + room JPG) as reference"
+          : "character reference only",
       });
 
       const session = await client.realtime.connect(streamForDecartFinal, {
         model: realtimeModel,
         mirror: resolveDecartMirrorMode(streamForDecartFinal),
-        resolution: DECART_OUTPUT_RESOLUTION,
+        resolution: getOutputQualityConfig(outputQuality).resolution,
         preferredVideoCodec: "h264",
         onRemoteStream: (remoteStream) => {
           const video = outputVideoRef.current;
           if (!video) return;
           video.srcObject = remoteStream;
           video.muted = false;
+          const requestedResolution = getOutputQualityConfig(outputQuality).resolution;
           const logOutputDimensions = () => {
             if (video.videoWidth > 0) {
               console.info(
-                `[InspireTech] Output stream ${video.videoWidth}x${video.videoHeight} (requested ${DECART_OUTPUT_RESOLUTION})`
+                `[InspireTech] Output stream ${video.videoWidth}x${video.videoHeight} (requested ${requestedResolution})`
               );
             }
           };
@@ -3536,7 +3783,6 @@ export default function App() {
           prompt: {
             text: connectPrompt,
             enhance: connectEnhance,
-            weight: inferenceWeight / 100,
           },
           ...(referenceImage ? { image: referenceImage } : {}),
           passthrough: false,
@@ -3546,6 +3792,29 @@ export default function App() {
       wireDecartSession(session);
 
       realtimeClientRef.current = session;
+
+      if (referenceBackgroundAtStart) {
+        activeSceneUseRefBackgroundRef.current = true;
+        try {
+          await pushDecartState(session, "", { force: true });
+        } catch (reinforceErr) {
+          console.warn("[InspireTech] Reference background reinforce failed:", reinforceErr);
+        }
+      } else if (sceneReferenceAtStart && pendingScene) {
+        activeSceneImageIdRef.current = pendingScene.id;
+        // Composite already in initialState — reinforce so set() keeps image + layered prompt locked.
+        try {
+          await pushDecartState(session, "", {
+            force: true,
+            scene: pendingScene,
+            useSceneReference: true,
+          });
+        } catch (sceneErr) {
+          console.warn("[InspireTech] Scene composite reinforce failed:", sceneErr);
+          setPromptApplyNote(sceneErr?.message || "Scene could not be applied — tap the scene again.");
+        }
+      }
+
       clearBillingOpenFallback();
       billingOpenFallbackRef.current = setTimeout(() => {
         if (isRunningRef.current && !billingSessionIdRef.current) {
@@ -3591,6 +3860,7 @@ export default function App() {
   const stopTransformation = () => {
     activeScenePromptRef.current = null;
     activeSceneUseRefBackgroundRef.current = false;
+    activeSceneImageIdRef.current = "";
     decartSetGuardRef.current = { inFlight: false, lastKey: "", lastAt: 0, reconnectAt: 0 };
     clearBillingOpenFallback();
     const session = realtimeClientRef.current;
@@ -3655,13 +3925,155 @@ export default function App() {
     });
   }, []);
 
+  const renderVoiceChangerPanel = () => (
+    <div style={styles.sectionCard} className="itc-card itc-section-card">
+      <div className="itc-studio-card-title">
+        <span>🎙️</span> Voice changer
+      </div>
+      {!voiceChangerAccess ? (
+        <div className="itc-premium-locked-copy">
+          <p>{VOICE_UPGRADE_MESSAGE}</p>
+          <button type="button" className="itc-btn itc-btn-secondary" onClick={scrollToCreditsSection}>
+            View plans — 1,000+ credits
+          </button>
+        </div>
+      ) : (
+        <>
+          <div style={styles.parameterRow} className="itc-parameter-row">
+            <label className="itc-studio-label" style={styles.paramLabel}>Enable voice changer</label>
+            <input
+              type="checkbox"
+              checked={voiceChangerEnabled}
+              onChange={(e) => setVoiceChangerEnabled(e.target.checked)}
+              disabled={isRunning}
+              style={styles.paramCheckbox}
+              className="itc-checkbox"
+            />
+          </div>
+          {voiceChangerEnabled && (
+            <>
+              <div style={styles.voiceSelectGroup}>
+                <label className="itc-studio-label" style={styles.paramLabel}>Engine</label>
+                <select
+                  value={voiceEngine}
+                  onChange={(e) => setVoiceEngine(e.target.value)}
+                  disabled={isRunning}
+                  style={styles.voiceSelect}
+                  className="itc-select"
+                >
+                  <option value="elevenlabs">ElevenLabs (chunk-based, ~{VOICE_CHUNK_MS / 1000}s delay)</option>
+                  <option value="realtime">Real-Time (voice-rt-server, continuous)</option>
+                </select>
+              </div>
+
+              {voiceEngine === "elevenlabs" ? (
+                <div style={styles.voiceSelectGroup}>
+                  <label className="itc-studio-label" style={styles.paramLabel}>Target voice</label>
+                  <div style={styles.voiceSelectRow}>
+                    <select
+                      value={selectedVoiceId}
+                      onChange={(e) => {
+                        setSelectedVoiceId(e.target.value);
+                        setVoicePreviewError("");
+                      }}
+                      disabled={isRunning || voices.length === 0}
+                      style={styles.voiceSelect}
+                      className="itc-select"
+                    >
+                      {voices.length === 0 && (
+                        <option value="">{voicesLoading ? "Loading voices..." : "No voices available"}</option>
+                      )}
+                      {voices.map((v) => (
+                        <option key={v.voice_id} value={v.voice_id}>{v.name}</option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      style={styles.voicePreviewBtn}
+                      className="itc-btn itc-btn-secondary"
+                      onClick={playVoicePreview}
+                      disabled={isRunning || !selectedVoiceId || voicePreviewLoading}
+                      title="Play a sample of this voice"
+                    >
+                      {voicePreviewLoading ? "…" : "▶ Preview"}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div style={styles.voiceSelectGroup}>
+                  <label className="itc-studio-label" style={styles.paramLabel}>Target voice</label>
+                  <div style={styles.voiceSelectRow}>
+                    <select
+                      value={rtcSelectedVoiceId}
+                      onChange={(e) => {
+                        setRtcSelectedVoiceId(e.target.value);
+                        setVoicePreviewError("");
+                      }}
+                      disabled={isRunning || rtcVoices.length === 0}
+                      style={styles.voiceSelect}
+                      className="itc-select"
+                    >
+                      {rtcVoices.length === 0 && (
+                        <option value="">{rtcVoicesLoading ? "Loading voices..." : "No voices available"}</option>
+                      )}
+                      {rtcVoices.map((v) => (
+                        <option key={v.voice_id} value={v.voice_id}>
+                          {v.name}{v.pitch_lvl ? ` (+${v.pitch_lvl} pitch)` : ""}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      style={styles.voicePreviewBtn}
+                      className="itc-btn itc-btn-secondary"
+                      onClick={playVoicePreview}
+                      disabled={
+                        isRunning ||
+                        !rtcSelectedVoiceId ||
+                        voicePreviewLoading ||
+                        !rtcVoices.find((v) => v.voice_id === rtcSelectedVoiceId)?.has_preview
+                      }
+                      title={
+                        rtcVoices.find((v) => v.voice_id === rtcSelectedVoiceId)?.has_preview
+                          ? "Play a sample of this RVC model"
+                          : "Add preview.wav or preview_in.wav on the pod to enable preview"
+                      }
+                    >
+                      {voicePreviewLoading ? "…" : "▶ Preview"}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+          {voiceChangerEnabled && voiceEngine === "elevenlabs" && voiceLoadError && (
+            <div style={styles.ledgerErrorNote}>{voiceLoadError}</div>
+          )}
+          {voiceChangerEnabled && voiceEngine === "realtime" && rtcLoadError && (
+            <div style={styles.ledgerErrorNote}>{rtcLoadError}</div>
+          )}
+          {voiceChangerEnabled && voicePreviewError && (
+            <div style={styles.ledgerErrorNote}>{voicePreviewError}</div>
+          )}
+          <div style={styles.paramsLockedNote} className="itc-params-locked-note">
+            {isRunning
+              ? "Locked while live — changes apply on next deploy"
+              : voiceEngine === "elevenlabs"
+              ? `Converts your voice in ~${VOICE_CHUNK_MS / 1000}s clips — speak clearly at the mic. Audio plays through the output video, same as without voice changer.`
+              : "Real-time RVC via voice-rt-server (RunPod). Audio plays through the output video. Fan noise is gated before sending to the GPU."}
+          </div>
+        </>
+      )}
+    </div>
+  );
+
   const renderPromptDock = () => {
     if (!backgroundChangerAccess) {
       return (
         <div className="itc-prompt-dock itc-premium-locked">
           <div className="itc-prompt-dock-header">
             <div>
-              <h3 className="itc-prompt-dock-title">Custom background (premium)</h3>
+              <h3 className="itc-prompt-dock-title">Scene library (premium)</h3>
               <p className="itc-prompt-dock-subtitle">{BACKGROUND_UPGRADE_MESSAGE}</p>
             </div>
           </div>
@@ -3674,13 +4086,15 @@ export default function App() {
 
     const refBackgroundActive = useReferenceBackground && Boolean(selectedFile);
     const sceneSubtitle = refBackgroundActive
-      ? "Scene is copied from your reference photo — enhanced automatically. Turn off to pick a different background with a prompt."
+      ? "Your reference photo drives both character and room."
       : isMobileLayout
-        ? "Optional: describe a different background, or leave blank for character-only. Apply while live."
-        : "Want a different room? Leave reference background off and use a preset or prompt below.";
+        ? "Tap a scene — merges your character photo with the preset room (same as reference background)."
+        : "Pick a scene — your character photo is placed into the room JPG and sent like a reference photo background.";
 
     const handleReferenceBackgroundToggle = (enabled) => {
       setUseReferenceBackground(enabled);
+      setActiveBackgroundSceneId("");
+      activeSceneImageIdRef.current = "";
       setPromptApplyNote("");
       if (isRunning) {
         void applyTransformationPrompt();
@@ -3688,110 +4102,158 @@ export default function App() {
     };
 
     return (
-    <div className="itc-prompt-dock">
-      <div className="itc-prompt-dock-header">
-        <div>
-          <h3 className="itc-prompt-dock-title">
-            {refBackgroundActive ? "Reference scene mode" : "Custom background (optional)"}
-          </h3>
-          <p className="itc-prompt-dock-subtitle">{sceneSubtitle}</p>
+      <div className="itc-prompt-dock itc-scene-dock itc-glass-dock">
+        <div className="itc-scene-dock-toolbar">
+          <div className="itc-scene-dock-toolbar-main">
+            <div className="itc-scene-dock-badge-row">
+              <h3 className="itc-prompt-dock-title">
+                {refBackgroundActive ? "Reference scene mode" : "Scene library"}
+              </h3>
+              {!refBackgroundActive && (
+                <span className="itc-scene-dock-badge">Instant swap</span>
+              )}
+            </div>
+            <p className="itc-prompt-dock-subtitle">{sceneSubtitle}</p>
+          </div>
+          <div className={`itc-scene-dock-status-pill itc-glass-pill${isRunning ? " is-live" : ""}`}>
+            <span className="itc-companion-pill-icon" aria-hidden="true">{isRunning ? "●" : "○"}</span>
+            <span>{isRunning ? formatStatusDisplay(status) : "Standby"}</span>
+          </div>
         </div>
-        <div className="itc-prompt-dock-toggles">
-          <label className="itc-prompt-enhance-toggle" title={selectedFile ? undefined : "Upload a reference photo first"}>
-            <input
-              type="checkbox"
-              checked={refBackgroundActive}
-              onChange={(e) => handleReferenceBackgroundToggle(e.target.checked)}
-              disabled={promptApplyBusy || !selectedFile}
-              className="itc-checkbox"
-            />
-            <span>Use reference photo background</span>
-          </label>
-          {!refBackgroundActive && (
-            <label className="itc-prompt-enhance-toggle">
+        <div className="itc-prompt-dock-toggles itc-scene-dock-toggles">
+            <label className="itc-prompt-enhance-toggle" title={selectedFile ? undefined : "Upload a reference photo first"}>
               <input
                 type="checkbox"
-                checked={enhanceMask}
-                onChange={(e) => setEnhanceMask(e.target.checked)}
-                disabled={promptApplyBusy}
+                checked={refBackgroundActive}
+                onChange={(e) => handleReferenceBackgroundToggle(e.target.checked)}
+                disabled={promptApplyBusy || !selectedFile}
                 className="itc-checkbox"
               />
-              <span>Enhance prompt (recommended)</span>
+              <span>Use reference photo background</span>
             </label>
-          )}
-        </div>
-      </div>
-      {refBackgroundActive ? (
-        <div className="itc-prompt-ref-scene-panel">
-          {imagePreview ? (
-            <img src={imagePreview} alt="" className="itc-prompt-ref-scene-thumb" />
-          ) : null}
-          <div className="itc-prompt-ref-scene-copy">
-            <p>
-              Lucy matches the <strong>environment in your photo</strong> and swaps your character — fully enhanced,
-              no extra steps. Your webcam room is replaced edge to edge.
-            </p>
-            <p className="itc-prompt-ref-scene-hint">
-              For a different scene (office, beach, etc.), turn off this option and use the prompt below instead.
-            </p>
+            {!refBackgroundActive && (
+              <label className="itc-prompt-enhance-toggle">
+                <input
+                  type="checkbox"
+                  checked={enhanceMask}
+                  onChange={(e) => setEnhanceMask(e.target.checked)}
+                  disabled={promptApplyBusy}
+                  className="itc-checkbox"
+                />
+                <span>Enhance prompt (recommended)</span>
+              </label>
+            )}
           </div>
-        </div>
-      ) : (
-        <>
-          <textarea
-            className="itc-prompt-input"
-            value={transformationPrompt}
-            onChange={(e) => {
-              setTransformationPrompt(e.target.value);
-              if (promptApplyNote) setPromptApplyNote("");
-            }}
-            rows={2}
-            placeholder="Describe a different background, e.g. Change the background to a modern office… (character always uses your reference photo)"
-            onKeyDown={(e) => {
-              if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
-                e.preventDefault();
-                void applyTransformationPrompt();
-              }
-            }}
-          />
-          <div className="itc-prompt-presets" aria-label="Prompt presets">
-            {PROMPT_PRESETS.map((preset) => (
+
+        {refBackgroundActive ? (
+          <div className="itc-prompt-ref-scene-panel">
+            {imagePreview ? (
+              <img src={imagePreview} alt="" className="itc-prompt-ref-scene-thumb" />
+            ) : null}
+            <div className="itc-prompt-ref-scene-copy">
+              <p>
+                Lucy matches the <strong>environment in your photo</strong> and swaps your character — fully enhanced,
+                no extra steps. Your webcam room is replaced edge to edge.
+              </p>
+              <p className="itc-prompt-ref-scene-hint">
+                For a curated scene (presidential suite, hotel, etc.), turn off this option and pick from the gallery.
+              </p>
+            </div>
+          </div>
+        ) : (
+          <>
+            <div className={`itc-scene-gallery${isRunning ? " itc-scene-gallery-live" : ""}${proStudioShell ? " itc-scene-gallery-pro" : ""}`} role="list" aria-label="Background scene presets">
+              {BACKGROUND_SCENES.map((scene) => {
+                const isActive = activeBackgroundSceneId === scene.id;
+                const isApplying = applyingSceneId === scene.id;
+                return (
+                  <button
+                    key={scene.id}
+                    type="button"
+                    role="listitem"
+                    className={`itc-scene-card${isActive ? " is-active" : ""}${isApplying ? " is-applying" : ""}`}
+                    onClick={() => void applyBackgroundScene(scene)}
+                    disabled={promptApplyBusy && !isApplying}
+                    aria-pressed={isActive}
+                    title={scene.tagline}
+                  >
+                    <span className="itc-scene-card-media">
+                      <img src={scene.image} alt="" className="itc-scene-card-image" loading="lazy" decoding="async" />
+                      <span className="itc-scene-card-shimmer" aria-hidden="true" />
+                      {isActive && !isApplying && (
+                        <span className="itc-scene-card-check" aria-hidden="true">✓</span>
+                      )}
+                    </span>
+                    <span className="itc-scene-card-body">
+                      <span className="itc-scene-card-label">{scene.label}</span>
+                      {scene.category && (
+                        <span className="itc-scene-card-category">{scene.category}</span>
+                      )}
+                    </span>
+                    {isApplying && (
+                      <span className="itc-scene-card-status" aria-live="polite">
+                        Applying…
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+            {backgroundUpdatedNote && (
+              <div className="itc-background-updated-toast" role="status">
+                {backgroundUpdatedNote}
+              </div>
+            )}
+
+            <div className="itc-scene-custom-wrap">
               <button
-                key={preset.label}
                 type="button"
-                className="itc-prompt-preset"
-                onClick={() => {
-                  setTransformationPrompt(preset.text);
-                  setPromptApplyNote("");
-                  if (isRunning) {
-                    void applyTransformationPrompt(preset.text);
-                  }
-                }}
+                className="itc-scene-custom-toggle"
+                onClick={() => setShowCustomPrompt((open) => !open)}
+                aria-expanded={showCustomPrompt}
               >
-                {preset.label}
+                {showCustomPrompt ? "Hide custom prompt" : "Write your own background prompt"}
               </button>
-            ))}
-          </div>
-        </>
-      )}
-      <div className="itc-prompt-actions">
-        {(!refBackgroundActive || isRunning) && (
-          <button
-            type="button"
-            className="itc-btn itc-btn-primary"
-            onClick={() => void applyTransformationPrompt()}
-            disabled={promptApplyBusy}
-          >
-            {promptApplyBusy ? "Applying…" : isRunning ? "Apply to live stream" : "Save prompt"}
-          </button>
+              {showCustomPrompt && (
+                <div className="itc-scene-custom-panel">
+                  <textarea
+                    className="itc-prompt-input"
+                    value={transformationPrompt}
+                    onChange={(e) => handleCustomPromptChange(e.target.value)}
+                    rows={2}
+                    placeholder="Describe a custom background, e.g. Change the background to a rooftop lounge at dusk…"
+                    onKeyDown={(e) => {
+                      if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+                        e.preventDefault();
+                        void applyTransformationPrompt();
+                      }
+                    }}
+                  />
+                </div>
+              )}
+            </div>
+          </>
         )}
-        {promptApplyNote && <span className="itc-prompt-note">{promptApplyNote}</span>}
+
+        <div className="itc-prompt-actions">
+          {(showCustomPrompt && !refBackgroundActive) || (refBackgroundActive && isRunning) ? (
+            <button
+              type="button"
+              className="itc-btn itc-btn-primary"
+              onClick={() => void applyTransformationPrompt()}
+              disabled={promptApplyBusy}
+            >
+              {promptApplyBusy ? "Applying…" : isRunning ? "Apply to live stream" : "Save prompt"}
+            </button>
+          ) : null}
+          {promptApplyNote && <span className="itc-prompt-note">{promptApplyNote}</span>}
+        </div>
       </div>
-    </div>
     );
   };
 
-  const showPromptBelowOutput = (!isMobileLayout || !isRunning) && !isMobileWebStudio;
+  const showPromptBelowOutput =
+    !isMobileWebStudio && !isMobileLayout && (!proStudioShell || companionNavSection === "studio");
   const showPromptInSidebar = isMobileLayout && isRunning && !isMobileWebStudio;
 
   const purchaseCredits = async (creditAmount) => {
@@ -3838,6 +4300,7 @@ export default function App() {
   const creditPercent = Math.min(100, (credits / 500) * 100);
   const isLowCredit = credits <= LOW_CREDIT_THRESHOLD;
   const weakNetwork = networkChecked && networkQuality.level === NETWORK_QUALITY.POOR;
+  const outputQualityConfig = getOutputQualityConfig(outputQuality);
   const startBlocked =
     isRunning || !selectedFile || credits <= 0 || ledgerUnreachable || weakNetwork;
   const networkChipTone =
@@ -3848,9 +4311,9 @@ export default function App() {
         : networkQuality.level === NETWORK_QUALITY.POOR
           ? " is-danger"
           : "";
-  const companionSectionClass = (section) => {
-    if (!companionToolbar) return "";
-    if (COMPANION_STUDIO_SECTIONS.has(section)) {
+  const studioPanelSectionClass = (section) => {
+    if (!proStudioShell) return "";
+    if (STUDIO_PANEL_SECTIONS.has(section)) {
       return companionNavSection === "studio" ? "" : "itc-companion-hidden";
     }
     return companionNavSection === section ? "" : "itc-companion-hidden";
@@ -3932,6 +4395,72 @@ export default function App() {
     );
   };
 
+  const renderProStudioTopbar = () => (
+    <header className="itc-companion-topbar itc-glass-topbar">
+      <div className="itc-companion-topbar-left">
+        <LogoLockup size="sm" />
+      </div>
+      <nav className="itc-companion-nav-horizontal" aria-label="Studio sections">
+        {studioNavItems.map((section) => (
+          <button
+            key={section.id}
+            type="button"
+            className={`itc-companion-nav-tab${companionNavSection === section.id ? " is-active" : ""}`}
+            onClick={() => setCompanionNavSection(section.id)}
+          >
+            <span className="itc-companion-nav-icon" aria-hidden="true">{section.icon}</span>
+            <span>{section.label}</span>
+            {section.id === "drivers" && driverSetupFailed && (
+              <span className="itc-companion-nav-badge" aria-label="Driver setup needs attention" />
+            )}
+          </button>
+        ))}
+      </nav>
+      <div className="itc-companion-topbar-right">
+        <div className={`itc-companion-pill itc-glass-pill${isRunning ? " is-live" : ""}`}>
+          <span className="itc-companion-pill-icon" aria-hidden="true">{isRunning ? "●" : "○"}</span>
+          <span className="itc-companion-pill-value">{isRunning ? "AI live" : "Standby"}</span>
+        </div>
+        {isRunning && (
+          <div className="itc-companion-pill itc-glass-pill">
+            <span className="itc-companion-pill-label">Session</span>
+            <span className="itc-companion-pill-value itc-mono">{formatTime(elapsedSeconds)}</span>
+          </div>
+        )}
+        <div className={`itc-companion-pill itc-glass-pill itc-companion-pill-credits${isLowCredit ? " is-danger" : ""}`}>
+          <span className="itc-companion-pill-label">Credits</span>
+          <span className="itc-companion-pill-value itc-mono">{creditsLoaded ? credits : "…"}</span>
+        </div>
+        {companionToolbar && desktopAppVersion && (
+          <div className="itc-companion-pill itc-glass-pill itc-companion-pill-version">
+            <span className="itc-companion-pill-sub">Desktop</span>
+            <span className="itc-companion-pill-value">v{desktopAppVersion}</span>
+          </div>
+        )}
+        <button
+          type="button"
+          className="itc-header-link"
+          onClick={() => {
+            if (isRunning) stopTransformation();
+            clearAccessToken();
+          }}
+        >
+          Switch token
+        </button>
+        {!companionToolbar && (
+          <Link to="/" className="itc-header-link">
+            Home
+          </Link>
+        )}
+        {companionToolbar && (
+          <button type="button" className="itc-header-link" onClick={handleManualAppUpdateCheck}>
+            Updates
+          </button>
+        )}
+      </div>
+    </header>
+  );
+
   // No access token yet — show sign-in gate (landing page lives at /).
   if (!accessToken || !sessionReady) {
     const verifyingSaved = Boolean(accessToken && !sessionReady);
@@ -3953,8 +4482,11 @@ export default function App() {
     <>
     <div
       style={styles.appContainer}
-      className={`itc-app${isMobileLayout ? " itc-app-mobile" : ""}${isMobileWebStudio ? " itc-mobile-web" : ""}${mobileOutputFocus ? " itc-output-theater itc-mobile-theater" : ""}${isMobileLayout && !mobileControlsOpen ? " itc-mobile-sidebar-collapsed" : ""}`}
+      className={`itc-app${proStudioShell ? " itc-app-companion" : ""}${isMobileLayout ? " itc-app-mobile" : ""}${isMobileWebStudio ? " itc-mobile-web" : ""}${mobileOutputFocus ? " itc-output-theater itc-mobile-theater" : ""}${isMobileLayout && !mobileControlsOpen ? " itc-mobile-sidebar-collapsed" : ""}`}
     >
+      {proStudioShell ? (
+        renderProStudioTopbar()
+      ) : (
       <header className={`itc-top-header${companionToolbar ? " itc-top-header-companion" : ""}`}>
         <div className="itc-header-brand">
           <div className="itc-header-brand-id">
@@ -4005,7 +4537,7 @@ export default function App() {
         {companionToolbar ? (
           <div className="itc-header-companion-bar">
             <nav className="itc-desktop-toolbar" aria-label="Studio sections">
-              {COMPANION_TOOLBAR_SECTIONS.map((section) => (
+              {studioNavItems.map((section) => (
                 <button
                   key={section.id}
                   type="button"
@@ -4028,18 +4560,18 @@ export default function App() {
           renderStatusRibbon()
         )}
       </header>
+      )}
 
       <div
-        style={styles.mainWorkspace}
-        className="itc-main-workspace"
+        style={proStudioShell ? undefined : styles.mainWorkspace}
+        className={proStudioShell ? "itc-companion-body itc-companion-body-horizontal" : "itc-main-workspace"}
       >
-
         <aside
-          style={styles.controlSidebar}
-          className="itc-sidebar"
+          style={proStudioShell ? undefined : styles.controlSidebar}
+          className={proStudioShell ? "itc-companion-panel itc-sidebar" : "itc-sidebar"}
         >
 
-          <div className={`${companionSectionClass("devices")} itc-sidebar-section itc-sidebar-section-devices`}>
+          <div className={`${studioPanelSectionClass("devices")} itc-sidebar-section itc-sidebar-section-devices`}>
           <div style={styles.sectionCard} className="itc-card itc-section-card">
             {isMobileWebStudio ? (
               <>
@@ -4079,6 +4611,24 @@ export default function App() {
                   {!mobileMicEnabled && (
                     <p className="itc-mobile-setup-hint">Mic off — video-only live stream.</p>
                   )}
+                  <div className="itc-mobile-quality-row">
+                    <label className="itc-studio-label" htmlFor="itc-output-quality-mobile">
+                      Output quality
+                    </label>
+                    <select
+                      id="itc-output-quality-mobile"
+                      className="itc-select itc-quality-select"
+                      value={outputQuality}
+                      onChange={(e) => setOutputQuality(e.target.value)}
+                      disabled={isRunning}
+                    >
+                      {OUTPUT_QUALITY_OPTIONS.map((option) => (
+                        <option key={option.id} value={option.id}>
+                          {option.resolution} — {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                   {!cameraActive && (
                     <p className="itc-mobile-setup-hint">Allow camera access when your browser asks.</p>
                   )}
@@ -4188,7 +4738,7 @@ export default function App() {
           </div>
           </div>
 
-          <div className={`${companionSectionClass("credits")} itc-sidebar-section itc-sidebar-section-credits`}>
+          <div className={`${studioPanelSectionClass("credits")} itc-sidebar-section itc-sidebar-section-credits`}>
           <div style={styles.sectionCard} className="itc-card itc-section-card">
             <div className="itc-studio-card-title">
               <span>{isMobileWebStudio ? "" : "💳 "}</span>
@@ -4233,7 +4783,7 @@ export default function App() {
           </div>
 
           {!isMobileWebStudio && (
-          <div className={`${companionSectionClass("studio")} itc-sidebar-section itc-sidebar-section-ref`}>
+          <div className={`${studioPanelSectionClass("studio")} itc-sidebar-section itc-sidebar-section-ref`}>
           <div style={styles.sectionCard} className="itc-card itc-section-card">
             <div className="itc-studio-card-title">
               <span>🖼️</span> Reference image
@@ -4250,151 +4800,13 @@ export default function App() {
           )}
 
           {!isMobileWebStudio && (
-          <div className={`${companionSectionClass("voice")} itc-sidebar-section itc-sidebar-section-voice`}>
-          <div style={styles.sectionCard} className="itc-card itc-section-card">
-            <div className="itc-studio-card-title">
-              <span>🎙️</span> Voice changer
-            </div>
-            {!voiceChangerAccess ? (
-              <div className="itc-premium-locked-copy">
-                <p>{VOICE_UPGRADE_MESSAGE}</p>
-                <button type="button" className="itc-btn itc-btn-secondary" onClick={scrollToCreditsSection}>
-                  View plans — 1,000+ credits
-                </button>
-              </div>
-            ) : (
-              <>
-            <div style={styles.parameterRow} className="itc-parameter-row">
-              <label className="itc-studio-label" style={styles.paramLabel}>Enable voice changer</label>
-              <input
-                type="checkbox"
-                checked={voiceChangerEnabled}
-                onChange={(e) => setVoiceChangerEnabled(e.target.checked)}
-                disabled={isRunning}
-                style={styles.paramCheckbox}
-                className="itc-checkbox"
-              />
-            </div>
-            {voiceChangerEnabled && (
-              <>
-                <div style={styles.voiceSelectGroup}>
-                  <label className="itc-studio-label" style={styles.paramLabel}>Engine</label>
-                  <select
-                    value={voiceEngine}
-                    onChange={(e) => setVoiceEngine(e.target.value)}
-                    disabled={isRunning}
-                    style={styles.voiceSelect}
-                    className="itc-select"
-                  >
-                    <option value="elevenlabs">ElevenLabs (chunk-based, ~{VOICE_CHUNK_MS / 1000}s delay)</option>
-                    <option value="realtime">Real-Time (voice-rt-server, continuous)</option>
-                  </select>
-                </div>
-
-                {voiceEngine === "elevenlabs" ? (
-                  <div style={styles.voiceSelectGroup}>
-                    <label className="itc-studio-label" style={styles.paramLabel}>Target voice</label>
-                    <div style={styles.voiceSelectRow}>
-                      <select
-                        value={selectedVoiceId}
-                        onChange={(e) => {
-                          setSelectedVoiceId(e.target.value);
-                          setVoicePreviewError("");
-                        }}
-                        disabled={isRunning || voices.length === 0}
-                        style={styles.voiceSelect}
-                        className="itc-select"
-                      >
-                        {voices.length === 0 && (
-                          <option value="">{voicesLoading ? "Loading voices..." : "No voices available"}</option>
-                        )}
-                        {voices.map((v) => (
-                          <option key={v.voice_id} value={v.voice_id}>{v.name}</option>
-                        ))}
-                      </select>
-                      <button
-                        type="button"
-                        style={styles.voicePreviewBtn}
-                        className="itc-btn itc-btn-secondary"
-                        onClick={playVoicePreview}
-                        disabled={isRunning || !selectedVoiceId || voicePreviewLoading}
-                        title="Play a sample of this voice"
-                      >
-                        {voicePreviewLoading ? "…" : "▶ Preview"}
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <div style={styles.voiceSelectGroup}>
-                    <label className="itc-studio-label" style={styles.paramLabel}>Target voice</label>
-                    <div style={styles.voiceSelectRow}>
-                      <select
-                        value={rtcSelectedVoiceId}
-                        onChange={(e) => {
-                          setRtcSelectedVoiceId(e.target.value);
-                          setVoicePreviewError("");
-                        }}
-                        disabled={isRunning || rtcVoices.length === 0}
-                        style={styles.voiceSelect}
-                        className="itc-select"
-                      >
-                        {rtcVoices.length === 0 && (
-                          <option value="">{rtcVoicesLoading ? "Loading voices..." : "No voices available"}</option>
-                        )}
-                        {rtcVoices.map((v) => (
-                          <option key={v.voice_id} value={v.voice_id}>
-                            {v.name}{v.pitch_lvl ? ` (+${v.pitch_lvl} pitch)` : ""}
-                          </option>
-                        ))}
-                      </select>
-                      <button
-                        type="button"
-                        style={styles.voicePreviewBtn}
-                        className="itc-btn itc-btn-secondary"
-                        onClick={playVoicePreview}
-                        disabled={
-                          isRunning ||
-                          !rtcSelectedVoiceId ||
-                          voicePreviewLoading ||
-                          !rtcVoices.find((v) => v.voice_id === rtcSelectedVoiceId)?.has_preview
-                        }
-                        title={
-                          rtcVoices.find((v) => v.voice_id === rtcSelectedVoiceId)?.has_preview
-                            ? "Play a sample of this RVC model"
-                            : "Add preview.wav or preview_in.wav on the pod to enable preview"
-                        }
-                      >
-                        {voicePreviewLoading ? "…" : "▶ Preview"}
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </>
-            )}
-            {voiceChangerEnabled && voiceEngine === "elevenlabs" && voiceLoadError && (
-              <div style={styles.ledgerErrorNote}>{voiceLoadError}</div>
-            )}
-            {voiceChangerEnabled && voiceEngine === "realtime" && rtcLoadError && (
-              <div style={styles.ledgerErrorNote}>{rtcLoadError}</div>
-            )}
-            {voiceChangerEnabled && voicePreviewError && (
-              <div style={styles.ledgerErrorNote}>{voicePreviewError}</div>
-            )}
-            <div style={styles.paramsLockedNote}>
-              {isRunning
-                ? "Locked while live — changes apply on next deploy"
-                : voiceEngine === "elevenlabs"
-                ? `Converts your voice in ~${VOICE_CHUNK_MS / 1000}s clips — speak clearly at the mic. Audio plays through the output video, same as without voice changer.`
-                : "Real-time RVC via voice-rt-server (RunPod). Audio plays through the output video. Fan noise is gated before sending to the GPU."}
-            </div>
-              </>
-            )}
-          </div>
+          <div className={`${studioPanelSectionClass("voice")} itc-sidebar-section itc-sidebar-section-voice`}>
+          {renderVoiceChangerPanel()}
           </div>
           )}
 
           {!isMobileWebStudio && (
-          <div className={`${companionSectionClass("studio")} itc-sidebar-section itc-sidebar-section-preview`}>
+          <div className={`${studioPanelSectionClass("studio")} itc-sidebar-section itc-sidebar-section-preview`}>
           <div style={styles.sectionCard} className="itc-card itc-section-card">
             <div className="itc-studio-card-title">
               <span>👁️</span> Local preview
@@ -4417,7 +4829,7 @@ export default function App() {
           )}
 
           {(!isMobileWebStudio || showAddCredits) && (
-          <div className={`${companionSectionClass("credits")} itc-sidebar-section itc-sidebar-section-topup`}>
+          <div className={`${studioPanelSectionClass("credits")} itc-sidebar-section itc-sidebar-section-topup`}>
           <div ref={creditSectionRef} style={{...styles.sectionCard, ...(showAddCredits ? styles.sectionCardAlert : {})}} className="itc-card itc-section-card">
             <div className="itc-studio-card-title">
               <span>{isMobileWebStudio ? "" : "💳 "}</span>Buy credits
@@ -4485,7 +4897,7 @@ export default function App() {
           )}
 
           {companionToolbar && (
-            <div className={companionSectionClass("drivers")}>
+            <div className={studioPanelSectionClass("drivers")}>
               <div style={styles.sectionCard} className="itc-card itc-section-card">
                 <div className="itc-studio-card-title">
                   <span>🖥️</span> Virtual drivers
@@ -4552,8 +4964,66 @@ export default function App() {
             </div>
           )}
 
-          {companionToolbar && (
-            <div className={companionSectionClass("account")}>
+          {proStudioShell && (
+            <div className={studioPanelSectionClass("account")}>
+              <div style={styles.sectionCard} className="itc-card itc-section-card">
+                <div className="itc-studio-card-title">
+                  <span>⚙️</span> {companionToolbar ? "Desktop app" : "Account"}
+                </div>
+                {companionToolbar ? (
+                  <>
+                    <div style={styles.creditMeta}>
+                      <span>Installed version: {desktopAppVersion || "…"}</span>
+                    </div>
+                    <div style={styles.buttonStack}>
+                      <button
+                        type="button"
+                        className="itc-btn itc-btn-secondary"
+                        onClick={handleManualAppUpdateCheck}
+                      >
+                        Check for app updates
+                      </button>
+                      <button
+                        type="button"
+                        className="itc-btn itc-btn-secondary"
+                        onClick={() => {
+                          if (isRunning) stopTransformation();
+                          clearAccessToken();
+                        }}
+                      >
+                        Switch access token
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div style={styles.creditMeta}>
+                      <span>Platform: Web studio</span>
+                      <span>Output quality is set before you go live.</span>
+                    </div>
+                    <div style={styles.buttonStack}>
+                      <button
+                        type="button"
+                        className="itc-btn itc-btn-secondary"
+                        onClick={() => {
+                          if (isRunning) stopTransformation();
+                          clearAccessToken();
+                        }}
+                      >
+                        Switch access token
+                      </button>
+                      <Link to="/" className="itc-btn itc-btn-secondary" style={{ textAlign: "center", textDecoration: "none" }}>
+                        Back to home
+                      </Link>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+
+          {companionToolbar && !proStudioShell && (
+            <div className={studioPanelSectionClass("account")}>
               <div style={styles.sectionCard} className="itc-card itc-section-card">
                 <div className="itc-studio-card-title">
                   <span>⚙️</span> Desktop app
@@ -4588,14 +5058,35 @@ export default function App() {
           )}
         </aside>
 
-        <div className="itc-studio-stage">
+        <div className={proStudioShell ? "itc-companion-stage itc-studio-stage" : "itc-studio-stage"}>
         <main style={styles.outputCanvas} className="itc-output-canvas">
           <div style={styles.canvasControlBar} className={`itc-canvas-control-bar${isMobileWebStudio ? " itc-canvas-control-bar-mobile" : ""}`}>
             <div style={styles.canvasTitleGroup} className="itc-canvas-title-group">
               <h2 className="itc-canvas-title">{isMobileWebStudio ? "Live output" : "Output monitor"}</h2>
               {!isMobileWebStudio && (
-                <span className="itc-canvas-subtitle" style={styles.canvasSubtitle}>Enhanced 720p Lucy 2.5 (full quality, scaled to fit)</span>
+                <span className="itc-canvas-subtitle" style={styles.canvasSubtitle}>
+                  {outputQualityConfig.label} · {outputQualityConfig.subtitle} · Lucy 2.5
+                </span>
               )}
+            </div>
+            <div className="itc-output-quality-wrap">
+              <label className="itc-studio-label itc-output-quality-label" htmlFor="itc-output-quality">
+                Output quality
+              </label>
+              <select
+                id="itc-output-quality"
+                className="itc-select itc-quality-select"
+                value={outputQuality}
+                onChange={(e) => setOutputQuality(e.target.value)}
+                disabled={isRunning}
+                title={isRunning ? "Stop the stream to change quality" : "Choose output resolution before going live"}
+              >
+                {OUTPUT_QUALITY_OPTIONS.map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {option.resolution} — {option.label}
+                  </option>
+                ))}
+              </select>
             </div>
             <div style={styles.actionRow} className="itc-action-row itc-desktop-action-row">
               <button
@@ -4649,8 +5140,33 @@ export default function App() {
                   )}
                 </div>
               )}
-              <div style={styles.fixedOutputContainer} className={`itc-fixed-output${isRunning ? " itc-live" : ""}`}>
-                <video ref={outputVideoRef} autoPlay playsInline style={styles.outputVideo} />
+              <div style={styles.fixedOutputContainer} className={`itc-fixed-output${isRunning ? " itc-live" : ""}${sceneTransitionActive ? " itc-scene-transitioning" : ""}`}>
+                <video ref={outputVideoRef} autoPlay playsInline style={styles.outputVideo} className="itc-output-video" />
+                {sceneTransitionActive && isRunning && (
+                  <div className="itc-scene-transition-overlay" aria-live="polite">
+                    <div className="itc-scene-transition-bar-track">
+                      <div className="itc-scene-transition-bar-fill" />
+                    </div>
+                    <span className="itc-scene-transition-label">Switching scene…</span>
+                  </div>
+                )}
+                {isRunning && (
+                  <div className="itc-output-live-bar">
+                    <select
+                      className="itc-quality-select itc-quality-select-overlay"
+                      value={outputQuality}
+                      disabled
+                      aria-label="Current output quality"
+                      title="Stop the stream to change quality — set Full HD (1080p) before going live"
+                    >
+                      {OUTPUT_QUALITY_OPTIONS.map((option) => (
+                        <option key={option.id} value={option.id}>
+                          {option.resolution}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
                 {isRunning && outputTheaterSupported && !isMobileLayout && (
                   <button
                     type="button"
@@ -4866,7 +5382,7 @@ const styles = {
     height: "100%",
     objectFit: "contain",
     backgroundColor: "#000",
-    filter: "contrast(1.06) saturate(1.05)",
+    filter: "contrast(1.08) saturate(1.06) brightness(1.02)",
     transform: "translateZ(0)",
   },
   fittedImage: { width: "100%", height: "100%", objectFit: "contain" },
