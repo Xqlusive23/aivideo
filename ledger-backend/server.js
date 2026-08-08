@@ -368,6 +368,13 @@ function creditsOwedForTotalElapsed(totalElapsedSeconds) {
 // tracked for client sync guards — using max(wall, decartDelta) overbilled when Decart's
 // tick counter runs faster than real time (users saw ~10 credits/s instead of ~3).
 const HEARTBEAT_MAX_CATCHUP_SECONDS = 10;
+/** Intentional /end may miss a couple of ticks; never bill more than this gap. */
+const SESSION_END_MAX_CATCHUP_SECONDS = 30;
+/**
+ * Orphaned sessions closed on the next /sessions/start must NOT bill wall-clock from
+ * last heartbeat → now (that wiped balances when users restarted after a failed /end).
+ */
+const ORPHAN_SESSION_MAX_CATCHUP_SECONDS = 15;
 
 function billableSecondsForTick(
   session,
@@ -405,7 +412,9 @@ function sessionLiveMetrics(session, asOf = new Date()) {
   const elapsedSeconds = Math.max(0, Math.floor((endInstant - started) / 1000));
   const pending = session.ended_at
     ? 0
-    : creditsToBillSinceLastHeartbeat(session, asOf, { maxCatchUpSeconds: Infinity });
+    : creditsToBillSinceLastHeartbeat(session, asOf, {
+        maxCatchUpSeconds: SESSION_END_MAX_CATCHUP_SECONDS,
+      });
   const creditsUsed = Number(session.credits_used || 0) + pending;
   return { elapsedSeconds, creditsUsed };
 }
@@ -449,7 +458,7 @@ function applySessionBilling(
 
     const catchUp =
       maxCatchUpSeconds ??
-      (endSession ? Infinity : HEARTBEAT_MAX_CATCHUP_SECONDS);
+      (endSession ? SESSION_END_MAX_CATCHUP_SECONDS : HEARTBEAT_MAX_CATCHUP_SECONDS);
     const { billableSeconds, nextDecartSeconds } = billableSecondsForTick(session, asOf, {
       maxCatchUpSeconds: catchUp,
       decartGenerationSeconds,
@@ -1356,20 +1365,21 @@ app.post("/api/sessions/start", requireToken, (req, res) => {
 
   // Defense in depth: if this token somehow already has an active (unended)
   // session — a double-clicked Start button, a tab that closed before
-  // calling /end, whatever — close it out properly first, billing exactly
-  // the time it actually ran. Without this, two sessions could run their
-  // own independent heartbeat loops against the same balance in parallel,
-  // multiplying the effective drain rate.
+  // calling /end, whatever — close it out properly first.
+  // IMPORTANT: cap catch-up. Uncapped wall-clock from last_heartbeat → now
+  // wiped entire balances when users started a second transformation.
   const orphaned = db
     .prepare("SELECT * FROM usage_sessions WHERE token = ? AND ended_at IS NULL")
     .all(req.token);
   for (const session of orphaned) {
-    const result = applySessionBilling(session.id, req.token, new Date(), { endSession: true });
-    if (result?.creditsToDeduct > 0) {
-      console.warn(
-        `⚠️  Auto-closed an orphaned session (${session.id}) for token ${req.token.slice(0, 8)}... before starting a new one.`
-      );
-    }
+    const result = applySessionBilling(session.id, req.token, new Date(), {
+      endSession: true,
+      maxCatchUpSeconds: ORPHAN_SESSION_MAX_CATCHUP_SECONDS,
+    });
+    console.warn(
+      `⚠️  Auto-closed orphaned session (${session.id}) for token ${req.token.slice(0, 8)}...` +
+        ` deducted ${result?.creditsToDeduct ?? 0} credits (cap ${ORPHAN_SESSION_MAX_CATCHUP_SECONDS}s).`
+    );
   }
 
   const freshCredits = getBalance(req.token);

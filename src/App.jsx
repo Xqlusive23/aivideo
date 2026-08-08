@@ -3626,47 +3626,38 @@ export default function App() {
 
     await waitForBillingEnd();
 
-    // Pre-check balance only — billing opens on first Decart generation tick.
-    const needsAccessCheck = !creditsLoaded || credits <= 0 || !tierAccessLoaded;
-    if (needsAccessCheck) {
-      try {
-        const res = await fetch(`${LEDGER_URL}/api/access-check`, { headers: authHeaders() });
-        const data = await res.json();
-        if (res.status === 401) {
-          handleTokenRejected("Your access token was rejected. Please re-enter it.");
-          startInProgressRef.current = false;
-          return;
-        }
-        if (res.status === 403) {
-          handleTokenRejected(
-            await readRejectedMessage(
-              res,
-              "Your access has been revoked. If you think this is a mistake, message us on WhatsApp below."
-            )
-          );
-          startInProgressRef.current = false;
-          return;
-        }
-        if (!res.ok) throw new Error(`Access check failed with ${res.status}`);
-        syncTierAccessFromLedger(data);
-        if (data.credits <= 0) {
-          setCredits(data.credits);
-          setStatus("OUT OF CREDITS — ADD MORE TO CONTINUE");
-          setShowAddCredits(true);
-          startInProgressRef.current = false;
-          return;
-        }
-        setCredits(data.credits);
-      } catch (err) {
-        console.error("Failed to verify credits before start:", err);
-        setStatus("LEDGER BACKEND UNREACHABLE — CHECK IT'S RUNNING");
-        setLedgerUnreachable(true);
+    // Always refresh balance before go-live so the UI isn't stale after a prior session/orphan close.
+    try {
+      const res = await fetch(`${LEDGER_URL}/api/access-check`, { headers: authHeaders() });
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 401) {
+        handleTokenRejected("Your access token was rejected. Please re-enter it.");
         startInProgressRef.current = false;
         return;
       }
-    } else if (credits <= 0) {
-      setStatus("OUT OF CREDITS — ADD MORE TO CONTINUE");
-      setShowAddCredits(true);
+      if (res.status === 403) {
+        handleTokenRejected(
+          await readRejectedMessage(
+            res,
+            "Your access has been revoked. If you think this is a mistake, message us on WhatsApp below."
+          )
+        );
+        startInProgressRef.current = false;
+        return;
+      }
+      if (!res.ok) throw new Error(`Access check failed with ${res.status}`);
+      syncTierAccessFromLedger(data);
+      setCredits(data.credits ?? 0);
+      if ((data.credits ?? 0) <= 0) {
+        setStatus("OUT OF CREDITS — ADD MORE TO CONTINUE");
+        setShowAddCredits(true);
+        startInProgressRef.current = false;
+        return;
+      }
+    } catch (err) {
+      console.error("Failed to verify credits before start:", err);
+      setStatus("LEDGER BACKEND UNREACHABLE — CHECK IT'S RUNNING");
+      setLedgerUnreachable(true);
       startInProgressRef.current = false;
       return;
     }
@@ -3850,9 +3841,13 @@ export default function App() {
           platform: getClientPlatform(),
           decartGenerationSeconds: decartGenerationSecondsRef.current,
         }),
+        keepalive: true,
       });
-      const data = await res.json();
-      if (res.ok) setCredits(data.credits);
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && typeof data.credits === "number") {
+        setCredits(data.credits);
+        creditsRef.current = data.credits;
+      }
     } catch (err) {
       console.error("Failed to close billing session cleanly:", err);
     }
