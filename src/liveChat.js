@@ -43,6 +43,35 @@ export function initLiveChat() {
   firstScript.parentNode.insertBefore(loader, firstScript);
 }
 
+/** Hide the floating bubble (studio) — text buttons can still openLiveChat(). */
+export function hideLiveChatWidget() {
+  if (!isLiveChatEnabled() || typeof document === "undefined") return;
+  document.documentElement.classList.add("itc-livechat-hidden");
+  initLiveChat();
+  runWhenTawkReady(() => {
+    try {
+      window.Tawk_API?.hideWidget?.();
+      window.Tawk_API?.minimize?.();
+    } catch {
+      // ignore
+    }
+  });
+}
+
+/** Show the floating bubble again (landing / marketing pages). */
+export function showLiveChatWidget() {
+  if (!isLiveChatEnabled() || typeof document === "undefined") return;
+  document.documentElement.classList.remove("itc-livechat-hidden");
+  initLiveChat();
+  runWhenTawkReady(() => {
+    try {
+      window.Tawk_API?.showWidget?.();
+    } catch {
+      // ignore
+    }
+  });
+}
+
 /** Opens the Tawk.to widget. Message is stored as visitor metadata for agents (Tawk cannot prefill the input). */
 export function openLiveChat(message) {
   if (!isLiveChatEnabled()) return false;
@@ -52,6 +81,12 @@ export function openLiveChat(message) {
   runWhenTawkReady(() => {
     if (text && window.Tawk_API?.setAttributes) {
       window.Tawk_API.setAttributes({ accessRequest: text }, () => {});
+    }
+    // Temporarily show so maximize works even when studio has the bubble hidden.
+    try {
+      window.Tawk_API?.showWidget?.();
+    } catch {
+      // ignore
     }
     window.Tawk_API.maximize();
   });

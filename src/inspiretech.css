@@ -3631,9 +3631,19 @@ body {
   }
 }
 
-/* Smaller floating live chat widget (Tawk.to) in studio */
+/* Floating live chat — smaller on marketing pages; fully hidden in studio */
 #tawk-bubble-container,
 .widget-visible iframe[title="chat widget"] {
   transform: scale(0.72);
   transform-origin: bottom right;
 }
+
+html.itc-livechat-hidden #tawk-bubble-container,
+html.itc-livechat-hidden iframe[title="chat widget"],
+html.itc-livechat-hidden .widget-visible {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+  opacity: 0 !important;
+}
+
