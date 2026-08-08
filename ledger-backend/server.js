@@ -56,8 +56,8 @@ if (process.env.BILLING_MULTIPLIER) {
 const PRESENCE_ACTIVE_SECONDS = 90; // admin "online now" window
 const FLUTTERWAVE_SECRET_KEY = (process.env.FLUTTERWAVE_SECRET_KEY || "").trim();
 const FLUTTERWAVE_WEBHOOK_HASH = (process.env.FLUTTERWAVE_WEBHOOK_HASH || "").trim();
-const CHECKOUT_CURRENCY = String(process.env.FLUTTERWAVE_CURRENCY || "USD").trim().toUpperCase();
-const NAIRA_PER_DOLLAR = 1600;
+const CHECKOUT_CURRENCY = String(process.env.FLUTTERWAVE_CURRENCY || "NGN").trim().toUpperCase();
+const NAIRA_PER_DOLLAR = Number(process.env.NAIRA_PER_USD || 1600);
 const ADMIN_SECRET = process.env.ADMIN_SECRET || "";
 const DECART_API_KEY = (process.env.DECART_API_KEY || "").trim();
 
@@ -1154,9 +1154,10 @@ app.get("/api/voice/rtc-preview/:voiceId", requireToken, requireVoiceChangerAcce
 });
 
 // --- Checkout (purchases) ----------------------------------------------------
-// USD list prices — Flutterwave checkout accepts cards, mobile money, and bank
-// transfer across Africa (NG, GH, KE, ZA, UG, TZ, RW, and more).
-const TIERS = {
+// Charge in NGN by default so Flutterwave can offer bank transfer / USSD.
+// Keep USD amounts as a fallback when FLUTTERWAVE_CURRENCY=USD.
+// NGN tiers must stay in sync with src/pricing.js TOP_UP_OPTIONS.
+const TIERS_USD = {
   500: 7,
   1000: 14,
   2000: 28,
@@ -1164,6 +1165,41 @@ const TIERS = {
   10000: 140,
   50000: 700,
 };
+const TIERS_NGN = {
+  500: 11200,
+  1000: 22400,
+  2000: 44800,
+  5000: 112000,
+  10000: 224000,
+  50000: 1120000,
+};
+
+function checkoutAmountForCredits(credits) {
+  if (CHECKOUT_CURRENCY === "NGN") return TIERS_NGN[credits];
+  if (CHECKOUT_CURRENCY === "USD") return TIERS_USD[credits];
+  // Unknown currency: convert from USD list at the configured FX rate.
+  const usd = TIERS_USD[credits];
+  return usd == null ? undefined : Math.round(usd * NAIRA_PER_DOLLAR);
+}
+
+function flutterwavePaymentOptions(currency) {
+  switch (String(currency || "").toUpperCase()) {
+    case "NGN":
+      return "card,ussd,banktransfer,account";
+    case "KES":
+      return "card,mpesa";
+    case "GHS":
+      return "card,mobilemoneyghana";
+    case "UGX":
+      return "card,mobilemoneyuganda";
+    case "RWF":
+      return "card,mobilemoneyrwanda";
+    case "ZAR":
+      return "card,account";
+    default:
+      return "card";
+  }
+}
 
 app.post("/api/checkout", requireToken, async (req, res) => {
   try {
@@ -1172,8 +1208,8 @@ app.post("/api/checkout", requireToken, async (req, res) => {
     }
 
     const { credits, email, phone } = req.body || {};
-    const amount = TIERS[credits];
-    if (!amount) {
+    const amount = checkoutAmountForCredits(credits);
+    if (amount == null) {
       return res.status(400).json({ error: "Invalid credit tier" });
     }
 
@@ -1193,6 +1229,7 @@ app.post("/api/checkout", requireToken, async (req, res) => {
     saveCustomerContact(req.token, checkoutEmail, checkoutPhone);
 
     const txRef = `credits_${credits}_${randomUUID()}`;
+    const paymentOptions = flutterwavePaymentOptions(CHECKOUT_CURRENCY);
 
     const flutterwaveRes = await fetch("https://api.flutterwave.com/v3/payments", {
       method: "POST",
@@ -1204,6 +1241,7 @@ app.post("/api/checkout", requireToken, async (req, res) => {
         tx_ref: txRef,
         amount: String(amount),
         currency: CHECKOUT_CURRENCY,
+        payment_options: paymentOptions,
         redirect_url: `${FRONTEND_URL}/?checkout=success`,
         customer: {
           email: checkoutEmail,
@@ -1214,10 +1252,12 @@ app.post("/api/checkout", requireToken, async (req, res) => {
           token: req.token,
           customer_email: checkoutEmail,
           customer_phone: checkoutPhone,
+          list_amount: String(amount),
+          list_currency: CHECKOUT_CURRENCY,
         },
         customizations: {
           title: "InspireTech Credits",
-          description: `${credits.toLocaleString()} live transformation credits`,
+          description: `${Number(credits).toLocaleString()} live transformation credits`,
           logo: `${FRONTEND_URL}/logo.png`,
         },
       }),
@@ -1228,7 +1268,10 @@ app.post("/api/checkout", requireToken, async (req, res) => {
       throw new Error(data.message || "Flutterwave initialization failed");
     }
 
-    res.json({ url: data.data.link, reference: txRef });
+    console.log(
+      `[checkout] ${credits} credits → ${amount} ${CHECKOUT_CURRENCY} (options: ${paymentOptions}) ref ${txRef}`
+    );
+    res.json({ url: data.data.link, reference: txRef, currency: CHECKOUT_CURRENCY, amount });
   } catch (err) {
     console.error("Checkout initialization failed:", err);
     res.status(500).json({ error: err.message || "Checkout failed" });
@@ -1471,5 +1514,11 @@ app.listen(PORT, () => {
   console.log(`Admin page: http://localhost:${PORT}/admin.html`);
   console.log(
     `Billing: ${effectiveCreditsPerSecond().toFixed(2)} credits/s (500 credits ≈ ${Math.round(LIVE_SECONDS_PER_500_CREDITS / 60)} min live)`
+  );
+  console.log(
+    `Checkout currency: ${CHECKOUT_CURRENCY}` +
+      (CHECKOUT_CURRENCY === "NGN"
+        ? " (card / USSD / bank transfer)"
+        : " — set FLUTTERWAVE_CURRENCY=NGN for Nigerian bank transfer")
   );
 });

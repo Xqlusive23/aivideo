@@ -16,6 +16,7 @@ import {
   TOP_UP_OPTIONS,
   formatCredits,
   formatLiveTimePerMonth,
+  formatNaira,
   formatUsdFromNaira,
   getPricingTierFeatures,
 } from "./pricing.js";
@@ -127,7 +128,7 @@ const FEATURES = [
   {
     icon: "💳",
     title: "Pay-as-you-go credits",
-    body: "Usage is metered per second while live. Top up via Flutterwave when you need more time — prices shown in USD.",
+    body: "Usage is metered per second while live. Top up via Flutterwave in Naira — card, USSD, or bank transfer.",
   },
 ];
 
@@ -268,10 +269,12 @@ export default function LandingPage() {
               <div className="itc-landing-pricing-tile-head">
                 <p className="itc-landing-pricing-credits">{formatCredits(tier.credits)} credits</p>
                 <p className="itc-landing-pricing-usd">
-                  {formatUsdFromNaira(tier.naira)}
+                  {formatNaira(tier.naira)}
                   <span className="itc-landing-pricing-period"> / month</span>
                 </p>
-                <p className="itc-landing-pricing-time">{formatLiveTimePerMonth(tier.credits)}</p>
+                <p className="itc-landing-pricing-time">
+                  ≈ {formatUsdFromNaira(tier.naira)} · {formatLiveTimePerMonth(tier.credits)}
+                </p>
               </div>
               <ul className="itc-landing-pricing-features">
                 {getPricingTierFeatures(tier.credits).map((item) => (
@@ -318,7 +321,8 @@ export default function LandingPage() {
       <section id="payments" className="itc-landing-section">
         <h2 className="itc-landing-section-title">Payments worldwide</h2>
         <p className="itc-landing-section-lead">
-          InspireTech uses Flutterwave for credit top-ups. Pay with card, mobile money, or bank transfer across Africa.
+          InspireTech uses Flutterwave for credit top-ups in <strong>NGN</strong>. Pay with card, USSD, or bank transfer
+          (Nigeria), plus cards internationally.
         </p>
         <ul className="itc-landing-download-list">
           <li><strong>Across Africa:</strong> cards, mobile money (M-Pesa, MTN MoMo, etc.), and bank transfer where supported.</li>

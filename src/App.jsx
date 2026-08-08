@@ -21,6 +21,7 @@ import {
   TOP_UP_OPTIONS,
   formatUsdFromCredits,
   formatUsdFromNaira,
+  formatNaira,
   formatLiveTimeFromCredits,
 } from "./pricing.js";
 import { checkForNewerShellRelease } from "./shellUpdate.js";
@@ -4882,15 +4883,18 @@ export default function App() {
                     className="itc-btn itc-btn-topup"
                     onClick={() => purchaseCredits(opt.credits)}
                   >
-                    Buy for {formatUsdFromNaira(opt.naira)}
+                    Buy for {formatNaira(opt.naira)}
+                    <span style={{ display: "block", fontSize: "10px", opacity: 0.75, fontWeight: 500 }}>
+                      ≈ {formatUsdFromNaira(opt.naira)}
+                    </span>
                   </button>
                 </div>
               ))}
             </div>
             <div style={styles.modalNote}>
               {isMobileWebStudio
-                ? "Pay with card, mobile money, or bank transfer via Flutterwave."
-                : "Checkout via Flutterwave — cards, mobile money, and bank transfer across Africa. Prices shown in USD."}
+                ? "Pay in Naira via Flutterwave — card, USSD, or bank transfer."
+                : "Checkout in NGN via Flutterwave — cards, USSD, and bank transfer. USD equivalent shown for reference."}
             </div>
           </div>
           </div>
