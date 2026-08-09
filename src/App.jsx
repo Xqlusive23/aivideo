@@ -1696,19 +1696,20 @@ export default function App() {
   // Electron app (see /companion-app), which is what feeds these frames
   // into a real system virtual camera via Unity Capture. Nothing here
   // affects regular web use at all.
-  // Cap virtual-cam at 720p — 1080p RGBA @20fps overwhelms the feeder pipe and
-  // crashed Electron with "write EOF / write UNKNOWN" while Decart was connecting.
-  const COMPANION_VIRTUAL_MAX_WIDTH = 1280;
-  const COMPANION_VIRTUAL_MAX_HEIGHT = 720;
+  // Match Decart output quality (incl. 1080p). Feeder stdin is backpressure-safe
+  // in companion ≥0.3.24 — do not soft-cap below the reference / output size.
   const COMPANION_LIVE_FPS = 20;
   const COMPANION_IDLE_FPS = 4;
+  const COMPANION_LIVE_FPS_1080 = 15; // slightly lower at Full HD to keep the pipe stable
 
   const getCompanionVirtualSize = () => {
     const { virtualWidth, virtualHeight } = getOutputQualityConfig(outputQuality);
-    return {
-      width: Math.min(virtualWidth, COMPANION_VIRTUAL_MAX_WIDTH),
-      height: Math.min(virtualHeight, COMPANION_VIRTUAL_MAX_HEIGHT),
-    };
+    return { width: virtualWidth, height: virtualHeight };
+  };
+
+  const getCompanionLiveFps = () => {
+    const { width, height } = getCompanionVirtualSize();
+    return width * height >= 1920 * 1080 ? COMPANION_LIVE_FPS_1080 : COMPANION_LIVE_FPS;
   };
 
   // Always feed InspireTech Camera: live transform when available, otherwise a blank
@@ -1743,7 +1744,7 @@ export default function App() {
     };
 
     const syncInterval = (force = false) => {
-      const fps = isRunningRef.current ? COMPANION_LIVE_FPS : COMPANION_IDLE_FPS;
+      const fps = isRunningRef.current ? getCompanionLiveFps() : COMPANION_IDLE_FPS;
       if (!force && fps === lastFps && intervalId) return;
       lastFps = fps;
       if (intervalId) clearInterval(intervalId);
