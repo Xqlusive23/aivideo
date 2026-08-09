@@ -52,14 +52,18 @@ function formatStatusDisplay(raw) {
     "PAYLOAD READY FOR TRANSMISSION": "Reference loaded",
     "PROVISIONING MEDIA INPUTS...": "Starting camera…",
     "HANDSHAKING WITH DECART WEBRTC CLUSTER...": "Connecting…",
+    "CONNECTED — WAITING FOR TRANSFORM…": "Connected · waiting for video…",
+    "GENERATING TRANSFORM…": "Generating…",
     "COMPUTE LINK ONLINE // REALTIME TRANSFORMATION TERMINAL": "Live",
     "PROMPT UPDATED // LIVE TRANSFORMATION": "Prompt updated",
     "SCENE UPDATED // LIVE TRANSFORMATION": "Scene updated",
     "PIPELINE DISCONNECTED": "Stopped",
     "PIPELINE TERMINATED": "Stopped",
+    "CONNECT TIMEOUT — NO TRANSFORM VIDEO": "Timed out · no transform",
     "INSTALLING DRIVERS — APPROVE UAC": "Installing drivers…",
     "CHECKOUT CANCELLED": "Checkout cancelled",
     "REDIRECTING TO CHECKOUT...": "Opening checkout…",
+    "DECART RECONNECTING…": "Reconnecting…",
   };
   if (exact[raw]) return exact[raw];
   if (raw.startsWith("OUT OF CREDITS")) return "Out of credits";
@@ -192,8 +196,22 @@ function drawVideoFrame(ctx, video, destWidth, destHeight, fit = "cover") {
 
 const REFERENCE_UPLOAD_MAX_EDGE = 1920;
 const DECART_PREWARM_TTL_MS = 4 * 60 * 1000;
-const BILLING_OPEN_FALLBACK_MS = 2500;
+/** Abort & disconnect Decart if transform video never arrives (caps Decart metering). */
+const TRANSFORM_CONNECT_TIMEOUT_MS = 5000;
 const DECART_PRESET_DEDUP_MS = 900;
+
+function drawIdleVirtualCamFrame(ctx, width, height) {
+  ctx.fillStyle = "#000000";
+  ctx.fillRect(0, 0, width, height);
+  const fontSize = Math.max(14, Math.round(width * 0.022));
+  const padX = Math.max(16, Math.round(width * 0.025));
+  const padY = Math.max(12, Math.round(height * 0.03));
+  ctx.fillStyle = "rgba(255, 255, 255, 0.88)";
+  ctx.font = `600 ${fontSize}px "Segoe UI", system-ui, sans-serif`;
+  ctx.textAlign = "right";
+  ctx.textBaseline = "top";
+  ctx.fillText("InspireTech Camera", width - padX, padY);
+}
 
 async function loadImageFile(file) {
   const objectUrl = URL.createObjectURL(file);
@@ -655,6 +673,8 @@ export default function App() {
   const billingStartInFlightRef = useRef(false);
   const billingEndInFlightRef = useRef(null);
   const billingOpenFallbackRef = useRef(null);
+  const transformOutputReadyRef = useRef(false);
+  const connectAttemptRef = useRef(0);
   const theaterControlsTimerRef = useRef(null);
   const creditSectionRef = useRef(null);
   const startInProgressRef = useRef(false);
@@ -1685,15 +1705,10 @@ export default function App() {
     });
   }, [outputQuality]);
 
+  // Always feed InspireTech Camera: live transform when available, otherwise a blank
+  // black frame with the camera name (Unity Capture's idle color is yellowish).
   useEffect(() => {
     if (typeof window === "undefined" || !window.inspiretechCompanion) return;
-    if (!isRunning) {
-      if (companionCaptureIntervalRef.current) {
-        clearInterval(companionCaptureIntervalRef.current);
-        companionCaptureIntervalRef.current = null;
-      }
-      return;
-    }
 
     const canvas = companionCanvasRef.current || document.createElement("canvas");
     companionCanvasRef.current = canvas;
@@ -1714,8 +1729,11 @@ export default function App() {
 
       companionCaptureIntervalRef.current = setInterval(() => {
         const video = outputVideoRef.current;
-        if (!video || !video.videoWidth) return;
-        drawVideoFrame(ctx, video, canvas.width, canvas.height, "cover");
+        if (isRunningRef.current && video?.videoWidth) {
+          drawVideoFrame(ctx, video, canvas.width, canvas.height, "cover");
+        } else {
+          drawIdleVirtualCamFrame(ctx, canvas.width, canvas.height);
+        }
         const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
         window.inspiretechCompanion.sendFrame(imageData.data.buffer);
       }, 1000 / COMPANION_CAPTURE_FPS);
@@ -1730,7 +1748,7 @@ export default function App() {
         companionCaptureIntervalRef.current = null;
       }
     };
-  }, [isRunning, outputQuality]);
+  }, [outputQuality]);
 
   // Single place that handles "the server no longer accepts this token" —
   // covers both an invalid token (401) and a revoked one (403). Always safe
@@ -3368,6 +3386,9 @@ export default function App() {
       }
 
       decartGenerationSecondsRef.current = seconds;
+      // Do not open billing until transform video is actually on screen —
+      // generationTick can fire during handshake while output is still blank.
+      if (!transformOutputReadyRef.current) return;
       void ensureBillingForGeneration(seconds);
 
       if (!billingSessionIdRef.current) return;
@@ -3387,6 +3408,19 @@ export default function App() {
     session.on("connectionChange", (state) => {
       const prev = lastState;
       lastState = state;
+
+      if (state === "connecting") {
+        setStatus("HANDSHAKING WITH DECART WEBRTC CLUSTER...");
+        return;
+      }
+
+      if (state === "connected" && !transformOutputReadyRef.current) {
+        setStatus("CONNECTED — WAITING FOR TRANSFORM…");
+      }
+
+      if (state === "generating" && !billingSessionIdRef.current) {
+        setStatus("GENERATING TRANSFORM…");
+      }
 
       if (state === "reconnecting") {
         setStatus("DECART RECONNECTING…");
@@ -3424,6 +3458,8 @@ export default function App() {
     setRunningState(false);
     clearClockTimer();
     clearHeartbeat();
+    clearBillingOpenFallback();
+    transformOutputReadyRef.current = false;
     const decartSession = realtimeClientRef.current;
     realtimeClientRef.current = null;
     if (decartSession) {
@@ -3663,6 +3699,7 @@ export default function App() {
     }
 
     billingSessionIdRef.current = null;
+    transformOutputReadyRef.current = false;
     setRunningState(true);
     startInProgressRef.current = false;
     setStatus("HANDSHAKING WITH DECART WEBRTC CLUSTER...");
@@ -3745,6 +3782,17 @@ export default function App() {
           : "character reference only",
       });
 
+      // Cap Decart metering: if first transform frame doesn't land in time, disconnect.
+      const connectAttempt = ++connectAttemptRef.current;
+      clearBillingOpenFallback();
+      billingOpenFallbackRef.current = setTimeout(() => {
+        if (connectAttemptRef.current !== connectAttempt) return;
+        if (!isRunningRef.current || transformOutputReadyRef.current) return;
+        console.warn("[InspireTech] Transform video never arrived — disconnecting Decart (no user billing)");
+        setStatus("CONNECT TIMEOUT — NO TRANSFORM VIDEO");
+        stopTransformation();
+      }, TRANSFORM_CONNECT_TIMEOUT_MS);
+
       const session = await client.realtime.connect(streamForDecartFinal, {
         model: realtimeModel,
         mirror: resolveDecartMirrorMode(streamForDecartFinal),
@@ -3756,15 +3804,20 @@ export default function App() {
           video.srcObject = remoteStream;
           video.muted = false;
           const requestedResolution = getOutputQualityConfig(outputQuality).resolution;
-          const logOutputDimensions = () => {
-            if (video.videoWidth > 0) {
+          const markTransformReady = () => {
+            if (!isRunningRef.current || video.videoWidth <= 0) return;
+            if (!transformOutputReadyRef.current) {
+              transformOutputReadyRef.current = true;
+              clearBillingOpenFallback();
               console.info(
                 `[InspireTech] Output stream ${video.videoWidth}x${video.videoHeight} (requested ${requestedResolution})`
               );
+              void ensureBillingForGeneration(decartGenerationSecondsRef.current || 0);
             }
           };
-          video.addEventListener("loadedmetadata", logOutputDimensions, { once: true });
-          void video.play().catch(() => {});
+          video.addEventListener("loadedmetadata", markTransformReady);
+          video.addEventListener("playing", markTransformReady);
+          void video.play().then(markTransformReady).catch(() => {});
           if (shouldUseMobileTheater()) {
             requestAnimationFrame(() => {
               void enterOutputTheater({ silent: true, force: true, requireStream: false });
@@ -3774,46 +3827,34 @@ export default function App() {
         initialState: {
           prompt: {
             text: connectPrompt,
-            enhance: connectEnhance,
+            // Faster first frames — enhance can be turned on later via Apply.
+            enhance: false,
           },
           ...(referenceImage ? { image: referenceImage } : {}),
           passthrough: false,
         },
       });
 
-      wireDecartSession(session);
-
-      realtimeClientRef.current = session;
-
-      if (referenceBackgroundAtStart) {
-        activeSceneUseRefBackgroundRef.current = true;
+      // Timed out or stopped while connect() was in flight — drop session so Decart stops.
+      if (!isRunningRef.current || connectAttemptRef.current !== connectAttempt) {
         try {
-          await pushDecartState(session, "", { force: true });
-        } catch (reinforceErr) {
-          console.warn("[InspireTech] Reference background reinforce failed:", reinforceErr);
+          session.disconnect();
+        } catch {
+          // ignore
         }
-      } else if (sceneReferenceAtStart && pendingScene) {
-        activeSceneImageIdRef.current = pendingScene.id;
-        // Composite already in initialState — reinforce so set() keeps image + layered prompt locked.
-        try {
-          await pushDecartState(session, "", {
-            force: true,
-            scene: pendingScene,
-            useSceneReference: true,
-          });
-        } catch (sceneErr) {
-          console.warn("[InspireTech] Scene composite reinforce failed:", sceneErr);
-          setPromptApplyNote(sceneErr?.message || "Scene could not be applied — tap the scene again.");
-        }
+        return;
       }
 
-      clearBillingOpenFallback();
-      billingOpenFallbackRef.current = setTimeout(() => {
-        if (isRunningRef.current && !billingSessionIdRef.current) {
-          console.warn("[InspireTech] Opening billing session (Decart generationTick delayed)");
-          void ensureBillingForGeneration(decartGenerationSecondsRef.current || 0);
-        }
-      }, BILLING_OPEN_FALLBACK_MS);
+      wireDecartSession(session);
+      realtimeClientRef.current = session;
+
+      // initialState already has prompt + reference — skip post-connect set() (it delayed first frames).
+      if (referenceBackgroundAtStart) {
+        activeSceneUseRefBackgroundRef.current = true;
+      } else if (sceneReferenceAtStart && pendingScene) {
+        activeSceneImageIdRef.current = pendingScene.id;
+      }
+
       if (shouldUseMobileTheater()) {
         void enterOutputTheater({ silent: true, force: true, requireStream: false });
       }
@@ -3859,6 +3900,8 @@ export default function App() {
     activeSceneImageIdRef.current = "";
     decartSetGuardRef.current = { inFlight: false, lastKey: "", lastAt: 0, reconnectAt: 0 };
     clearBillingOpenFallback();
+    transformOutputReadyRef.current = false;
+    connectAttemptRef.current += 1;
     const session = realtimeClientRef.current;
     realtimeClientRef.current = null;
     if (session) {
@@ -4063,6 +4106,12 @@ export default function App() {
     </div>
   );
 
+  const connectionStatusLabel = formatStatusDisplay(status);
+  const isLiveStatus =
+    status === "COMPUTE LINK ONLINE // REALTIME TRANSFORM TERMINAL" ||
+    status === "PROMPT UPDATED // LIVE TRANSFORM" ||
+    status === "SCENE UPDATED // LIVE TRANSFORM";
+
   const renderPromptDock = () => {
     if (!backgroundChangerAccess) {
       return (
@@ -4111,9 +4160,9 @@ export default function App() {
             </div>
             <p className="itc-prompt-dock-subtitle">{sceneSubtitle}</p>
           </div>
-          <div className={`itc-scene-dock-status-pill itc-glass-pill${isRunning ? " is-live" : ""}`}>
-            <span className="itc-companion-pill-icon" aria-hidden="true">{isRunning ? "●" : "○"}</span>
-            <span>{isRunning ? formatStatusDisplay(status) : "Standby"}</span>
+          <div className={`itc-scene-dock-status-pill itc-glass-pill${isLiveStatus ? " is-live" : ""}`}>
+            <span className="itc-companion-pill-icon" aria-hidden="true">{isLiveStatus ? "●" : isRunning ? "◐" : "○"}</span>
+            <span>{connectionStatusLabel}</span>
           </div>
         </div>
         <div className="itc-prompt-dock-toggles itc-scene-dock-toggles">
@@ -4321,8 +4370,8 @@ export default function App() {
         <div className="itc-status-ribbon itc-status-ribbon-compact">
           <div className="itc-status-chip">
             <span className="itc-status-chip-label">Status</span>
-            <span className={`itc-status-chip-value${isRunning ? " is-live" : ""}`} style={!isRunning ? { color: c.amber } : undefined}>
-              {formatStatusDisplay(status)}
+            <span className={`itc-status-chip-value${isLiveStatus ? " is-live" : ""}`} style={!isRunning ? { color: c.amber } : undefined}>
+              {connectionStatusLabel}
             </span>
           </div>
           <div className="itc-status-chip">
@@ -4348,8 +4397,8 @@ export default function App() {
     <div className="itc-status-ribbon">
       <div className="itc-status-chip">
         <span className="itc-status-chip-label">Status</span>
-        <span className={`itc-status-chip-value${isRunning ? " is-live" : ""}`} style={!isRunning ? { color: c.amber } : undefined}>
-          {formatStatusDisplay(status)}
+        <span className={`itc-status-chip-value${isLiveStatus ? " is-live" : ""}`} style={!isRunning ? { color: c.amber } : undefined}>
+          {connectionStatusLabel}
         </span>
       </div>
       <div className="itc-status-chip">
@@ -4413,9 +4462,11 @@ export default function App() {
         ))}
       </nav>
       <div className="itc-companion-topbar-right">
-        <div className={`itc-companion-pill itc-glass-pill${isRunning ? " is-live" : ""}`}>
-          <span className="itc-companion-pill-icon" aria-hidden="true">{isRunning ? "●" : "○"}</span>
-          <span className="itc-companion-pill-value">{isRunning ? "AI live" : "Standby"}</span>
+        <div className={`itc-companion-pill itc-glass-pill${isLiveStatus ? " is-live" : ""}`} title={status}>
+          <span className="itc-companion-pill-icon" aria-hidden="true">
+            {isLiveStatus ? "●" : isRunning ? "◐" : "○"}
+          </span>
+          <span className="itc-companion-pill-value">{connectionStatusLabel}</span>
         </div>
         {isRunning && (
           <div className="itc-companion-pill itc-glass-pill">
