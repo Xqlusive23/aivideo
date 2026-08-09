@@ -261,8 +261,9 @@ async function composeSceneReferenceImage(sceneFile, characterFile) {
     loadImageFile(sceneFile),
     loadImageFile(characterFile),
   ]);
-  const width = 1280;
-  const height = 720;
+  // Match Full HD / reference upload edge so scene+character isn't softer than a plain reference.
+  const width = 1920;
+  const height = 1080;
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
@@ -271,13 +272,13 @@ async function composeSceneReferenceImage(sceneFile, characterFile) {
 
   drawHtmlImageCover(ctx, sceneImg, 0, 0, width, height);
 
-  // Soften the character crop edges slightly so Lucy reads it as one photo, not a sticker.
-  const charMaxH = Math.round(height * 0.72);
+  // Place the character large in-frame (portrait-scale), same visual weight as a solo reference.
+  const charMaxH = Math.round(height * 0.92);
   const charAspect = (charImg.naturalWidth || 1) / (charImg.naturalHeight || 1);
   let charH = charMaxH;
   let charW = Math.round(charH * charAspect);
-  if (charW > width * 0.55) {
-    charW = Math.round(width * 0.55);
+  if (charW > width * 0.72) {
+    charW = Math.round(width * 0.72);
     charH = Math.round(charW / charAspect);
   }
   const charX = Math.round((width - charW) / 2);
