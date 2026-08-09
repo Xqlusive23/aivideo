@@ -124,6 +124,27 @@ async function launchApp() {
 
 app.whenReady().then(launchApp);
 
+// Broken virtual-cam / audio feeder pipes must never show a fatal Electron dialog.
+process.on("uncaughtException", (err) => {
+  const message = String(err?.message || err || "");
+  const code = err?.code || "";
+  if (
+    code === "EOF" ||
+    code === "EPIPE" ||
+    code === "UNKNOWN" ||
+    code === "ECONNRESET" ||
+    /write (EOF|UNKNOWN|EPIPE)/i.test(message)
+  ) {
+    console.warn("[main] swallowed feeder pipe error:", message);
+    return;
+  }
+  console.error("[main] uncaughtException:", err);
+});
+
+process.on("unhandledRejection", (reason) => {
+  console.warn("[main] unhandledRejection:", reason);
+});
+
 app.on("window-all-closed", () => {
   stopAudioFeeder();
   stopFeeder();

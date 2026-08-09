@@ -198,6 +198,7 @@ const REFERENCE_UPLOAD_MAX_EDGE = 1920;
 const DECART_PREWARM_TTL_MS = 4 * 60 * 1000;
 /** Abort & disconnect Decart if transform video never arrives (caps Decart metering). */
 const TRANSFORM_CONNECT_TIMEOUT_MS = 5000;
+const TRANSFORM_CONNECT_TIMEOUT_DESKTOP_MS = 10000;
 const DECART_PRESET_DEDUP_MS = 900;
 
 function drawIdleVirtualCamFrame(ctx, width, height) {
@@ -1695,15 +1696,20 @@ export default function App() {
   // Electron app (see /companion-app), which is what feeds these frames
   // into a real system virtual camera via Unity Capture. Nothing here
   // affects regular web use at all.
-  const COMPANION_CAPTURE_FPS = 20; // must match virtualcam_feeder.py's --fps
-  useEffect(() => {
-    if (typeof window === "undefined" || !window.inspiretechCompanion?.configureVirtualCam) return;
+  // Cap virtual-cam at 720p — 1080p RGBA @20fps overwhelms the feeder pipe and
+  // crashed Electron with "write EOF / write UNKNOWN" while Decart was connecting.
+  const COMPANION_VIRTUAL_MAX_WIDTH = 1280;
+  const COMPANION_VIRTUAL_MAX_HEIGHT = 720;
+  const COMPANION_LIVE_FPS = 20;
+  const COMPANION_IDLE_FPS = 4;
+
+  const getCompanionVirtualSize = () => {
     const { virtualWidth, virtualHeight } = getOutputQualityConfig(outputQuality);
-    void window.inspiretechCompanion.configureVirtualCam({
-      width: virtualWidth,
-      height: virtualHeight,
-    });
-  }, [outputQuality]);
+    return {
+      width: Math.min(virtualWidth, COMPANION_VIRTUAL_MAX_WIDTH),
+      height: Math.min(virtualHeight, COMPANION_VIRTUAL_MAX_HEIGHT),
+    };
+  };
 
   // Always feed InspireTech Camera: live transform when available, otherwise a blank
   // black frame with the camera name (Unity Capture's idle color is yellowish).
@@ -1712,22 +1718,17 @@ export default function App() {
 
     const canvas = companionCanvasRef.current || document.createElement("canvas");
     companionCanvasRef.current = canvas;
-    const { virtualWidth, virtualHeight } = getOutputQualityConfig(outputQuality);
-    canvas.width = virtualWidth;
-    canvas.height = virtualHeight;
+    const { width, height } = getCompanionVirtualSize();
+    canvas.width = width;
+    canvas.height = height;
     const ctx = canvas.getContext("2d", { willReadFrequently: true });
     let cancelled = false;
+    let intervalId = null;
+    let lastFps = 0;
 
-    const beginCapture = async () => {
-      if (window.inspiretechCompanion.configureVirtualCam) {
-        await window.inspiretechCompanion.configureVirtualCam({
-          width: virtualWidth,
-          height: virtualHeight,
-        });
-      }
-      if (cancelled) return;
-
-      companionCaptureIntervalRef.current = setInterval(() => {
+    const pushFrame = () => {
+      if (cancelled || !window.inspiretechCompanion?.sendFrame) return;
+      try {
         const video = outputVideoRef.current;
         if (isRunningRef.current && video?.videoWidth) {
           drawVideoFrame(ctx, video, canvas.width, canvas.height, "cover");
@@ -1736,15 +1737,44 @@ export default function App() {
         }
         const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
         window.inspiretechCompanion.sendFrame(imageData.data.buffer);
-      }, 1000 / COMPANION_CAPTURE_FPS);
+      } catch (err) {
+        console.warn("[InspireTech] Virtual camera frame push failed:", err);
+      }
     };
+
+    const syncInterval = (force = false) => {
+      const fps = isRunningRef.current ? COMPANION_LIVE_FPS : COMPANION_IDLE_FPS;
+      if (!force && fps === lastFps && intervalId) return;
+      lastFps = fps;
+      if (intervalId) clearInterval(intervalId);
+      intervalId = setInterval(pushFrame, 1000 / fps);
+      companionCaptureIntervalRef.current = intervalId;
+    };
+
+    const beginCapture = async () => {
+      if (window.inspiretechCompanion.configureVirtualCam) {
+        try {
+          await window.inspiretechCompanion.configureVirtualCam({ width, height });
+        } catch (err) {
+          console.warn("[InspireTech] Virtual camera configure failed:", err);
+        }
+      }
+      if (cancelled) return;
+      syncInterval(true);
+      pushFrame();
+    };
+
+    const fpsWatch = setInterval(() => {
+      if (!cancelled) syncInterval(false);
+    }, 500);
 
     void beginCapture();
 
     return () => {
       cancelled = true;
-      if (companionCaptureIntervalRef.current) {
-        clearInterval(companionCaptureIntervalRef.current);
+      clearInterval(fpsWatch);
+      if (intervalId) clearInterval(intervalId);
+      if (companionCaptureIntervalRef.current === intervalId) {
         companionCaptureIntervalRef.current = null;
       }
     };
@@ -3813,7 +3843,7 @@ export default function App() {
           console.warn("[InspireTech] Transform video never arrived — disconnecting Decart (no user billing)");
           setStatus("CONNECT TIMEOUT — NO TRANSFORM VIDEO");
           stopTransformation();
-        }, TRANSFORM_CONNECT_TIMEOUT_MS);
+        }, isCompanionApp() ? TRANSFORM_CONNECT_TIMEOUT_DESKTOP_MS : TRANSFORM_CONNECT_TIMEOUT_MS);
 
         const session = await client.realtime.connect(streamForDecartFinal, {
           model: realtimeModel,
