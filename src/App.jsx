@@ -686,7 +686,7 @@ export default function App() {
       : false
   );
   const nativeVideoFullscreenRef = useRef(false);
-  const decartPrewarmRef = useRef({ apiKey: null, fetchedAt: 0, uploadPromise: null });
+  const decartPrewarmRef = useRef({ apiKey: null, fetchedAt: 0, expiresAt: null, uploadPromise: null });
   const preparedReferenceFileRef = useRef(null);
   const stopTransformationRef = useRef(() => {});
 
@@ -3148,16 +3148,38 @@ export default function App() {
     return shouldEnhanceDecartPrompt(sourcePrompt, enhanceMask);
   };
 
-  const ensureDecartApiKey = async () => {
+  const ensureDecartApiKey = async ({ forceRefresh = false } = {}) => {
     const now = Date.now();
     const cached = decartPrewarmRef.current;
-    if (cached.apiKey && now - cached.fetchedAt < DECART_PREWARM_TTL_MS) {
+    const expiresAtMs = cached.expiresAt ? Date.parse(cached.expiresAt) : NaN;
+    const notExpired =
+      !Number.isFinite(expiresAtMs) || now < expiresAtMs - 20_000; // refresh 20s before Decart expiry
+    if (
+      !forceRefresh &&
+      cached.apiKey &&
+      now - cached.fetchedAt < DECART_PREWARM_TTL_MS &&
+      notExpired
+    ) {
       return cached.apiKey;
     }
     const auth = await fetchDecartRealtimeCredentials(getModelId());
     if (!auth?.apiKey) return null;
-    decartPrewarmRef.current = { ...decartPrewarmRef.current, apiKey: auth.apiKey, fetchedAt: now };
+    decartPrewarmRef.current = {
+      ...decartPrewarmRef.current,
+      apiKey: auth.apiKey,
+      fetchedAt: now,
+      expiresAt: auth.expiresAt || null,
+    };
     return auth.apiKey;
+  };
+
+  const clearDecartApiKeyCache = () => {
+    decartPrewarmRef.current = {
+      ...decartPrewarmRef.current,
+      apiKey: null,
+      fetchedAt: 0,
+      expiresAt: null,
+    };
   };
 
   const getReferenceUploadFile = async (fileOverride) => {
@@ -3705,158 +3727,172 @@ export default function App() {
     setStatus("HANDSHAKING WITH DECART WEBRTC CLUSTER...");
 
     try {
-      const apiKey = await ensureDecartApiKey();
+      let apiKey = await ensureDecartApiKey({ forceRefresh: true });
       if (!apiKey) {
         setRunningState(false);
         return;
       }
 
-      const client = createDecartClient({ apiKey });
-      const realtimeModel = getRealtimeModel();
-      const sourcePrompt = getPromptText();
-      const composeOptions = getPromptComposeOptions();
-      const pendingScene = activeBackgroundSceneId ? findBackgroundScene(activeBackgroundSceneId) : null;
-      const sceneReferenceAtStart = Boolean(
-        pendingScene && !composeOptions.useReferenceBackground && selectedFile
-      );
-      const referenceBackgroundAtStart = Boolean(composeOptions.useReferenceBackground && selectedFile);
+      const connectWithKey = async (key) => {
+        const client = createDecartClient({ apiKey: key });
+        const realtimeModel = getRealtimeModel();
+        const sourcePrompt = getPromptText();
+        const composeOptions = getPromptComposeOptions();
+        const pendingScene = activeBackgroundSceneId ? findBackgroundScene(activeBackgroundSceneId) : null;
+        const sceneReferenceAtStart = Boolean(
+          pendingScene && !composeOptions.useReferenceBackground && selectedFile
+        );
+        const referenceBackgroundAtStart = Boolean(composeOptions.useReferenceBackground && selectedFile);
 
-      // Scene mode: connect with composite (character + room) + same layered prompt as reference photo background.
-      const connectPrompt =
-        referenceBackgroundAtStart || sceneReferenceAtStart
-          ? composeLayeredPrompt("", true, { useReferenceBackground: true })
-          : CHARACTER_WITH_REF_PROMPT;
-      const connectEnhance = referenceBackgroundAtStart || sceneReferenceAtStart ? true : getDecartEnhance(sourcePrompt);
+        // Scene mode: connect with composite (character + room) + same layered prompt as reference photo background.
+        const connectPrompt =
+          referenceBackgroundAtStart || sceneReferenceAtStart
+            ? composeLayeredPrompt("", true, { useReferenceBackground: true })
+            : CHARACTER_WITH_REF_PROMPT;
 
-      const voiceAllowedNow = voiceChangerAccess && voiceChangerEnabled;
-      const hasValidVoiceNow =
-        voiceAllowedNow &&
-        (voiceEngine === "realtime" ? !!rtcSelectedVoiceId : !!selectedVoiceId);
-      const referenceImagePromise = selectedFile
-        ? sceneReferenceAtStart
-          ? resolveSceneCompositeReference(client, pendingScene)
-          : resolveReferenceImage(client, selectedFile)
-        : Promise.resolve(null);
-      const voicePromise =
-        hasValidVoiceNow && voiceEngine === "realtime"
-          ? startRealtimeVoiceCapture(localStreamRef.current)
-          : hasValidVoiceNow
-          ? startVoiceChangerCapture(localStreamRef.current)
+        const voiceAllowedNow = voiceChangerAccess && voiceChangerEnabled;
+        const hasValidVoiceNow =
+          voiceAllowedNow &&
+          (voiceEngine === "realtime" ? !!rtcSelectedVoiceId : !!selectedVoiceId);
+        const referenceImagePromise = selectedFile
+          ? sceneReferenceAtStart
+            ? resolveSceneCompositeReference(client, pendingScene)
+            : resolveReferenceImage(client, selectedFile)
           : Promise.resolve(null);
+        const voicePromise =
+          hasValidVoiceNow && voiceEngine === "realtime"
+            ? startRealtimeVoiceCapture(localStreamRef.current)
+            : hasValidVoiceNow
+            ? startVoiceChangerCapture(localStreamRef.current)
+            : Promise.resolve(null);
 
-      const [referenceImage, convertedAudioStream] = await Promise.all([
-        referenceImagePromise,
-        voicePromise,
-      ]);
+        const [referenceImage, convertedAudioStream] = await Promise.all([
+          referenceImagePromise,
+          voicePromise,
+        ]);
 
-      let streamForDecartFinal;
-      const videoTrack = localStreamRef.current.getVideoTracks()[0];
-      if (convertedAudioStream) {
-        const convertedAudioTrack = convertedAudioStream.getAudioTracks()[0];
-        streamForDecartFinal = new MediaStream([videoTrack, convertedAudioTrack].filter(Boolean));
-      } else {
-        // Video-only to Decart — mic audio in the stream makes Lucy react to sound as motion.
-        streamForDecartFinal = new MediaStream([videoTrack].filter(Boolean));
-      }
-
-      const companionAudioStream = convertedAudioStream || localStreamRef.current;
-      if (isCompanionApp() && routeAudioToVirtualCable) {
-        await startCompanionAudioExport(companionAudioStream);
-      }
-
-      activeScenePromptRef.current = sourcePrompt;
-      activeSceneUseRefBackgroundRef.current = composeOptions.useReferenceBackground;
-      decartSetGuardRef.current = { inFlight: false, lastKey: "", lastAt: 0, reconnectAt: 0 };
-
-      console.info("[InspireTech] Decart connect →", {
-        connectPrompt: connectPrompt.slice(0, 160) + (connectPrompt.length > 160 ? "…" : ""),
-        enhance: connectEnhance,
-        hasReference: Boolean(selectedFile),
-        referenceBackgroundAtStart,
-        sceneReferenceAtStart,
-        sceneId: pendingScene?.id,
-        strategy: referenceBackgroundAtStart
-          ? "reference photo background (character + environment from photo)"
-          : sceneReferenceAtStart
-          ? "scene composite (character photo + room JPG) as reference"
-          : "character reference only",
-      });
-
-      // Cap Decart metering: if first transform frame doesn't land in time, disconnect.
-      const connectAttempt = ++connectAttemptRef.current;
-      clearBillingOpenFallback();
-      billingOpenFallbackRef.current = setTimeout(() => {
-        if (connectAttemptRef.current !== connectAttempt) return;
-        if (!isRunningRef.current || transformOutputReadyRef.current) return;
-        console.warn("[InspireTech] Transform video never arrived — disconnecting Decart (no user billing)");
-        setStatus("CONNECT TIMEOUT — NO TRANSFORM VIDEO");
-        stopTransformation();
-      }, TRANSFORM_CONNECT_TIMEOUT_MS);
-
-      const session = await client.realtime.connect(streamForDecartFinal, {
-        model: realtimeModel,
-        mirror: resolveDecartMirrorMode(streamForDecartFinal),
-        resolution: getOutputQualityConfig(outputQuality).resolution,
-        preferredVideoCodec: "h264",
-        onRemoteStream: (remoteStream) => {
-          const video = outputVideoRef.current;
-          if (!video) return;
-          video.srcObject = remoteStream;
-          video.muted = false;
-          const requestedResolution = getOutputQualityConfig(outputQuality).resolution;
-          const markTransformReady = () => {
-            if (!isRunningRef.current || video.videoWidth <= 0) return;
-            if (!transformOutputReadyRef.current) {
-              transformOutputReadyRef.current = true;
-              clearBillingOpenFallback();
-              console.info(
-                `[InspireTech] Output stream ${video.videoWidth}x${video.videoHeight} (requested ${requestedResolution})`
-              );
-              void ensureBillingForGeneration(decartGenerationSecondsRef.current || 0);
-            }
-          };
-          video.addEventListener("loadedmetadata", markTransformReady);
-          video.addEventListener("playing", markTransformReady);
-          void video.play().then(markTransformReady).catch(() => {});
-          if (shouldUseMobileTheater()) {
-            requestAnimationFrame(() => {
-              void enterOutputTheater({ silent: true, force: true, requireStream: false });
-            });
-          }
-        },
-        initialState: {
-          prompt: {
-            text: connectPrompt,
-            // Faster first frames — enhance can be turned on later via Apply.
-            enhance: false,
-          },
-          ...(referenceImage ? { image: referenceImage } : {}),
-          passthrough: false,
-        },
-      });
-
-      // Timed out or stopped while connect() was in flight — drop session so Decart stops.
-      if (!isRunningRef.current || connectAttemptRef.current !== connectAttempt) {
-        try {
-          session.disconnect();
-        } catch {
-          // ignore
+        let streamForDecartFinal;
+        const videoTrack = localStreamRef.current.getVideoTracks()[0];
+        if (convertedAudioStream) {
+          const convertedAudioTrack = convertedAudioStream.getAudioTracks()[0];
+          streamForDecartFinal = new MediaStream([videoTrack, convertedAudioTrack].filter(Boolean));
+        } else {
+          // Video-only to Decart — mic audio in the stream makes Lucy react to sound as motion.
+          streamForDecartFinal = new MediaStream([videoTrack].filter(Boolean));
         }
-        return;
-      }
 
-      wireDecartSession(session);
-      realtimeClientRef.current = session;
+        const companionAudioStream = convertedAudioStream || localStreamRef.current;
+        if (isCompanionApp() && routeAudioToVirtualCable) {
+          await startCompanionAudioExport(companionAudioStream);
+        }
 
-      // initialState already has prompt + reference — skip post-connect set() (it delayed first frames).
-      if (referenceBackgroundAtStart) {
-        activeSceneUseRefBackgroundRef.current = true;
-      } else if (sceneReferenceAtStart && pendingScene) {
-        activeSceneImageIdRef.current = pendingScene.id;
-      }
+        activeScenePromptRef.current = sourcePrompt;
+        activeSceneUseRefBackgroundRef.current = composeOptions.useReferenceBackground;
+        decartSetGuardRef.current = { inFlight: false, lastKey: "", lastAt: 0, reconnectAt: 0 };
 
-      if (shouldUseMobileTheater()) {
-        void enterOutputTheater({ silent: true, force: true, requireStream: false });
+        console.info("[InspireTech] Decart connect →", {
+          connectPrompt: connectPrompt.slice(0, 160) + (connectPrompt.length > 160 ? "…" : ""),
+          enhance: false,
+          hasReference: Boolean(selectedFile),
+          referenceBackgroundAtStart,
+          sceneReferenceAtStart,
+          sceneId: pendingScene?.id,
+          strategy: referenceBackgroundAtStart
+            ? "reference photo background (character + environment from photo)"
+            : sceneReferenceAtStart
+            ? "scene composite (character photo + room JPG) as reference"
+            : "character reference only",
+        });
+
+        // Cap Decart metering: if first transform frame doesn't land in time, disconnect.
+        const connectAttempt = ++connectAttemptRef.current;
+        clearBillingOpenFallback();
+        billingOpenFallbackRef.current = setTimeout(() => {
+          if (connectAttemptRef.current !== connectAttempt) return;
+          if (!isRunningRef.current || transformOutputReadyRef.current) return;
+          console.warn("[InspireTech] Transform video never arrived — disconnecting Decart (no user billing)");
+          setStatus("CONNECT TIMEOUT — NO TRANSFORM VIDEO");
+          stopTransformation();
+        }, TRANSFORM_CONNECT_TIMEOUT_MS);
+
+        const session = await client.realtime.connect(streamForDecartFinal, {
+          model: realtimeModel,
+          mirror: resolveDecartMirrorMode(streamForDecartFinal),
+          resolution: getOutputQualityConfig(outputQuality).resolution,
+          preferredVideoCodec: "h264",
+          onRemoteStream: (remoteStream) => {
+            const video = outputVideoRef.current;
+            if (!video) return;
+            video.srcObject = remoteStream;
+            video.muted = false;
+            const requestedResolution = getOutputQualityConfig(outputQuality).resolution;
+            const markTransformReady = () => {
+              if (!isRunningRef.current || video.videoWidth <= 0) return;
+              if (!transformOutputReadyRef.current) {
+                transformOutputReadyRef.current = true;
+                clearBillingOpenFallback();
+                console.info(
+                  `[InspireTech] Output stream ${video.videoWidth}x${video.videoHeight} (requested ${requestedResolution})`
+                );
+                void ensureBillingForGeneration(decartGenerationSecondsRef.current || 0);
+              }
+            };
+            video.addEventListener("loadedmetadata", markTransformReady);
+            video.addEventListener("playing", markTransformReady);
+            void video.play().then(markTransformReady).catch(() => {});
+            if (shouldUseMobileTheater()) {
+              requestAnimationFrame(() => {
+                void enterOutputTheater({ silent: true, force: true, requireStream: false });
+              });
+            }
+          },
+          initialState: {
+            prompt: {
+              text: connectPrompt,
+              // Faster first frames — enhance can be turned on later via Apply.
+              enhance: false,
+            },
+            ...(referenceImage ? { image: referenceImage } : {}),
+            passthrough: false,
+          },
+        });
+
+        // Timed out or stopped while connect() was in flight — drop session so Decart stops.
+        if (!isRunningRef.current || connectAttemptRef.current !== connectAttempt) {
+          try {
+            session.disconnect();
+          } catch {
+            // ignore
+          }
+          return;
+        }
+
+        wireDecartSession(session);
+        realtimeClientRef.current = session;
+
+        // initialState already has prompt + reference — skip post-connect set() (it delayed first frames).
+        if (referenceBackgroundAtStart) {
+          activeSceneUseRefBackgroundRef.current = true;
+        } else if (sceneReferenceAtStart && pendingScene) {
+          activeSceneImageIdRef.current = pendingScene.id;
+        }
+
+        if (shouldUseMobileTheater()) {
+          void enterOutputTheater({ silent: true, force: true, requireStream: false });
+        }
+      };
+
+      try {
+        await connectWithKey(apiKey);
+      } catch (firstErr) {
+        const msg = String(firstErr?.message || firstErr || "");
+        const invalidKey = /invalid.?api.?key|INVALID_API_KEY|unauthorized|401/i.test(msg);
+        if (!invalidKey) throw firstErr;
+        console.warn("[InspireTech] Decart rejected API key — minting a fresh token and retrying once");
+        clearDecartApiKeyCache();
+        apiKey = await ensureDecartApiKey({ forceRefresh: true });
+        if (!apiKey) throw firstErr;
+        await connectWithKey(apiKey);
       }
     } catch (connectErr) {
       console.error(connectErr);
@@ -3864,8 +3900,14 @@ export default function App() {
       billingSessionIdRef.current = null;
       clearClockTimer();
       clearHeartbeat();
+      clearBillingOpenFallback();
       if (sid) void endBillingSession(sid);
-      setStatus(`HANDSHAKE REJECTED: ${connectErr.message}`);
+      const msg = String(connectErr?.message || connectErr || "");
+      if (/invalid.?api.?key|INVALID_API_KEY/i.test(msg)) {
+        setStatus("DECART KEY REJECTED — CHECK LEDGER DECART_API_KEY / RETRY");
+      } else {
+        setStatus(`HANDSHAKE REJECTED: ${connectErr.message}`);
+      }
       setRunningState(false);
       stopActiveVoicePipeline();
     }

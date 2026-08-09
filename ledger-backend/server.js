@@ -1488,7 +1488,7 @@ app.post("/api/decart/realtime-token", requireToken, async (req, res) => {
   const modelId = String(req.body?.modelId || "lucy-2.5").trim();
   const maxSeconds = maxLiveSecondsForCredits(credits);
   const maxSessionDuration = Math.max(60, Math.min(maxSeconds, 7200));
-  const expiresIn = Math.min(600, Math.max(120, maxSessionDuration + 60));
+  const expiresIn = Math.min(600, Math.max(300, maxSessionDuration + 60));
 
   const tokenOptions = {
     expiresIn,
