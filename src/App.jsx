@@ -326,7 +326,7 @@ async function prepareReferenceImageForUpload(file) {
 }
 
 const DEFAULT_TRANSFORMATION_PROMPT =
-  "Substitute the character in the video with the person in the reference image, matching their full appearance exactly as shown in the reference — including clothing, outfit, hat, hair, skin tone, and body shape.";
+  "Substitute the character in the video with the person in the reference image, matching their full appearance exactly as shown in the reference — clothing, hair, skin tone, and body shape only; do not add a hat, cap, glasses, jewelry, or any accessory that is not clearly visible in the reference image.";
 const CHARACTER_WITH_REF_PROMPT = DEFAULT_TRANSFORMATION_PROMPT;
 const CHARACTER_SWAP_PATTERN =
   /substitute the character|replace the character|transform into this character|person in the reference image|character from the reference image|with this character/i;
