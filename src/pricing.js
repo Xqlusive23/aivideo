@@ -94,47 +94,97 @@ export const ACCESS_SALE_PLANS = [
     usd: 70,
     includesAccessToken: true,
     label: "Access token + 500 credits",
-    blurb: "Starter plan · unlocks studio checkout after admin confirms payment",
+    blurb: "Starter plan · unlocks studio top-ups after admin confirms payment",
   },
   {
-    id: "credits-1000",
+    id: "access-1000",
     credits: 1000,
     usd: 80,
-    includesAccessToken: false,
-    label: "1,000 credits",
+    includesAccessToken: true,
+    label: "Access token + 1,000 credits",
     blurb: "Includes AI voice changer unlock",
   },
   {
-    id: "credits-2000",
+    id: "access-2000",
     credits: 2000,
     usd: 120,
-    includesAccessToken: false,
-    label: "2,000 credits",
+    includesAccessToken: true,
+    label: "Access token + 2,000 credits",
     blurb: "Includes voice + scene / reference background unlock",
   },
 ];
 
-/** Plain-text price list for WhatsApp / live chat access requests. */
+/** Plain-text price list for WhatsApp / live chat access requests (not studio subscription packs).
+ *  For access-token requests, only USDT pay details are included (not Nigerian bank transfer).
+ */
 export function buildAccessRequestPriceListMessage({
   intro = "Hi, I'd like to request access to InspireTech.",
   askTrial = true,
+  usdtAddress = "",
+  usdtNetwork = "",
 } = {}) {
   const lines = [
     intro,
     "",
-    "Please send me an access token. Plans:",
+    "Access-code / invite packages (WhatsApp — not the in-studio credit packs):",
     ...ACCESS_SALE_PLANS.map((plan) => {
       const tokenBit = plan.includesAccessToken ? "Access token + " : "";
       return `• ${tokenBit}${plan.credits.toLocaleString()} credits — $${plan.usd}`;
     }),
   ];
+
+  const address = String(usdtAddress || "").trim();
+  if (address) {
+    const network = String(usdtNetwork || "").trim();
+    lines.push("");
+    lines.push("Pay with USDT (outside Nigeria / preferred for access requests):");
+    if (network) lines.push(`• Network: ${network}`);
+    lines.push(`• Address: ${address}`);
+    lines.push("Send the exact USD amount for your plan, then reply here with the tx hash / screenshot.");
+  }
+
   if (askTrial) {
     lines.push("", "If available, I'd also like a short free trial first.");
   }
   return lines.join("\n");
 }
 
-/** Marketing feature bullets for landing-page pricing tiles. */
+export function getAccessSalePlanFeatures(plan) {
+  const features = [
+    "Real-time face transform (Lucy 2.5)",
+    "Web studio + Windows desktop app",
+    `${formatLiveTimeFromCredits(plan.credits)} live (approx.)`,
+  ];
+  if (plan.includesAccessToken) {
+    features.unshift("Personal access token included");
+  }
+  if (plan.credits >= VOICE_MIN_PURCHASE_CREDITS) {
+    features.push("AI voice changer unlock");
+  } else {
+    features.push("Character transform (voice unlocks at 1,000)");
+  }
+  if (plan.credits >= BACKGROUND_MIN_PURCHASE_CREDITS) {
+    features.push("Scene library + reference background unlock");
+  } else if (plan.credits >= VOICE_MIN_PURCHASE_CREDITS) {
+    features.push("Scenes unlock at 2,000 credits");
+  }
+  features.push("Admin confirms payment · then studio top-ups unlock");
+  return features;
+}
+
+/** Remaining live time from current balance (uses billed rate). */
+export function formatRemainingLiveTime(credits) {
+  const totalSeconds = Math.max(0, Math.floor(Number(credits || 0) / EFFECTIVE_CREDITS_PER_SECOND));
+  if (totalSeconds < 60) return `~${totalSeconds}s`;
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes < 60) {
+    return seconds > 0 ? `~${minutes}m ${seconds}s` : `~${minutes}m`;
+  }
+  return formatLiveTimeFromCredits(credits);
+}
+
+/** Marketing feature bullets for studio credit-pack tiles. */
 export function getPricingTierFeatures(credits) {
   const features = [
     "Real-time face transform (Lucy 2.5)",

@@ -420,6 +420,497 @@ body {
   margin-top: 8px;
 }
 
+.itc-landing-pricing-row-subscribe {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.itc-landing-access-box {
+  margin: 0 0 18px;
+  padding: 16px;
+  border-radius: 14px;
+  border: 1px dashed rgba(148, 163, 184, 0.35);
+  background: rgba(15, 23, 42, 0.35);
+}
+
+.itc-landing-access-box-title {
+  margin: 0 0 6px;
+  font-family: var(--itc-font-display);
+  font-size: 0.95rem;
+  font-weight: 750;
+  color: var(--itc-text);
+  letter-spacing: -0.01em;
+}
+
+.itc-landing-access-box-lead {
+  margin: 0 0 12px;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: var(--itc-text-muted);
+}
+
+.itc-landing-access-plan-blurb {
+  color: var(--itc-text-muted);
+  font-weight: 500;
+}
+
+.itc-pay-methods {
+  margin-top: 14px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(15, 23, 42, 0.35);
+}
+
+.itc-pay-methods-title {
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--itc-text, #e2e8f0);
+  margin-bottom: 6px;
+}
+
+.itc-pay-methods-lead {
+  margin: 0 0 12px;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  color: var(--itc-text-muted, #94a3b8);
+}
+
+.itc-pay-methods-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.itc-pay-method-card {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.itc-pay-method-heading {
+  margin: 0 0 4px;
+  font-size: 0.8125rem;
+  font-weight: 700;
+  color: var(--itc-text, #e2e8f0);
+}
+
+.itc-pay-method-note {
+  margin: 0 0 10px;
+  font-size: 0.6875rem;
+  line-height: 1.4;
+  color: var(--itc-text-muted, #94a3b8);
+}
+
+.itc-pay-method-dl {
+  margin: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.itc-pay-method-dl > div {
+  display: grid;
+  gap: 2px;
+}
+
+.itc-pay-method-dl dt {
+  font-size: 0.625rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--itc-text-muted, #94a3b8);
+}
+
+.itc-pay-method-dl dd {
+  margin: 0;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--itc-text, #e2e8f0);
+  line-height: 1.35;
+}
+
+.itc-pay-method-address {
+  word-break: break-all;
+  font-size: 0.75rem !important;
+}
+
+.itc-pay-method-banks {
+  display: grid;
+  gap: 10px;
+}
+
+.itc-pay-method-banks .itc-pay-method-dl {
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.itc-pay-method-banks .itc-pay-method-dl:last-child {
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+.itc-checkout-page {
+  min-height: 100vh;
+  padding: 24px 16px 48px;
+  background:
+    radial-gradient(ellipse 70% 45% at 15% -10%, rgba(129, 140, 248, 0.22), transparent 55%),
+    radial-gradient(ellipse 50% 35% at 90% 0%, rgba(34, 211, 238, 0.12), transparent 50%),
+    #0b1020;
+  color: #f1f5f9;
+}
+
+.itc-checkout-shell {
+  width: min(560px, 100%);
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.itc-checkout-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.itc-checkout-back {
+  border: none;
+  background: transparent;
+  color: #94a3b8;
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+}
+
+.itc-checkout-back:hover {
+  color: #e2e8f0;
+}
+
+.itc-checkout-eyebrow {
+  margin: 8px 0 0;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #22d3ee;
+}
+
+.itc-checkout-title {
+  margin: 0;
+  font-family: var(--itc-font-display);
+  font-size: clamp(1.6rem, 4vw, 2rem);
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 1.15;
+}
+
+.itc-checkout-lead {
+  margin: 0;
+  color: #94a3b8;
+  line-height: 1.55;
+  font-size: 0.9375rem;
+}
+
+.itc-checkout-summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px;
+  border-radius: 14px;
+  border: 1px solid rgba(129, 140, 248, 0.22);
+  background: rgba(17, 24, 39, 0.85);
+}
+
+.itc-checkout-summary-label {
+  font-size: 0.6875rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #64748b;
+  margin-bottom: 4px;
+}
+
+.itc-checkout-summary-value {
+  font-size: 1.125rem;
+  font-weight: 800;
+}
+
+.itc-checkout-summary-meta {
+  margin-top: 4px;
+  font-size: 0.75rem;
+  color: #34d399;
+}
+
+.itc-checkout-summary-amount {
+  text-align: right;
+}
+
+.itc-checkout-summary-naira {
+  font-size: 1.125rem;
+  font-weight: 800;
+}
+
+.itc-checkout-summary-usd {
+  margin-top: 4px;
+  font-size: 0.75rem;
+  color: #94a3b8;
+}
+
+.itc-checkout-section-title {
+  margin: 0 0 10px;
+  font-size: 0.8125rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #cbd5e1;
+}
+
+.itc-checkout-method-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.itc-checkout-method {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 14px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: rgba(15, 23, 42, 0.65);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+}
+
+.itc-checkout-method:hover {
+  border-color: rgba(129, 140, 248, 0.45);
+}
+
+.itc-checkout-method.is-active {
+  border-color: rgba(52, 211, 153, 0.55);
+  background: rgba(16, 185, 129, 0.1);
+  box-shadow: 0 0 0 1px rgba(52, 211, 153, 0.2);
+}
+
+.itc-checkout-method-label {
+  font-size: 0.9375rem;
+  font-weight: 700;
+}
+
+.itc-checkout-method-sub {
+  font-size: 0.75rem;
+  color: #94a3b8;
+}
+
+.itc-checkout-details {
+  padding: 16px;
+  border-radius: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(17, 24, 39, 0.9);
+}
+
+.itc-checkout-details-lead {
+  margin: 0 0 14px;
+  font-size: 0.8125rem;
+  color: #94a3b8;
+  line-height: 1.45;
+}
+
+.itc-checkout-dl {
+  margin: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.itc-checkout-dl > div {
+  display: grid;
+  gap: 2px;
+}
+
+.itc-checkout-dl dt {
+  font-size: 0.6875rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #64748b;
+}
+
+.itc-checkout-dl dd {
+  margin: 0;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.itc-checkout-address {
+  word-break: break-all;
+  font-size: 0.8125rem !important;
+}
+
+.itc-checkout-banks {
+  display: grid;
+  gap: 14px;
+}
+
+.itc-checkout-banks .itc-checkout-dl {
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.itc-checkout-banks .itc-checkout-dl:last-child {
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+.itc-checkout-actions {
+  display: grid;
+  gap: 10px;
+}
+
+.itc-checkout-fine {
+  margin: 0;
+  font-size: 0.75rem;
+  color: #64748b;
+  line-height: 1.45;
+  text-align: center;
+}
+
+.itc-checkout-wait {
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px dashed rgba(148, 163, 184, 0.28);
+}
+
+@media (max-width: 560px) {
+  .itc-checkout-method-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .itc-checkout-summary {
+    flex-direction: column;
+  }
+
+  .itc-checkout-summary-amount {
+    text-align: left;
+  }
+}
+
+.itc-credit-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  align-items: stretch;
+  width: 100%;
+}
+
+.itc-credit-card {
+  min-width: 0;
+  height: 100%;
+}
+
+.itc-credit-select-btn {
+  appearance: none;
+  -webkit-appearance: none;
+  box-sizing: border-box;
+}
+
+.itc-credit-select-btn:hover {
+  filter: brightness(1.08);
+}
+
+.itc-sidebar-section-topup .itc-section-card,
+.itc-sidebar-section-topup .itc-card {
+  overflow: visible;
+}
+
+.itc-landing-pay-rails {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 22px;
+}
+
+.itc-landing-pay-card {
+  padding: 18px 16px;
+  border-radius: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: rgba(15, 23, 42, 0.4);
+}
+
+.itc-landing-pay-card-title {
+  margin: 0 0 6px;
+  font-family: var(--itc-font-display);
+  font-size: 1rem;
+  font-weight: 750;
+  color: var(--itc-text);
+}
+
+.itc-landing-pay-card-lead {
+  margin: 0 0 14px;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: var(--itc-text-muted);
+}
+
+.itc-landing-pay-banks {
+  display: grid;
+  gap: 14px;
+}
+
+.itc-landing-pay-dl {
+  margin: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.itc-landing-pay-banks .itc-landing-pay-dl {
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+.itc-landing-pay-banks .itc-landing-pay-dl:last-child {
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+.itc-landing-pay-dl > div {
+  display: grid;
+  gap: 2px;
+}
+
+.itc-landing-pay-dl dt {
+  font-size: 0.6875rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--itc-text-muted);
+}
+
+.itc-landing-pay-dl dd {
+  margin: 0;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--itc-text);
+  line-height: 1.4;
+}
+
+.itc-landing-pay-address {
+  word-break: break-all;
+  font-size: 0.8125rem !important;
+  font-weight: 600 !important;
+}
+
+@media (max-width: 768px) {
+  .itc-landing-pay-rails {
+    grid-template-columns: 1fr;
+  }
+}
+
 .itc-landing-pricing-tile {
   position: relative;
   min-width: 0;
@@ -665,6 +1156,44 @@ body {
   margin-top: 14px;
 }
 
+.itc-trial-banner {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.45;
+  color: #064e3b;
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.18), rgba(52, 211, 153, 0.1));
+  border: 1px solid rgba(16, 185, 129, 0.35);
+}
+
+.itc-trial-banner.is-ended {
+  color: #7f1d1d;
+  background: linear-gradient(135deg, rgba(244, 63, 94, 0.16), rgba(251, 113, 133, 0.08));
+  border-color: rgba(244, 63, 94, 0.4);
+}
+
+.itc-trial-pill.is-ended {
+  border-color: rgba(244, 63, 94, 0.45) !important;
+  background: rgba(244, 63, 94, 0.12) !important;
+  color: #fecdd3;
+}
+
+.itc-trial-ended-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: center;
+  margin-top: 14px;
+  max-width: min(420px, 92%);
+  pointer-events: auto;
+}
+
+.itc-trial-ended-actions .itc-btn {
+  pointer-events: auto;
+}
+
 .itc-landing-access-plans {
   list-style: none;
   margin: 0 0 18px;
@@ -677,14 +1206,14 @@ body {
   padding: 12px 14px;
   border: 1px solid rgba(148, 163, 184, 0.22);
   border-radius: 10px;
-  background: rgba(15, 23, 42, 0.04);
+  background: rgba(15, 23, 42, 0.45);
   font-size: 0.92rem;
   line-height: 1.45;
-  color: #64748b;
+  color: var(--itc-text-muted);
 }
 
 .itc-landing-access-plans strong {
-  color: #0f172a;
+  color: var(--itc-text);
   font-weight: 650;
 }
 
@@ -2320,6 +2849,13 @@ body {
 
   .itc-credit-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 8px !important;
+  }
+
+  .itc-credit-select-btn {
+    min-height: 34px !important;
+    padding: 6px 8px !important;
+    font-size: 11px !important;
   }
 
   .itc-app-mobile .itc-mobile-action-dock {
@@ -2456,7 +2992,7 @@ body {
   }
 
   .itc-credit-grid {
-    grid-template-columns: 1fr !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
   }
 
   .itc-app-mobile .itc-mobile-action-dock:not(.itc-mobile-action-dock-simple) {

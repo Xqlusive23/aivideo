@@ -9,7 +9,14 @@ import {
 
 function isStudioPath(pathname) {
   const path = String(pathname || "").replace(/\/+$/, "") || "/";
-  return path === "/app" || path.startsWith("/app/");
+  return (
+    path === "/app" ||
+    path.startsWith("/app/") ||
+    path === "/pay" ||
+    path.startsWith("/pay/") ||
+    path === "/checkout" ||
+    path.startsWith("/checkout/")
+  );
 }
 
 /** Loads Tawk.to, but hides the floating bubble on the studio route so it never covers the output. */
@@ -28,12 +35,13 @@ export default function LiveChatInit() {
       const api = window.Tawk_API;
       if (api) {
         const prior = api.onChatMinimized;
-        api.onChatMinimized = function onChatMinimized() {
+        const handleChatMinimized = () => {
           if (typeof prior === "function") prior();
           hideLiveChatWidget();
         };
+        api.onChatMinimized = handleChatMinimized;
         return () => {
-          if (api.onChatMinimized === onChatMinimized) {
+          if (api.onChatMinimized === handleChatMinimized) {
             api.onChatMinimized = prior;
           }
         };

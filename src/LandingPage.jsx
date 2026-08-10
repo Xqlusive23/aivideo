@@ -17,7 +17,6 @@ import {
   TOP_UP_OPTIONS,
   formatCredits,
   formatLiveTimeFromCredits,
-  formatLiveTimePerMonth,
   formatNaira,
   formatUsdFromNaira,
   getPricingTierFeatures,
@@ -120,25 +119,25 @@ const FEATURES = [
   {
     icon: "📹",
     title: "Virtual camera for calls",
-    body: "The Windows desktop app feeds transformed video into InspireTech Camera so Zoom, Telegram, and Discord pick it up directly.",
+    body: "The Windows desktop app feeds transformed video into InspireTech Camera so Zoom, Telegram, Discord, and more pick it up directly.",
   },
   {
     icon: "🎙️",
-    title: "Voice changer",
-    body: "Optional AI voice conversion routes to a virtual microphone — same pipeline, no OBS window capture.",
+    title: "Voice & scene unlocks",
+    body: "AI voice changer unlocks from the 1,000-credit pack; scene library and reference backgrounds unlock from the 2,000-credit pack.",
   },
   {
-    icon: "💳",
-    title: "Pay-as-you-go credits",
-    body: "Usage is metered per second while live. Top up via Flutterwave in Naira — card, USSD, or bank transfer.",
+    icon: "🎟️",
+    title: "Invite access + credit packs",
+    body: "Request an access code on WhatsApp (separate invite packages). After unlock, buy credit packs in the studio and pay via bank transfer or USDT.",
   },
 ];
 
 const STEPS = [
-  "Request access — we send you a personal access token.",
-  "Download the Windows app or use the web studio in your browser.",
-  "Pick your camera, upload a reference image, and start transforming.",
-  "In your calling app, select InspireTech Camera and CABLE Output as mic.",
+  "Request an access code on WhatsApp — the message includes invite pricing and our USDT address for payment.",
+  "We send a personal access token. Paste it in the web studio or Windows app.",
+  "Upload a reference photo, go live, then select InspireTech Camera (and mic) in your calling app.",
+  "When you need more credits, open Buy credits in the studio — pay via USDT or Nigerian bank transfer and send proof.",
 ];
 
 export default function LandingPage() {
@@ -213,14 +212,14 @@ export default function LandingPage() {
       <section className="itc-landing-section itc-landing-hero">
         <div className="itc-landing-hero-grid">
           <div>
-            <p className="itc-landing-eyebrow">Real-time AI video for live calls</p>
+            <p className="itc-landing-eyebrow">{SITE_TAGLINE}</p>
             <h1 className="itc-landing-hero-title">
               Transform on camera.
               <br />
               <span className="itc-landing-hero-gradient">Call like it's really you.</span>
             </h1>
             <p className="itc-landing-hero-body">
-              {SITE_TAGLINE}. InspireTech turns your webcam feed into a live AI character and pipes it straight into your favorite calling apps — no OBS, no manual capture.
+              InspireTech turns your webcam into a live AI character and pipes it into Zoom, Discord, Telegram, and more — web studio or Windows app with virtual camera. No OBS, no window capture.
             </p>
             <div className="itc-landing-hero-actions">
               <a href="#access" className="itc-btn itc-btn-primary">Get access</a>
@@ -255,31 +254,30 @@ export default function LandingPage() {
       </section>
 
       <section id="pricing" className="itc-landing-section">
-        <h2 className="itc-landing-section-title">Pricing</h2>
+        <h2 className="itc-landing-section-title">Subscription pricing</h2>
         <p className="itc-landing-section-lead">
-          Credits are used while your live transformation is running — {DISPLAY_CREDITS_PER_SECOND} credits
-          per second ({DISPLAY_CREDITS_PER_SECOND * 60} credits per minute). Top up in the studio after you
-          have access.
+          Credit packs available in the studio after your account is unlocked. Live transforming uses about{" "}
+          {DISPLAY_CREDITS_PER_SECOND} credits/sec.
         </p>
-        <div className="itc-landing-pricing-row">
-          {TOP_UP_OPTIONS.map((tier) => (
+        <div className="itc-landing-pricing-row itc-landing-pricing-row-subscribe">
+          {TOP_UP_OPTIONS.map((opt) => (
             <article
-              key={tier.credits}
-              className={`itc-landing-pricing-tile${tier.popular ? " is-popular" : ""}`}
+              key={opt.credits}
+              className={`itc-landing-pricing-tile${opt.popular ? " is-popular" : ""}`}
             >
-              {tier.popular ? <span className="itc-landing-pricing-badge">Most popular</span> : null}
+              {opt.popular ? <span className="itc-landing-pricing-badge">Popular</span> : null}
               <div className="itc-landing-pricing-tile-head">
-                <p className="itc-landing-pricing-credits">{formatCredits(tier.credits)} credits</p>
+                <p className="itc-landing-pricing-credits">{formatCredits(opt.credits)} credits</p>
                 <p className="itc-landing-pricing-usd">
-                  {formatNaira(tier.naira)}
-                  <span className="itc-landing-pricing-period"> / month</span>
+                  {formatNaira(opt.naira)}
+                  <span className="itc-landing-pricing-period"> · ≈ {formatUsdFromNaira(opt.naira)}</span>
                 </p>
                 <p className="itc-landing-pricing-time">
-                  ≈ {formatUsdFromNaira(tier.naira)} · {formatLiveTimePerMonth(tier.credits)}
+                  {formatLiveTimeFromCredits(opt.credits)} live (approx.)
                 </p>
               </div>
               <ul className="itc-landing-pricing-features">
-                {getPricingTierFeatures(tier.credits).map((item) => (
+                {getPricingTierFeatures(opt.credits).map((item) => (
                   <li key={item}>{item}</li>
                 ))}
               </ul>
@@ -287,8 +285,7 @@ export default function LandingPage() {
           ))}
         </div>
         <p className="itc-landing-fine-print">
-          Live minutes shown on each pack are approximate. Credit packs are purchased as one-time top-ups
-          in the studio; unused credits stay on your account.
+          Packs unlock after admin confirms your access purchase. Live minutes are approximate.
         </p>
       </section>
 
@@ -320,22 +317,6 @@ export default function LandingPage() {
         </div>
       </section>
 
-      <section id="payments" className="itc-landing-section">
-        <h2 className="itc-landing-section-title">Payments worldwide</h2>
-        <p className="itc-landing-section-lead">
-          InspireTech uses Flutterwave for credit top-ups in <strong>NGN</strong>. Pay with card, USSD, or bank transfer
-          (Nigeria), plus cards internationally.
-        </p>
-        <ul className="itc-landing-download-list">
-          <li><strong>Across Africa:</strong> cards, mobile money (M-Pesa, MTN MoMo, etc.), and bank transfer where supported.</li>
-          <li><strong>International:</strong> Visa and Mastercard accepted on the same checkout.</li>
-          <li><strong>Credits:</strong> added to your account automatically after payment succeeds.</li>
-        </ul>
-        <p className="itc-landing-fine-print">
-          International cards are accepted. You do not need a Nigerian bank account to top up credits.
-        </p>
-      </section>
-
       <section className="itc-landing-section">
         <h2 className="itc-landing-section-title">How it works</h2>
         <ol className="itc-landing-steps">
@@ -353,23 +334,30 @@ export default function LandingPage() {
           <div>
             <h2 className="itc-landing-section-title">Get access</h2>
             <p className="itc-landing-section-lead">
-              InspireTech is invite-only. Request an access token — the WhatsApp message includes our plans automatically.
+              Invite-only. Request an access code on WhatsApp — you can also ask for a short free trial.
             </p>
-            <ul className="itc-landing-access-plans">
-              {ACCESS_SALE_PLANS.map((plan) => (
-                <li key={plan.id}>
-                  <strong>
-                    {plan.includesAccessToken ? "Access token + " : ""}
-                    {formatCredits(plan.credits)} credits — ${plan.usd}
-                  </strong>
-                  <span>
-                    {" "}
-                    · {formatLiveTimeFromCredits(plan.credits)} live
-                    {plan.blurb ? ` · ${plan.blurb}` : ""}
-                  </span>
-                </li>
-              ))}
-            </ul>
+
+            <div className="itc-landing-access-box">
+              <h3 className="itc-landing-access-box-title">Access-code packages (WhatsApp)</h3>
+              <p className="itc-landing-access-box-lead">
+                These are for requesting your token — separate from the subscription credit packs in Pricing.
+                Messaging us includes this price list plus our USDT pay address.
+              </p>
+              <ul className="itc-landing-access-plans">
+                {ACCESS_SALE_PLANS.map((plan) => (
+                  <li key={plan.id}>
+                    <strong>
+                      {plan.includesAccessToken
+                        ? `Access token + ${formatCredits(plan.credits)} credits`
+                        : `${formatCredits(plan.credits)} credits`}
+                    </strong>
+                    {` — $${plan.usd}`}
+                    <span className="itc-landing-access-plan-blurb"> · {plan.blurb}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+
             <ContactSupport
               whatsappMessage={WHATSAPP_ACCESS_REQUEST_MESSAGE}
               chatMessage={WHATSAPP_ACCESS_REQUEST_MESSAGE}
@@ -378,8 +366,7 @@ export default function LandingPage() {
               layout="landing"
             />
             <p className="itc-landing-fine-print">
-              Ask for a free trial if you want to try first. Paid plans are confirmed by admin (checkout unlocks after purchase).
-              Already received a token? Enter it on the right to open the studio instantly.
+              Already have a token? Enter it on the right to open the studio.
             </p>
           </div>
           <AccessGate

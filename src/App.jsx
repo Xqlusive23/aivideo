@@ -1,10 +1,10 @@
 import React, { useState, useRef, useEffect } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { createDecartClient, models } from "@decartai/sdk";
 import AccessGate from "./AccessGate.jsx";
 import { LogoLockup } from "./Logo.jsx";
-import WhatsAppLink from "./WhatsAppLink.jsx";
 import { WHATSAPP_NUMBER, WHATSAPP_DEFAULT_MESSAGE, WHATSAPP_TRIAL_PURCHASE_MESSAGE } from "./siteConfig.js";
+import WhatsAppLink from "./WhatsAppLink.jsx";
 import { theme } from "./theme.js";
 import {
   LEDGER_URL,
@@ -24,6 +24,7 @@ import {
   formatUsdFromNaira,
   formatNaira,
   formatLiveTimeFromCredits,
+  formatRemainingLiveTime,
 } from "./pricing.js";
 import { checkForNewerShellRelease } from "./shellUpdate.js";
 import {
@@ -64,10 +65,13 @@ function formatStatusDisplay(raw) {
     "INSTALLING DRIVERS — APPROVE UAC": "Installing drivers…",
     "CHECKOUT CANCELLED": "Checkout cancelled",
     "REDIRECTING TO CHECKOUT...": "Opening checkout…",
+    "OPENING CHECKOUT": "Opening checkout…",
     "TRIAL CHECKOUT LOCKED — CONTACT ADMIN TO PURCHASE": "Trial ended · contact admin to buy",
     "DECART RECONNECTING…": "Reconnecting…",
   };
   if (exact[raw]) return exact[raw];
+  if (raw.startsWith("OPENING CHECKOUT")) return "Opening checkout…";
+  if (raw.startsWith("TRIAL ENDED")) return "Trial ended · message WhatsApp";
   if (raw.startsWith("OUT OF CREDITS")) return "Out of credits";
   if (raw.startsWith("HARDWARE ERROR")) return raw.replace(/^HARDWARE ERROR:\s*/i, "Camera error · ");
   if (raw.startsWith("DRIVER SETUP FAILED")) return "Driver setup failed";
@@ -442,6 +446,7 @@ const VOICE_UPGRADE_MESSAGE = `Voice changer requires a plan of at least ${VOICE
 const BACKGROUND_UPGRADE_MESSAGE = `Background prompt and reference background require a plan of at least ${BACKGROUND_MIN_PURCHASE_CREDITS.toLocaleString()} credits/month. Upgrade in Credits below.`;
 
 export default function App() {
+  const navigate = useNavigate();
   const [isRunning, setIsRunning] = useState(false);
   const [status, setStatus] = useState("SYSTEM STANDBY");
   const [selectedFile, setSelectedFile] = useState(null);
@@ -628,8 +633,7 @@ export default function App() {
   const [networkChecked, setNetworkChecked] = useState(false);
   const [sessionCreditsUsed, setSessionCreditsUsed] = useState(0);
   const [showAddCredits, setShowAddCredits] = useState(false);
-  const [checkoutEmail, setCheckoutEmail] = useState("");
-  const [checkoutPhone, setCheckoutPhone] = useState("");
+  const [selectedTopUp, setSelectedTopUp] = useState(null);
   const [checkoutContactError, setCheckoutContactError] = useState("");
   const [isPoppedOut, setIsPoppedOut] = useState(false);
   const [mobileOutputFocus, setMobileOutputFocus] = useState(false);
@@ -671,6 +675,8 @@ export default function App() {
   const billingSessionIdRef = useRef(null);
   const billingCreditsStartRef = useRef(0);
   const creditsRef = useRef(0);
+  const isTrialAccountRef = useRef(false);
+  const allowPurchaseRef = useRef(true);
   const sessionCreditsUsedRef = useRef(0);
   const heartbeatFailCountRef = useRef(0);
   const heartbeatInFlightRef = useRef(false);
@@ -901,6 +907,14 @@ export default function App() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accessToken, sessionReady]);
+
+  // Trial accounts: open purchase panel when credits hit zero (checkout stays locked → WhatsApp CTA).
+  useEffect(() => {
+    if (!creditsLoaded) return;
+    if (isTrialAccount && !allowPurchase && credits <= 0) {
+      setShowAddCredits(true);
+    }
+  }, [creditsLoaded, isTrialAccount, allowPurchase, credits]);
 
   // Validate a saved token once before entering the studio (avoids 401 poll spam).
   useEffect(() => {
@@ -1171,6 +1185,14 @@ export default function App() {
   useEffect(() => {
     creditsRef.current = credits;
   }, [credits]);
+
+  useEffect(() => {
+    isTrialAccountRef.current = isTrialAccount;
+  }, [isTrialAccount]);
+
+  useEffect(() => {
+    allowPurchaseRef.current = allowPurchase;
+  }, [allowPurchase]);
 
   // Closing the tab/window without Stop leaves Decart billing your API key while
   // the ledger stops deducting — tear down the full live pipeline on page hide.
@@ -2255,12 +2277,6 @@ export default function App() {
       if (!res.ok) throw new Error(`Ledger responded ${res.status}`);
       const data = await res.json();
       setCredits(data.credits);
-      if (typeof data.customerEmail === "string" && data.customerEmail) {
-        setCheckoutEmail(data.customerEmail);
-      }
-      if (typeof data.customerPhone === "string" && data.customerPhone) {
-        setCheckoutPhone(data.customerPhone);
-      }
       syncTierAccessFromLedger(data);
       setCreditsLoaded(true);
       setLedgerUnreachable(false);
@@ -2928,7 +2944,11 @@ export default function App() {
       }
       if (!res.ok) {
         setCredits(data.credits ?? 0);
-        setStatus("OUT OF CREDITS — ADD MORE TO CONTINUE");
+        setStatus(
+          (isTrialAccountRef.current && !allowPurchaseRef.current) || data.isTrial
+            ? "TRIAL ENDED — MESSAGE WHATSAPP TO PURCHASE"
+            : "OUT OF CREDITS — ADD MORE TO CONTINUE"
+        );
         setShowAddCredits(true);
         return false;
       }
@@ -3013,7 +3033,11 @@ export default function App() {
         if (data.depleted) {
           clearHeartbeat();
           stopTransformation();
-          setStatus("OUT OF CREDITS — ADD MORE TO CONTINUE");
+          setStatus(
+            isTrialAccountRef.current && !allowPurchaseRef.current
+              ? "TRIAL ENDED — MESSAGE WHATSAPP TO PURCHASE"
+              : "OUT OF CREDITS — ADD MORE TO CONTINUE"
+          );
           setShowAddCredits(true);
         }
       } catch (err) {
@@ -3680,7 +3704,11 @@ export default function App() {
       }
       if (res.status === 402) {
         setCredits(data.credits ?? 0);
-        setStatus("OUT OF CREDITS — ADD MORE TO CONTINUE");
+        setStatus(
+          isTrialAccountRef.current && !allowPurchaseRef.current
+            ? "TRIAL ENDED — MESSAGE WHATSAPP TO PURCHASE"
+            : "OUT OF CREDITS — ADD MORE TO CONTINUE"
+        );
         setShowAddCredits(true);
         return null;
       }
@@ -3750,7 +3778,11 @@ export default function App() {
       syncTierAccessFromLedger(data);
       setCredits(data.credits ?? 0);
       if ((data.credits ?? 0) <= 0) {
-        setStatus("OUT OF CREDITS — ADD MORE TO CONTINUE");
+        setStatus(
+          (data.isTrial || isTrialAccountRef.current) && !allowPurchaseRef.current
+            ? "TRIAL ENDED — MESSAGE WHATSAPP TO PURCHASE"
+            : "OUT OF CREDITS — ADD MORE TO CONTINUE"
+        );
         setShowAddCredits(true);
         startInProgressRef.current = false;
         return;
@@ -4386,7 +4418,7 @@ export default function App() {
     !isMobileWebStudio && !isMobileLayout && (!proStudioShell || companionNavSection === "studio");
   const showPromptInSidebar = isMobileLayout && isRunning && !isMobileWebStudio;
 
-  const purchaseCredits = async (creditAmount) => {
+  const purchaseCredits = (creditAmount) => {
     if (!allowPurchase) {
       setCheckoutContactError(
         "Self-serve top-up is locked on this trial. Message us on WhatsApp to purchase a plan."
@@ -4394,59 +4426,24 @@ export default function App() {
       setStatus("TRIAL CHECKOUT LOCKED — CONTACT ADMIN TO PURCHASE");
       return;
     }
-    const email = checkoutEmail.trim().toLowerCase();
-    const phone = checkoutPhone.replace(/\D/g, "");
-    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email === "customer@example.com") {
-      setCheckoutContactError("Enter your real email address before checkout.");
-      return;
-    }
-    if (phone.length < 7) {
-      setCheckoutContactError("Enter a valid phone number before checkout.");
-      return;
-    }
+    const pack = TOP_UP_OPTIONS.find((opt) => opt.credits === creditAmount) || null;
+    setSelectedTopUp(pack);
     setCheckoutContactError("");
-    try {
-      setStatus("REDIRECTING TO CHECKOUT...");
-      const res = await fetch(`${LEDGER_URL}/api/checkout`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeaders() },
-        body: JSON.stringify({ credits: creditAmount, email, phone: checkoutPhone.trim() }),
-      });
-      if (res.status === 401) {
-        handleTokenRejected("Your access token was rejected. Please re-enter it.");
-        return;
-      }
-      const data = await res.json().catch(() => ({}));
-      if (res.status === 403) {
-        if (typeof data.allowPurchase === "boolean") {
-          setAllowPurchase(data.allowPurchase);
-        }
-        if (typeof data.isTrial === "boolean") {
-          setIsTrialAccount(data.isTrial);
-        }
-        if (data.allowPurchase === false || /trial|locked|purchase/i.test(String(data.error || ""))) {
-          setCheckoutContactError(
-            data.error || "Self-serve top-up is locked. Message us on WhatsApp to purchase a plan."
-          );
-          setStatus("TRIAL CHECKOUT LOCKED — CONTACT ADMIN TO PURCHASE");
-          return;
-        }
-        handleTokenRejected(
-          data.error ||
-            "Your access has been revoked. If you think this is a mistake, message us on WhatsApp below."
-        );
-        return;
-      }
-      if (!res.ok || !data.url) throw new Error(data.error || "Checkout failed");
-      window.location.href = data.url;
-    } catch (err) {
-      console.error("Checkout error:", err);
-      setStatus(`CHECKOUT ERROR: ${err.message}`);
+    if (!pack) {
+      setStatus("SELECT A CREDIT PACK");
+      return;
     }
+    setStatus(`OPENING CHECKOUT — ${pack.credits.toLocaleString()} CREDITS`);
+    navigate(`/pay?credits=${pack.credits}`);
   };
 
   const creditPercent = Math.min(100, (credits / 500) * 100);
   const isLowCredit = credits <= LOW_CREDIT_THRESHOLD;
+  const isTrialLocked = isTrialAccount && !allowPurchase;
+  const trialEnded = isTrialLocked && creditsLoaded && credits <= 0;
+  const trialTimeLeftLabel = isTrialLocked && credits > 0
+    ? formatRemainingLiveTime(credits)
+    : "";
   const weakNetwork = networkChecked && networkQuality.level === NETWORK_QUALITY.POOR;
   const outputQualityConfig = getOutputQualityConfig(outputQuality);
   const startBlocked =
@@ -4486,12 +4483,20 @@ export default function App() {
           <div className="itc-status-chip">
             <span className="itc-status-chip-label">Credits</span>
             <span
-              className={`itc-status-chip-value itc-mono${isLowCredit ? " is-danger" : ""}`}
+              className={`itc-status-chip-value itc-mono${isLowCredit || trialEnded ? " is-danger" : ""}`}
               style={{ animation: isLowCredit && isRunning ? "creditPulse 1s infinite" : "none" }}
             >
               {creditsLoaded ? credits : "…"}
             </span>
           </div>
+          {isTrialLocked ? (
+            <div className="itc-status-chip">
+              <span className="itc-status-chip-label">Trial</span>
+              <span className={`itc-status-chip-value${trialEnded ? " is-danger" : ""}`}>
+                {trialEnded ? "Ended" : `${trialTimeLeftLabel} left`}
+              </span>
+            </div>
+          ) : null}
         </div>
       );
     }
@@ -4532,13 +4537,21 @@ export default function App() {
       <div className="itc-status-chip">
         <span className="itc-status-chip-label">Credits</span>
         <span
-          className={`itc-status-chip-value itc-mono${isLowCredit ? " is-danger" : ""}`}
+          className={`itc-status-chip-value itc-mono${isLowCredit || trialEnded ? " is-danger" : ""}`}
           style={{ animation: isLowCredit && isRunning ? "creditPulse 1s infinite" : "none" }}
         >
           {creditsLoaded ? credits : "…"}
           {creditsLoaded && <span style={styles.creditsDollar}> ({formatUsdFromCredits(credits)})</span>}
         </span>
       </div>
+      {isTrialLocked ? (
+        <div className="itc-status-chip">
+          <span className="itc-status-chip-label">Trial</span>
+          <span className={`itc-status-chip-value${trialEnded ? " is-danger" : ""}`}>
+            {trialEnded ? "Ended" : `${trialTimeLeftLabel} left`}
+          </span>
+        </div>
+      ) : null}
     </div>
     );
   };
@@ -4577,10 +4590,18 @@ export default function App() {
             <span className="itc-companion-pill-value itc-mono">{formatTime(elapsedSeconds)}</span>
           </div>
         )}
-        <div className={`itc-companion-pill itc-glass-pill itc-companion-pill-credits${isLowCredit ? " is-danger" : ""}`}>
+        <div className={`itc-companion-pill itc-glass-pill itc-companion-pill-credits${isLowCredit || trialEnded ? " is-danger" : ""}`}>
           <span className="itc-companion-pill-label">Credits</span>
           <span className="itc-companion-pill-value itc-mono">{creditsLoaded ? credits : "…"}</span>
         </div>
+        {isTrialLocked ? (
+          <div className={`itc-companion-pill itc-glass-pill itc-trial-pill${trialEnded ? " is-ended" : ""}`}>
+            <span className="itc-companion-pill-label">Trial</span>
+            <span className="itc-companion-pill-value">
+              {trialEnded ? "Ended" : `${trialTimeLeftLabel} left`}
+            </span>
+          </div>
+        ) : null}
         {companionToolbar && desktopAppVersion && (
           <div className="itc-companion-pill itc-glass-pill itc-companion-pill-version">
             <span className="itc-companion-pill-sub">Desktop</span>
@@ -4900,6 +4921,13 @@ export default function App() {
               </div>
             ) : (
               <>
+                {isTrialLocked ? (
+                  <div className={`itc-trial-banner${trialEnded ? " is-ended" : ""}`}>
+                    {trialEnded
+                      ? "Trial ended — message us on WhatsApp to buy a plan and unlock checkout."
+                      : `Trial · ${trialTimeLeftLabel} left · self-serve top-up stays locked until you purchase.`}
+                  </div>
+                ) : null}
                 <div style={styles.creditBalanceRow}>
                   <span style={styles.creditBalanceNumber}>{creditsLoaded ? credits : "…"}</span>
                   {!isMobileWebStudio && (
@@ -4909,7 +4937,7 @@ export default function App() {
                 {!isMobileWebStudio && (
                   <>
                     <div style={styles.creditBarTrack}>
-                      <div style={{...styles.creditBarFill, width: `${creditPercent}%`, backgroundColor: isLowCredit ? c.rose : c.primary}} />
+                      <div style={{...styles.creditBarFill, width: `${creditPercent}%`, backgroundColor: isLowCredit || trialEnded ? c.rose : c.primary}} />
                     </div>
                     <div style={styles.creditMeta}>
                       <span>~{DISPLAY_CREDITS_PER_SECOND} credits/sec while live (billed when output starts)</span>
@@ -4927,7 +4955,7 @@ export default function App() {
               className="itc-btn itc-btn-topup"
               onClick={() => setShowAddCredits(true)}
             >
-              + Add Credits
+              {isTrialLocked ? (trialEnded ? "Buy a plan" : "Upgrade / buy plan") : "+ Add Credits"}
             </button>
           </div>
           </div>
@@ -4988,18 +5016,21 @@ export default function App() {
             {!allowPurchase ? (
               <div style={styles.checkoutContactBlock}>
                 <p style={styles.checkoutContactHint}>
-                  {isTrialAccount
+                  {trialEnded
+                    ? "Your free trial has ended. Self-serve checkout stays locked until admin unlocks you after a paid plan."
+                    : isTrialAccount
                     ? "Your free trial includes starter credits only. Self-serve top-up is locked until you purchase a real plan with us."
                     : "Checkout is locked on this account. Contact us to unlock purchasing."}
                 </p>
                 <p style={styles.checkoutContactHint}>
-                  Message admin on WhatsApp to buy credits — we will unlock checkout for your token.
+                  Message us on WhatsApp with the plan you want ($70 / $80 / $120). Access requests include our USDT
+                  address with the price list — we unlock your account after payment.
                 </p>
                 <WhatsAppLink
                   message={WHATSAPP_TRIAL_PURCHASE_MESSAGE}
                   className="itc-btn itc-btn-secondary"
                 >
-                  Contact admin on WhatsApp
+                  {trialEnded ? "Message WhatsApp to purchase" : "Contact admin on WhatsApp"}
                 </WhatsAppLink>
                 {checkoutContactError && (
                   <div style={{ ...styles.checkoutContactError, marginTop: 10 }}>{checkoutContactError}</div>
@@ -5008,65 +5039,48 @@ export default function App() {
             ) : (
               <>
             {!isMobileWebStudio && (
-              <p style={styles.modalSubtitle}>You can purchase more Credits to start generating</p>
-            )}
-            <div style={styles.checkoutContactBlock}>
-              <div style={styles.checkoutContactTitle}>Contact for this payment</div>
-              <p style={styles.checkoutContactHint}>
-                Flutterwave requires your real email and phone on every transaction.
+              <p style={styles.modalSubtitle}>
+                Choose a pack to open secure checkout and pick your payment method.
               </p>
-              <input
-                type="email"
-                autoComplete="email"
-                placeholder="Your email address"
-                value={checkoutEmail}
-                onChange={(e) => {
-                  setCheckoutEmail(e.target.value);
-                  if (checkoutContactError) setCheckoutContactError("");
-                }}
-                style={styles.checkoutInput}
-                className="itc-checkout-input"
-              />
-              <input
-                type="tel"
-                autoComplete="tel"
-                placeholder="Your phone number"
-                value={checkoutPhone}
-                onChange={(e) => {
-                  setCheckoutPhone(e.target.value);
-                  if (checkoutContactError) setCheckoutContactError("");
-                }}
-                style={styles.checkoutInput}
-                className="itc-checkout-input"
-              />
-              {checkoutContactError && (
-                <div style={styles.checkoutContactError}>{checkoutContactError}</div>
-              )}
-            </div>
+            )}
             <div style={styles.creditCardGrid} className="itc-credit-grid">
-              {TOP_UP_OPTIONS.map((opt) => (
-                <div key={opt.credits} style={{...styles.creditCard, ...(opt.popular ? styles.creditCardPopular : {})}}>
+              {TOP_UP_OPTIONS.map((opt) => {
+                const isSelected = selectedTopUp?.credits === opt.credits;
+                return (
+                <div
+                  key={opt.credits}
+                  className={`itc-credit-card${opt.popular ? " is-popular" : ""}${isSelected ? " is-selected" : ""}`}
+                  style={{
+                    ...styles.creditCard,
+                    ...(opt.popular ? styles.creditCardPopular : {}),
+                    ...(isSelected ? styles.creditCardSelected : {}),
+                  }}
+                >
                   {opt.popular && <div style={styles.popularBadge}>Popular</div>}
                   <div style={{...styles.creditCardIcon, ...(opt.popular ? styles.creditCardIconPopular : {})}}>⚡</div>
                   <div style={styles.creditCardAmount}>{opt.credits.toLocaleString()}</div>
-                  <div style={styles.creditCardLabel}>Credits · {formatLiveTimeFromCredits(opt.credits)} live</div>
+                  <div style={styles.creditCardLabel}>{formatLiveTimeFromCredits(opt.credits)} live</div>
+                  <div style={styles.creditCardPrice}>
+                    <span style={styles.creditCardPriceMain}>{formatNaira(opt.naira)}</span>
+                    <span style={styles.creditCardPriceSub}>≈ {formatUsdFromNaira(opt.naira)}</span>
+                  </div>
                   <button
-                    style={{...styles.creditCardBuyBtn, ...(opt.popular ? styles.creditCardBuyBtnPopular : {})}}
-                    className="itc-btn itc-btn-topup"
+                    type="button"
+                    style={{...styles.creditCardBuyBtn, ...(opt.popular ? styles.creditCardBuyBtnPopular : {}), ...(isSelected ? styles.creditCardBuyBtnSelected : {})}}
+                    className="itc-credit-select-btn"
                     onClick={() => purchaseCredits(opt.credits)}
                   >
-                    Buy for {formatNaira(opt.naira)}
-                    <span style={{ display: "block", fontSize: "10px", opacity: 0.75, fontWeight: 500 }}>
-                      ≈ {formatUsdFromNaira(opt.naira)}
-                    </span>
+                    Pay
                   </button>
                 </div>
-              ))}
+                );
+              })}
             </div>
+            {checkoutContactError && (
+              <div style={{ ...styles.checkoutContactError, marginTop: 10 }}>{checkoutContactError}</div>
+            )}
             <div style={styles.modalNote}>
-              {isMobileWebStudio
-                ? "Pay in Naira via Flutterwave — card, USSD, or bank transfer."
-                : "Checkout in NGN via Flutterwave — cards, USSD, and bank transfer. USD equivalent shown for reference."}
+              You’ll choose USDT or bank transfer on the next page. Credits are added after we confirm payment.
             </div>
               </>
             )}
@@ -5375,10 +5389,16 @@ export default function App() {
                       <div style={styles.overlayPingDot} />
                     </div>
                     <div style={styles.overlayText}>
-                      {credits <= 0 && creditsLoaded ? "Out of credits" : "Not connected"}
+                      {trialEnded
+                        ? "Trial ended"
+                        : credits <= 0 && creditsLoaded
+                        ? "Out of credits"
+                        : "Not connected"}
                     </div>
                     <div style={styles.overlaySubtext}>
-                      {credits <= 0 && creditsLoaded
+                      {trialEnded
+                        ? "Message us on WhatsApp to buy a plan ($70 / $80 / $120). USDT details are included — we unlock your account after payment."
+                        : credits <= 0 && creditsLoaded
                         ? "Add credits to continue."
                         : weakNetwork
                         ? networkQuality.message
@@ -5386,6 +5406,23 @@ export default function App() {
                         ? "Choose a photo and turn on your camera, then tap Go live."
                         : "Upload a reference image, start your camera, then hit Start transformation."}
                     </div>
+                    {trialEnded ? (
+                      <div className="itc-trial-ended-actions">
+                        <WhatsAppLink
+                          message={WHATSAPP_TRIAL_PURCHASE_MESSAGE}
+                          className="itc-btn itc-btn-primary"
+                        >
+                          Buy a plan on WhatsApp
+                        </WhatsAppLink>
+                        <button
+                          type="button"
+                          className="itc-btn itc-btn-secondary"
+                          onClick={scrollToCreditsSection}
+                        >
+                          Open purchase panel
+                        </button>
+                      </div>
+                    ) : null}
                     {networkChecked && !weakNetwork && networkQuality.level === NETWORK_QUALITY.FAIR && (
                       <p className="itc-network-hint is-fair">{networkQuality.message}</p>
                     )}
@@ -5528,16 +5565,85 @@ const styles = {
     marginBottom: "6px",
   },
   checkoutContactError: { fontSize: "10px", color: c.rose, marginTop: "2px" },
-  creditCardGrid: { display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "10px" },
-  creditCard: { position: "relative", backgroundColor: c.bg, border: `1px solid ${c.border}`, borderRadius: "10px", padding: "14px 8px", display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center", gap: "4px" },
+  creditCardGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+    gap: "10px",
+    alignItems: "stretch",
+    width: "100%",
+  },
+  creditCard: {
+    position: "relative",
+    backgroundColor: c.bg,
+    border: `1px solid ${c.border}`,
+    borderRadius: "10px",
+    padding: "16px 10px 12px",
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    textAlign: "center",
+    gap: "4px",
+    minWidth: 0,
+    height: "100%",
+    boxSizing: "border-box",
+  },
   creditCardPopular: { border: `1px solid ${c.primary}`, boxShadow: "0 0 0 1px rgba(129,140,248,0.2)" },
+  creditCardSelected: { border: `1px solid ${c.emerald || "#34d399"}`, boxShadow: "0 0 0 1px rgba(52,211,153,0.28)" },
   popularBadge: { position: "absolute", top: "-9px", left: "50%", transform: "translateX(-50%)", backgroundImage: g.primary, color: "#fff", fontSize: "8px", fontWeight: "700", padding: "2px 8px", borderRadius: r.full, letterSpacing: "0.04em", whiteSpace: "nowrap" },
-  creditCardIcon: { width: "28px", height: "28px", borderRadius: "50%", backgroundColor: c.surface, display: "flex", alignItems: "center", justifyContent: "center", fontSize: "11px", color: c.textDim, marginBottom: "4px" },
+  creditCardIcon: { width: "28px", height: "28px", borderRadius: "50%", backgroundColor: c.surface, display: "flex", alignItems: "center", justifyContent: "center", fontSize: "11px", color: c.textDim, marginBottom: "2px", flexShrink: 0 },
   creditCardIconPopular: { backgroundImage: g.primary, color: "#fff" },
-  creditCardAmount: { fontSize: "14px", fontWeight: "800", fontFamily: f.sans, color: c.text },
-  creditCardLabel: { fontSize: "9px", color: c.textMuted, marginBottom: "6px" },
-  creditCardBuyBtn: { width: "100%", backgroundColor: "transparent", color: c.textSoft, border: `1px solid ${c.border}`, padding: "6px 6px", borderRadius: r.full, fontSize: "10px", fontWeight: "600", cursor: "pointer", fontFamily: "inherit" },
+  creditCardAmount: { fontSize: "14px", fontWeight: "800", fontFamily: f.sans, color: c.text, lineHeight: 1.2 },
+  creditCardLabel: {
+    fontSize: "9px",
+    color: c.textMuted,
+    lineHeight: 1.3,
+    minHeight: "24px",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  creditCardPrice: {
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    gap: "2px",
+    margin: "4px 0 8px",
+    width: "100%",
+    minHeight: "34px",
+  },
+  creditCardPriceMain: {
+    fontSize: "11px",
+    fontWeight: "700",
+    color: c.textSoft,
+    lineHeight: 1.2,
+    wordBreak: "break-word",
+  },
+  creditCardPriceSub: {
+    fontSize: "9px",
+    color: c.textDim,
+    lineHeight: 1.2,
+  },
+  creditCardBuyBtn: {
+    width: "100%",
+    marginTop: "auto",
+    backgroundColor: "transparent",
+    color: c.textSoft,
+    border: `1px solid ${c.border}`,
+    padding: "7px 8px",
+    borderRadius: r.full,
+    fontSize: "11px",
+    fontWeight: "600",
+    cursor: "pointer",
+    fontFamily: "inherit",
+    minHeight: "32px",
+    lineHeight: 1.2,
+  },
   creditCardBuyBtnPopular: { backgroundColor: c.text, color: c.bg, border: `1px solid ${c.text}` },
+  creditCardBuyBtnSelected: {
+    backgroundColor: "rgba(52,211,153,0.18)",
+    color: "#6ee7b7",
+    border: "1px solid rgba(52,211,153,0.45)",
+  },
   modalNote: { fontSize: "9px", color: c.textDim, fontStyle: "italic", marginTop: "12px", textAlign: "center" },
   sectionCardAlert: { border: `1px solid ${c.rose}`, boxShadow: "0 0 0 3px rgba(251,113,133,0.15)" },
   outputCanvas: { flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column", backgroundColor: c.bg, overflow: "hidden" },
