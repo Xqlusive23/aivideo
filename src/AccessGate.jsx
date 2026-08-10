@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { Link } from "react-router-dom";
-import { WHATSAPP_DEFAULT_MESSAGE } from "./siteConfig";
+import { WHATSAPP_ACCESS_REQUEST_MESSAGE } from "./siteConfig";
 import { LogoLockup } from "./Logo.jsx";
 import WhatsAppLink from "./WhatsAppLink.jsx";
 import { isLiveChatEnabled, openLiveChat } from "./liveChat.js";
@@ -96,12 +96,12 @@ export default function AccessGate({
           <button
             type="button"
             className="itc-access-livechat"
-            onClick={() => openLiveChat(WHATSAPP_DEFAULT_MESSAGE)}
+            onClick={() => openLiveChat(WHATSAPP_ACCESS_REQUEST_MESSAGE)}
           >
             Live chat — need help?
           </button>
         ) : null}
-        <WhatsAppLink message={WHATSAPP_DEFAULT_MESSAGE}>
+        <WhatsAppLink message={WHATSAPP_ACCESS_REQUEST_MESSAGE}>
           💬 Or message us on WhatsApp
         </WhatsAppLink>
         {!embedded && !companionMode && (

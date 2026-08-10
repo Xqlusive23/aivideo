@@ -665,6 +665,29 @@ body {
   margin-top: 14px;
 }
 
+.itc-landing-access-plans {
+  list-style: none;
+  margin: 0 0 18px;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.itc-landing-access-plans li {
+  padding: 12px 14px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.04);
+  font-size: 0.92rem;
+  line-height: 1.45;
+  color: #64748b;
+}
+
+.itc-landing-access-plans strong {
+  color: #0f172a;
+  font-weight: 650;
+}
+
 .itc-landing-code {
   background: rgba(11, 16, 32, 0.8);
   padding: 2px 6px;

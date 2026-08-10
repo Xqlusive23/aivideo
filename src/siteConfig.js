@@ -1,5 +1,7 @@
 // Shared public-site constants — safe to import from landing page and app.
 
+import { buildAccessRequestPriceListMessage } from "./pricing.js";
+
 // Full international numbers, digits only (no +, spaces, or leading 0).
 // Nigeria: 2348145225075   US: 13802721170
 const DEFAULT_WHATSAPP_NUMBERS = ["2348145225075", "13802721170"];
@@ -51,8 +53,11 @@ export const WHATSAPP_DISPLAY =
   WHATSAPP_NUMBERS.map((number) => formatWhatsAppDisplay(number)).join(" · ");
 
 export const WHATSAPP_DEFAULT_MESSAGE = "Hi, I need help getting access to InspireTech.";
-export const WHATSAPP_ACCESS_REQUEST_MESSAGE =
-  "Hi, I'd like to request access to InspireTech. Please send me an access token.";
+export const WHATSAPP_ACCESS_REQUEST_MESSAGE = buildAccessRequestPriceListMessage();
+export const WHATSAPP_TRIAL_PURCHASE_MESSAGE = buildAccessRequestPriceListMessage({
+  intro: "Hi, my InspireTech trial ended (or I'm ready to buy). Please unlock checkout / send me a paid plan.",
+  askTrial: false,
+});
 
 /** Tawk.to widget IDs — from embed URL https://embed.tawk.to/PROPERTY_ID/WIDGET_ID */
 export const TAWK_PROPERTY_ID = String(

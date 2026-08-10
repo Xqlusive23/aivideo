@@ -83,6 +83,57 @@ export function hasBackgroundChangerAccess(maxPurchaseCredits) {
   return Number(maxPurchaseCredits || 0) >= BACKGROUND_MIN_PURCHASE_CREDITS;
 }
 
+/**
+ * Manual / WhatsApp sale plans (invite flow). Not the same as Flutterwave TOP_UP_OPTIONS.
+ * First plan includes access token issuance + starter credits.
+ */
+export const ACCESS_SALE_PLANS = [
+  {
+    id: "access-500",
+    credits: 500,
+    usd: 70,
+    includesAccessToken: true,
+    label: "Access token + 500 credits",
+    blurb: "Starter plan · unlocks studio checkout after admin confirms payment",
+  },
+  {
+    id: "credits-1000",
+    credits: 1000,
+    usd: 80,
+    includesAccessToken: false,
+    label: "1,000 credits",
+    blurb: "Includes AI voice changer unlock",
+  },
+  {
+    id: "credits-2000",
+    credits: 2000,
+    usd: 120,
+    includesAccessToken: false,
+    label: "2,000 credits",
+    blurb: "Includes voice + scene / reference background unlock",
+  },
+];
+
+/** Plain-text price list for WhatsApp / live chat access requests. */
+export function buildAccessRequestPriceListMessage({
+  intro = "Hi, I'd like to request access to InspireTech.",
+  askTrial = true,
+} = {}) {
+  const lines = [
+    intro,
+    "",
+    "Please send me an access token. Plans:",
+    ...ACCESS_SALE_PLANS.map((plan) => {
+      const tokenBit = plan.includesAccessToken ? "Access token + " : "";
+      return `• ${tokenBit}${plan.credits.toLocaleString()} credits — $${plan.usd}`;
+    }),
+  ];
+  if (askTrial) {
+    lines.push("", "If available, I'd also like a short free trial first.");
+  }
+  return lines.join("\n");
+}
+
 /** Marketing feature bullets for landing-page pricing tiles. */
 export function getPricingTierFeatures(credits) {
   const features = [

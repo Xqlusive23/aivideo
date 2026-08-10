@@ -12,9 +12,11 @@ import {
   WINDOWS_DOWNLOAD_FALLBACK,
 } from "./siteConfig";
 import {
+  ACCESS_SALE_PLANS,
   DISPLAY_CREDITS_PER_SECOND,
   TOP_UP_OPTIONS,
   formatCredits,
+  formatLiveTimeFromCredits,
   formatLiveTimePerMonth,
   formatNaira,
   formatUsdFromNaira,
@@ -351,8 +353,23 @@ export default function LandingPage() {
           <div>
             <h2 className="itc-landing-section-title">Get access</h2>
             <p className="itc-landing-section-lead">
-              InspireTech is invite-only. Request an access token — we'll create your account and send you a personal token to paste below or in the studio.
+              InspireTech is invite-only. Request an access token — the WhatsApp message includes our plans automatically.
             </p>
+            <ul className="itc-landing-access-plans">
+              {ACCESS_SALE_PLANS.map((plan) => (
+                <li key={plan.id}>
+                  <strong>
+                    {plan.includesAccessToken ? "Access token + " : ""}
+                    {formatCredits(plan.credits)} credits — ${plan.usd}
+                  </strong>
+                  <span>
+                    {" "}
+                    · {formatLiveTimeFromCredits(plan.credits)} live
+                    {plan.blurb ? ` · ${plan.blurb}` : ""}
+                  </span>
+                </li>
+              ))}
+            </ul>
             <ContactSupport
               whatsappMessage={WHATSAPP_ACCESS_REQUEST_MESSAGE}
               chatMessage={WHATSAPP_ACCESS_REQUEST_MESSAGE}
@@ -361,6 +378,7 @@ export default function LandingPage() {
               layout="landing"
             />
             <p className="itc-landing-fine-print">
+              Ask for a free trial if you want to try first. Paid plans are confirmed by admin (checkout unlocks after purchase).
               Already received a token? Enter it on the right to open the studio instantly.
             </p>
           </div>

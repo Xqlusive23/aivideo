@@ -4,7 +4,7 @@ import { createDecartClient, models } from "@decartai/sdk";
 import AccessGate from "./AccessGate.jsx";
 import { LogoLockup } from "./Logo.jsx";
 import WhatsAppLink from "./WhatsAppLink.jsx";
-import { WHATSAPP_NUMBER, WHATSAPP_DEFAULT_MESSAGE } from "./siteConfig.js";
+import { WHATSAPP_NUMBER, WHATSAPP_DEFAULT_MESSAGE, WHATSAPP_TRIAL_PURCHASE_MESSAGE } from "./siteConfig.js";
 import { theme } from "./theme.js";
 import {
   LEDGER_URL,
@@ -4996,7 +4996,7 @@ export default function App() {
                   Message admin on WhatsApp to buy credits — we will unlock checkout for your token.
                 </p>
                 <WhatsAppLink
-                  message={`Hi, my trial ended / I want to purchase InspireTech credits. My access token starts with ${String(accessToken || "").slice(0, 8)}…`}
+                  message={WHATSAPP_TRIAL_PURCHASE_MESSAGE}
                   className="itc-btn itc-btn-secondary"
                 >
                   Contact admin on WhatsApp
