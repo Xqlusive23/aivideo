@@ -311,6 +311,8 @@
   .badge.desktop { color: #c4b5fd; border-color: #3b2f66; background: rgba(196, 181, 253, 0.08); }
   .badge.windows { color: #67e8f9; border-color: #155e75; background: rgba(103, 232, 249, 0.08); }
   .badge.revoked { color: #f0576a; border-color: #4a2530; background: rgba(240, 87, 106, 0.08); }
+  .badge.trial { color: #e8b84a; border-color: #4a3d20; background: rgba(232, 184, 74, 0.1); }
+  .badge.locked { color: #9aa3b5; border-color: #3a4050; background: rgba(154, 163, 181, 0.08); }
 
   .live-metric-cell {
     font: 600 12px/1.35 "JetBrains Mono", Consolas, monospace;
@@ -367,6 +369,10 @@
         <input type="text" id="newLabel" placeholder="e.g. jane@example.com or Instagram customer #4" />
       </div>
       <button id="createBtn" style="margin-bottom:14px;">+ Create Token</button>
+      <button id="createTrialBtn" class="secondary" style="margin-bottom:14px;">+ Mint Trial (200 credits, checkout locked)</button>
+    </div>
+    <div class="footnote" style="margin-bottom:10px;">
+      Trial tokens get ~200 credits (~1 min live). Checkout stays locked until you click <strong>Unlock purchase</strong> after they contact you for a real plan.
     </div>
     <div id="createMsg" class="msg"></div>
   </div>
@@ -420,6 +426,7 @@
 
   const secretInput = document.getElementById("adminSecret");
   const createBtn = document.getElementById("createBtn");
+  const createTrialBtn = document.getElementById("createTrialBtn");
   const refreshBtn = document.getElementById("refreshBtn");
   const refreshActiveBtn = document.getElementById("refreshActiveBtn");
   const autoRefreshActive = document.getElementById("autoRefreshActive");
@@ -560,6 +567,8 @@
 
   function revokeStatusBadges(user) {
     const badges = [];
+    if (Number(user.is_trial) === 1) badges.push('<span class="badge trial">Trial</span>');
+    if (Number(user.allow_purchase ?? 1) === 0) badges.push('<span class="badge locked">Checkout locked</span>');
     if (isRevokedFlag(user.revoked)) badges.push('<span class="badge revoked">All</span>');
     if (isRevokedFlag(user.revoked_mobile)) badges.push('<span class="badge revoked">Mobile</span>');
     if (isRevokedFlag(user.revoked_desktop)) badges.push('<span class="badge revoked">Desktop</span>');
@@ -660,22 +669,30 @@
       return;
     }
 
+    if (action === "purchase-access") {
+      btn.disabled = true;
+      await setPurchaseAccess(token, btn.dataset.mode, inActive ? activeFlash : usersFlash);
+      btn.disabled = false;
+      return;
+    }
+
     if (action === "delete") {
       deleteToken(token);
     }
   });
 
-  async function createToken() {
+  async function createToken({ trial = false } = {}) {
     const secret = secretInput.value.trim();
     if (!secret) return setMsg(createMsg, "Enter your ADMIN_SECRET above first.", "error");
 
     createBtn.disabled = true;
-    setMsg(createMsg, "Creating...", "");
+    if (createTrialBtn) createTrialBtn.disabled = true;
+    setMsg(createMsg, trial ? "Minting trial..." : "Creating...", "");
     try {
       const res = await fetch(`${BACKEND_URL}/api/admin/tokens`, {
         method: "POST",
         headers: { "X-Admin-Secret": secret, "Content-Type": "application/json" },
-        body: JSON.stringify({ label: newLabelInput.value.trim() || null }),
+        body: JSON.stringify({ label: newLabelInput.value.trim() || null, trial }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -683,7 +700,7 @@
         return;
       }
       createMsg.innerHTML = `
-        <div class="msg ok">Token created successfully.</div>
+        <div class="msg ok">${trial ? "Trial token created (checkout locked)." : "Token created successfully."} ${data.credits || 0} credits.</div>
         <div class="created-token-box">${renderTokenCell(data.token)}</div>
       `;
       newLabelInput.value = "";
@@ -692,6 +709,33 @@
       setMsg(createMsg, "Couldn't reach the backend at " + BACKEND_URL, "error");
     } finally {
       createBtn.disabled = false;
+      if (createTrialBtn) createTrialBtn.disabled = false;
+    }
+  }
+
+  async function setPurchaseAccess(token, mode, flashEl) {
+    const secret = secretInput.value.trim();
+    if (!secret) return flash(flashEl, "Enter your ADMIN_SECRET above first.", "error");
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/admin/tokens/${encodeURIComponent(token)}/purchase-access`, {
+        method: "POST",
+        headers: { "X-Admin-Secret": secret, "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: mode === "lock" ? "lock" : "unlock", allow: mode !== "lock" }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        flash(flashEl, data.error || `Request failed (${res.status}).`, "error");
+        return;
+      }
+      flash(
+        flashEl,
+        mode === "lock" ? "Checkout locked again." : "Purchase unlocked — user can buy credits in the studio.",
+        "ok"
+      );
+      loadUsers();
+      loadActiveUsers({ silent: true });
+    } catch {
+      flash(flashEl, "Couldn't reach the backend.", "error");
     }
   }
 
@@ -928,6 +972,13 @@
           <td>${new Date(user.created_at).toLocaleString()}</td>
           <td class="actions-cell">
             <button type="button" class="ghost" data-admin-action="adjust" data-token="${safeToken}">Adjust</button>
+            ${
+              Number(user.allow_purchase ?? 1) === 0
+                ? `<button type="button" class="ghost" data-admin-action="purchase-access" data-mode="unlock" data-token="${safeToken}">Unlock purchase</button>`
+                : Number(user.is_trial) === 1
+                ? `<button type="button" class="ghost" data-admin-action="purchase-access" data-mode="lock" data-token="${safeToken}">Lock checkout</button>`
+                : `<button type="button" class="ghost" data-admin-action="purchase-access" data-mode="lock" data-token="${safeToken}">Lock checkout</button>`
+            }
             ${allRevokeButtons(user)}
             <button type="button" class="danger" data-admin-action="delete" data-token="${safeToken}">Delete</button>
           </td>
@@ -953,7 +1004,8 @@
     `;
   }
 
-  createBtn.addEventListener("click", createToken);
+  createBtn.addEventListener("click", () => createToken({ trial: false }));
+  if (createTrialBtn) createTrialBtn.addEventListener("click", () => createToken({ trial: true }));
   refreshBtn.addEventListener("click", loadUsers);
   refreshActiveBtn.addEventListener("click", () => loadActiveUsers({ silent: false }));
   migrateBtn.addEventListener("click", migrateToken);

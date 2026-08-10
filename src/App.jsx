@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { createDecartClient, models } from "@decartai/sdk";
 import AccessGate from "./AccessGate.jsx";
 import { LogoLockup } from "./Logo.jsx";
+import WhatsAppLink from "./WhatsAppLink.jsx";
 import { WHATSAPP_NUMBER, WHATSAPP_DEFAULT_MESSAGE } from "./siteConfig.js";
 import { theme } from "./theme.js";
 import {
@@ -63,6 +64,7 @@ function formatStatusDisplay(raw) {
     "INSTALLING DRIVERS — APPROVE UAC": "Installing drivers…",
     "CHECKOUT CANCELLED": "Checkout cancelled",
     "REDIRECTING TO CHECKOUT...": "Opening checkout…",
+    "TRIAL CHECKOUT LOCKED — CONTACT ADMIN TO PURCHASE": "Trial ended · contact admin to buy",
     "DECART RECONNECTING…": "Reconnecting…",
   };
   if (exact[raw]) return exact[raw];
@@ -614,6 +616,8 @@ export default function App() {
   const [voiceChangerAccess, setVoiceChangerAccess] = useState(false);
   const [backgroundChangerAccess, setBackgroundChangerAccess] = useState(false);
   const [tierAccessLoaded, setTierAccessLoaded] = useState(false);
+  const [allowPurchase, setAllowPurchase] = useState(true);
+  const [isTrialAccount, setIsTrialAccount] = useState(false);
   const [ledgerUnreachable, setLedgerUnreachable] = useState(false);
   const [networkQuality, setNetworkQuality] = useState({
     level: NETWORK_QUALITY.UNKNOWN,
@@ -1816,10 +1820,17 @@ export default function App() {
       // Older ledger builds only expose voice tier — keep background locked until redeployed.
       setBackgroundChangerAccess(false);
     }
+    if (typeof data?.allowPurchase === "boolean") {
+      setAllowPurchase(data.allowPurchase);
+    }
+    if (typeof data?.isTrial === "boolean") {
+      setIsTrialAccount(data.isTrial);
+    }
     if (
       typeof data?.voiceChanger === "boolean" ||
       typeof data?.backgroundChanger === "boolean" ||
-      typeof data?.premiumFeatures === "boolean"
+      typeof data?.premiumFeatures === "boolean" ||
+      typeof data?.allowPurchase === "boolean"
     ) {
       setTierAccessLoaded(true);
     }
@@ -4376,6 +4387,13 @@ export default function App() {
   const showPromptInSidebar = isMobileLayout && isRunning && !isMobileWebStudio;
 
   const purchaseCredits = async (creditAmount) => {
+    if (!allowPurchase) {
+      setCheckoutContactError(
+        "Self-serve top-up is locked on this trial. Message us on WhatsApp to purchase a plan."
+      );
+      setStatus("TRIAL CHECKOUT LOCKED — CONTACT ADMIN TO PURCHASE");
+      return;
+    }
     const email = checkoutEmail.trim().toLowerCase();
     const phone = checkoutPhone.replace(/\D/g, "");
     if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email === "customer@example.com") {
@@ -4398,16 +4416,27 @@ export default function App() {
         handleTokenRejected("Your access token was rejected. Please re-enter it.");
         return;
       }
+      const data = await res.json().catch(() => ({}));
       if (res.status === 403) {
+        if (typeof data.allowPurchase === "boolean") {
+          setAllowPurchase(data.allowPurchase);
+        }
+        if (typeof data.isTrial === "boolean") {
+          setIsTrialAccount(data.isTrial);
+        }
+        if (data.allowPurchase === false || /trial|locked|purchase/i.test(String(data.error || ""))) {
+          setCheckoutContactError(
+            data.error || "Self-serve top-up is locked. Message us on WhatsApp to purchase a plan."
+          );
+          setStatus("TRIAL CHECKOUT LOCKED — CONTACT ADMIN TO PURCHASE");
+          return;
+        }
         handleTokenRejected(
-          await readRejectedMessage(
-            res,
+          data.error ||
             "Your access has been revoked. If you think this is a mistake, message us on WhatsApp below."
-          )
         );
         return;
       }
-      const data = await res.json();
       if (!res.ok || !data.url) throw new Error(data.error || "Checkout failed");
       window.location.href = data.url;
     } catch (err) {
@@ -4953,8 +4982,31 @@ export default function App() {
           <div className={`${studioPanelSectionClass("credits")} itc-sidebar-section itc-sidebar-section-topup`}>
           <div ref={creditSectionRef} style={{...styles.sectionCard, ...(showAddCredits ? styles.sectionCardAlert : {})}} className="itc-card itc-section-card">
             <div className="itc-studio-card-title">
-              <span>{isMobileWebStudio ? "" : "💳 "}</span>Buy credits
+              <span>{isMobileWebStudio ? "" : "💳 "}</span>
+              {allowPurchase ? "Buy credits" : isTrialAccount ? "Trial account" : "Purchase locked"}
             </div>
+            {!allowPurchase ? (
+              <div style={styles.checkoutContactBlock}>
+                <p style={styles.checkoutContactHint}>
+                  {isTrialAccount
+                    ? "Your free trial includes starter credits only. Self-serve top-up is locked until you purchase a real plan with us."
+                    : "Checkout is locked on this account. Contact us to unlock purchasing."}
+                </p>
+                <p style={styles.checkoutContactHint}>
+                  Message admin on WhatsApp to buy credits — we will unlock checkout for your token.
+                </p>
+                <WhatsAppLink
+                  message={`Hi, my trial ended / I want to purchase InspireTech credits. My access token starts with ${String(accessToken || "").slice(0, 8)}…`}
+                  className="itc-btn itc-btn-secondary"
+                >
+                  Contact admin on WhatsApp
+                </WhatsAppLink>
+                {checkoutContactError && (
+                  <div style={{ ...styles.checkoutContactError, marginTop: 10 }}>{checkoutContactError}</div>
+                )}
+              </div>
+            ) : (
+              <>
             {!isMobileWebStudio && (
               <p style={styles.modalSubtitle}>You can purchase more Credits to start generating</p>
             )}
@@ -5016,6 +5068,8 @@ export default function App() {
                 ? "Pay in Naira via Flutterwave — card, USSD, or bank transfer."
                 : "Checkout in NGN via Flutterwave — cards, USSD, and bank transfer. USD equivalent shown for reference."}
             </div>
+              </>
+            )}
           </div>
           </div>
           )}

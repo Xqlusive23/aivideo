@@ -255,6 +255,10 @@ try {
   ensureColumn("users", "revoked_desktop", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn("users", "customer_email", "TEXT");
   ensureColumn("users", "customer_phone", "TEXT");
+  // Trial accounts can transform with starter credits but cannot self-serve checkout
+  // until an admin unlocks purchase (after they contact you for a real plan).
+  ensureColumn("users", "is_trial", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn("users", "allow_purchase", "INTEGER NOT NULL DEFAULT 1");
 } catch (err) {
   console.error("Schema self-heal failed — this DB file is likely from an incompatible older version.");
   console.error("Fix: set DB_PATH to a new filename (e.g. /data/ledger_v2.db) and redeploy.");
@@ -315,6 +319,19 @@ function getBalance(token) {
 
 const VOICE_MIN_PURCHASE_CREDITS = 1000;
 const BACKGROUND_MIN_PURCHASE_CREDITS = 2000;
+const TRIAL_CREDITS = 200;
+
+function userAllowsPurchase(userOrToken) {
+  const user = typeof userOrToken === "string" ? getUser(userOrToken) : userOrToken;
+  if (!user) return false;
+  // Missing column on very old rows is treated as allowed (DEFAULT 1).
+  return Number(user.allow_purchase ?? 1) !== 0;
+}
+
+function userIsTrial(userOrToken) {
+  const user = typeof userOrToken === "string" ? getUser(userOrToken) : userOrToken;
+  return Boolean(user && Number(user.is_trial) === 1);
+}
 
 function getMaxPurchaseCredits(token) {
   const row = db
@@ -337,6 +354,9 @@ function tierPayload(token) {
   const maxPurchaseCredits = getMaxPurchaseCredits(token);
   const voiceChanger = maxPurchaseCredits >= VOICE_MIN_PURCHASE_CREDITS;
   const backgroundChanger = maxPurchaseCredits >= BACKGROUND_MIN_PURCHASE_CREDITS;
+  const user = getUser(token);
+  const allowPurchase = userAllowsPurchase(user);
+  const isTrial = userIsTrial(user);
   return {
     maxPurchaseCredits,
     voiceChanger,
@@ -346,6 +366,9 @@ function tierPayload(token) {
     // Legacy field — voice tier only (frontend versions before split).
     premiumFeatures: voiceChanger,
     premiumMinPurchaseCredits: VOICE_MIN_PURCHASE_CREDITS,
+    isTrial,
+    allowPurchase,
+    trialCredits: TRIAL_CREDITS,
   };
 }
 
@@ -530,6 +553,17 @@ function creditFromFlutterwaveTransaction(data) {
     console.error(`Webhook/verify for a REVOKED token, reference ${reference} — not crediting.`);
     return { credits: getBalance(token), alreadyProcessed: false, error: "This access token has been revoked" };
   }
+  if (!userAllowsPurchase(user)) {
+    console.error(
+      `Webhook/verify for trial/locked token ${token.slice(0, 8)}... ref ${reference} — purchase not allowed.`
+    );
+    return {
+      credits: getBalance(token),
+      alreadyProcessed: false,
+      error: "Self-serve purchase is locked on this account. Contact admin to unlock billing.",
+      ...tierPayload(token),
+    };
+  }
   if (hasProcessedReference(reference)) {
     return { credits: getBalance(token), alreadyProcessed: true, ...tierPayload(token) };
   }
@@ -709,7 +743,8 @@ app.post("/api/admin/tokens", (req, res) => {
   if (!ADMIN_SECRET || req.headers["x-admin-secret"] !== ADMIN_SECRET) {
     return res.status(401).json({ error: "Unauthorized" });
   }
-  const { label, token: requestedToken, credits: startingCredits } = req.body || {};
+  const { label, token: requestedToken, credits: startingCredits, trial } = req.body || {};
+  const isTrial = Boolean(trial);
 
   // Normally omitted — a fresh random token is minted. Passing an explicit
   // `token` is for MIGRATION: recreating a specific user's exact existing
@@ -720,13 +755,68 @@ app.post("/api/admin/tokens", (req, res) => {
   if (getUser(token)) {
     return res.status(409).json({ error: "That token already exists" });
   }
-  const initialCredits = Number.isFinite(Number(startingCredits)) ? Math.max(0, Number(startingCredits)) : 0;
 
-  db.prepare("INSERT INTO users (token, label, credits) VALUES (?, ?, ?)").run(token, label || null, initialCredits);
-  if (initialCredits > 0) {
-    recordTransaction({ token, type: "purchase", credits: initialCredits, amount_ngn: null, provider_reference: "manual_migration" });
+  let initialCredits = Number.isFinite(Number(startingCredits)) ? Math.max(0, Number(startingCredits)) : 0;
+  let allowPurchase = 1;
+  let trialFlag = 0;
+  let resolvedLabel = label || null;
+
+  if (isTrial) {
+    initialCredits = Number.isFinite(Number(startingCredits)) && Number(startingCredits) > 0
+      ? Math.max(0, Number(startingCredits))
+      : TRIAL_CREDITS;
+    allowPurchase = 0;
+    trialFlag = 1;
+    resolvedLabel = resolvedLabel
+      ? (String(resolvedLabel).toLowerCase().startsWith("trial") ? resolvedLabel : `trial: ${resolvedLabel}`)
+      : "trial";
   }
-  res.json({ token, label: label || null, credits: initialCredits });
+
+  db.prepare(
+    "INSERT INTO users (token, label, credits, is_trial, allow_purchase) VALUES (?, ?, ?, ?, ?)"
+  ).run(token, resolvedLabel, initialCredits, trialFlag, allowPurchase);
+
+  if (initialCredits > 0) {
+    recordTransaction({
+      token,
+      type: isTrial ? "trial" : "purchase",
+      credits: initialCredits,
+      amount_ngn: null,
+      provider_reference: isTrial ? "trial_grant" : "manual_migration",
+    });
+  }
+  res.json({
+    token,
+    label: resolvedLabel,
+    credits: initialCredits,
+    isTrial: Boolean(trialFlag),
+    allowPurchase: Boolean(allowPurchase),
+  });
+});
+
+// Unlock (or re-lock) Flutterwave self-serve checkout for a token.
+// After a trial, keep purchase locked until the customer contacts you and you unlock.
+app.post("/api/admin/tokens/:token/purchase-access", (req, res) => {
+  if (!ADMIN_SECRET || req.headers["x-admin-secret"] !== ADMIN_SECRET) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  const { token } = req.params;
+  const user = getUser(token);
+  if (!user) return res.status(404).json({ error: "Unknown token" });
+
+  const allow = req.body?.allow !== false && req.body?.allow !== 0 && req.body?.mode !== "lock";
+  db.prepare("UPDATE users SET allow_purchase = ?, is_trial = ? WHERE token = ?").run(
+    allow ? 1 : 0,
+    allow ? 0 : Number(user.is_trial) || 0,
+    token
+  );
+  const updated = getUser(token);
+  res.json({
+    token,
+    allowPurchase: userAllowsPurchase(updated),
+    isTrial: userIsTrial(updated),
+    credits: getBalance(token),
+  });
 });
 
 // Manually add (or remove, with a negative delta) credits on an existing
@@ -761,7 +851,9 @@ app.get("/api/admin/users", (req, res) => {
     return res.status(401).json({ error: "Unauthorized" });
   }
   const rows = db
-    .prepare("SELECT token, label, credits, revoked, revoked_mobile, revoked_desktop, created_at FROM users ORDER BY created_at DESC")
+    .prepare(
+      "SELECT token, label, credits, revoked, revoked_mobile, revoked_desktop, is_trial, allow_purchase, created_at FROM users ORDER BY created_at DESC"
+    )
     .all();
   res.json({ users: rows });
 });
@@ -1216,13 +1308,21 @@ app.post("/api/checkout", requireToken, async (req, res) => {
       return res.status(503).json({ error: "Payment provider is not configured on the server." });
     }
 
+    const user = getUser(req.token);
+    if (!userAllowsPurchase(user)) {
+      return res.status(403).json({
+        error:
+          "Self-serve top-up is locked on this trial account. Message us on WhatsApp to purchase a real plan — an admin will unlock checkout.",
+        ...tierPayload(req.token),
+      });
+    }
+
     const { credits, email, phone } = req.body || {};
     const amount = checkoutAmountForCredits(credits);
     if (amount == null) {
       return res.status(400).json({ error: "Invalid credit tier" });
     }
 
-    const user = getUser(req.token);
     const checkoutEmail = normalizeCustomerEmail(email || user?.customer_email);
     const checkoutPhone = normalizeCustomerPhone(phone || user?.customer_phone);
     if (!isValidCustomerEmail(checkoutEmail)) {
