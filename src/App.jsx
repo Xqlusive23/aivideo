@@ -90,11 +90,9 @@ function formatStatusDisplay(raw) {
 const MY_DECART_KEY = (import.meta.env?.VITE_DECART_API_KEY || "").trim();
 
 // How long a live transformation session is allowed to run before auto-stopping.
-// This is just a UX cap, unrelated to billing.
-// (Previously a hardcoded 5-minute session cap lived here — removed. Lucy
-// 2.5 is explicitly designed for indefinite runtime, so sessions now only
-// end when the user stops them or credits run out — see stopTransformation
-// and the heartbeat's `depleted` handling.)
+// Paid users: no UX cap (credits / Decart session token decide).
+// Trial accounts: Lucy-style 60s Decart maxSessionDuration + client backup stop.
+const TRIAL_MAX_SESSION_SECONDS = 60;
 
 // --- Real credit ledger backend --------------------------------------------
 // See /ledger-backend. The browser NEVER decides the balance — it only ever
@@ -699,6 +697,7 @@ export default function App() {
   );
   const nativeVideoFullscreenRef = useRef(false);
   const decartPrewarmRef = useRef({ apiKey: null, fetchedAt: 0, expiresAt: null, uploadPromise: null });
+  const trialSessionCapRef = useRef(0);
   const preparedReferenceFileRef = useRef(null);
   const stopTransformationRef = useRef(() => {});
 
@@ -2891,7 +2890,19 @@ export default function App() {
     clearClockTimer();
     setElapsedSeconds(0);
     clockTimerRef.current = setInterval(() => {
-      setElapsedSeconds((prev) => prev + 1);
+      setElapsedSeconds((prev) => {
+        const next = prev + 1;
+        const cap = Number(trialSessionCapRef.current) || 0;
+        if (cap > 0 && next >= cap) {
+          queueMicrotask(() => {
+            if (!isRunningRef.current) return;
+            stopTransformationRef.current();
+            setStatus("TRIAL ENDED — MESSAGE WHATSAPP TO PURCHASE");
+            setShowAddCredits(true);
+          });
+        }
+        return next;
+      });
     }, 1000);
   };
 
@@ -3237,6 +3248,11 @@ export default function App() {
       fetchedAt: now,
       expiresAt: auth.expiresAt || null,
     };
+    const trialCapFromLedger = Number(auth.maxSessionDuration);
+    trialSessionCapRef.current =
+      auth.isTrial || (isTrialAccountRef.current && !allowPurchaseRef.current)
+        ? Math.max(10, Math.min(TRIAL_MAX_SESSION_SECONDS, Number.isFinite(trialCapFromLedger) ? trialCapFromLedger : TRIAL_MAX_SESSION_SECONDS))
+        : 0;
     return auth.apiKey;
   };
 
@@ -3797,6 +3813,8 @@ export default function App() {
 
     billingSessionIdRef.current = null;
     transformOutputReadyRef.current = false;
+    trialSessionCapRef.current =
+      isTrialAccountRef.current && !allowPurchaseRef.current ? TRIAL_MAX_SESSION_SECONDS : 0;
     setRunningState(true);
     startInProgressRef.current = false;
     setStatus("HANDSHAKING WITH DECART WEBRTC CLUSTER...");

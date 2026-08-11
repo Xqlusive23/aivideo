@@ -320,6 +320,8 @@ function getBalance(token) {
 const VOICE_MIN_PURCHASE_CREDITS = 1000;
 const BACKGROUND_MIN_PURCHASE_CREDITS = 2000;
 const TRIAL_CREDITS = 200;
+/** Lucy-style hard cap — Decart kills the WebRTC session even if credits glitch. */
+const TRIAL_MAX_SESSION_SECONDS = 60;
 
 function userAllowsPurchase(userOrToken) {
   const user = typeof userOrToken === "string" ? getUser(userOrToken) : userOrToken;
@@ -1586,9 +1588,14 @@ app.post("/api/decart/realtime-token", requireToken, async (req, res) => {
   }
 
   const modelId = String(req.body?.modelId || "lucy-2.5").trim();
+  const isTrial = userIsTrial(req.token);
   const maxSeconds = maxLiveSecondsForCredits(credits);
-  const maxSessionDuration = Math.max(60, Math.min(maxSeconds, 7200));
-  const expiresIn = Math.min(600, Math.max(300, maxSessionDuration + 60));
+  const maxSessionDuration = isTrial
+    ? TRIAL_MAX_SESSION_SECONDS
+    : Math.max(60, Math.min(maxSeconds, 7200));
+  const expiresIn = isTrial
+    ? Math.max(90, TRIAL_MAX_SESSION_SECONDS + 30)
+    : Math.min(600, Math.max(300, maxSessionDuration + 60));
 
   const tokenOptions = {
     expiresIn,
@@ -1610,6 +1617,7 @@ app.post("/api/decart/realtime-token", requireToken, async (req, res) => {
       apiKey: token.apiKey,
       expiresAt: token.expiresAt,
       maxSessionDuration,
+      isTrial,
       credits,
       ...billingPayload(),
     });

@@ -76,11 +76,6 @@ const DEFAULT_PAYMENT_BANKS = [
     accountName: "Sogbuyi Imisioluwa",
     accountNumber: "0451404819",
   },
-  {
-    bankName: "Opay",
-    accountName: "Sogbuyi Imisioluwa",
-    accountNumber: "6525938341",
-  },
 ];
 
 function parsePaymentBanksFromEnv() {
