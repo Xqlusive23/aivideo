@@ -414,6 +414,10 @@ export default function LandingPage() {
       <footer className="itc-landing-footer">
         <span>© {new Date().getFullYear()} {SITE_NAME}</span>
         <span className="itc-landing-footer-links">
+          <Link to="/terms" className="itc-landing-footer-link">Terms</Link>
+          <Link to="/privacy" className="itc-landing-footer-link">Privacy</Link>
+          <Link to="/refund" className="itc-landing-footer-link">Refunds</Link>
+          <Link to="/contact" className="itc-landing-footer-link">Contact</Link>
           {isLiveChatEnabled() ? (
             <button
               type="button"

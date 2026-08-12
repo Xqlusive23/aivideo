@@ -78,6 +78,12 @@ export default function CheckoutPage() {
           <Link to="/app" className="itc-btn itc-btn-primary">
             Back to studio
           </Link>
+          <nav className="itc-checkout-legal" aria-label="Policies">
+            <Link to="/terms">Terms</Link>
+            <Link to="/privacy">Privacy</Link>
+            <Link to="/refund">Refunds</Link>
+            <Link to="/contact">Contact</Link>
+          </nav>
         </div>
       </div>
     );
@@ -198,6 +204,13 @@ export default function CheckoutPage() {
         ) : (
           <p className="itc-checkout-fine itc-checkout-wait">Select a payment method to continue.</p>
         )}
+
+        <nav className="itc-checkout-legal" aria-label="Policies">
+          <Link to="/terms">Terms</Link>
+          <Link to="/privacy">Privacy</Link>
+          <Link to="/refund">Refunds</Link>
+          <Link to="/contact">Contact</Link>
+        </nav>
       </div>
     </div>
   );

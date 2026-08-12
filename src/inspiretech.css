@@ -787,6 +787,27 @@ body {
   border: 1px dashed rgba(148, 163, 184, 0.28);
 }
 
+.itc-checkout-legal {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 12px 16px;
+  margin-top: 28px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(148, 163, 184, 0.18);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.itc-checkout-legal a {
+  color: #94a3b8;
+  text-decoration: none;
+}
+
+.itc-checkout-legal a:hover {
+  color: var(--itc-emerald);
+}
+
 @media (max-width: 560px) {
   .itc-checkout-method-grid {
     grid-template-columns: 1fr;
@@ -4204,5 +4225,162 @@ html.itc-livechat-hidden .widget-visible {
   visibility: hidden !important;
   pointer-events: none !important;
   opacity: 0 !important;
+}
+
+/* Legal / compliance pages (Terms, Privacy, Refunds, Contact) */
+.itc-legal-page {
+  min-height: 100vh;
+  background:
+    radial-gradient(ellipse 80% 50% at 20% 0%, rgba(16, 185, 129, 0.12), transparent 55%),
+    radial-gradient(ellipse 60% 40% at 90% 10%, rgba(59, 130, 246, 0.08), transparent 50%),
+    linear-gradient(180deg, #0b1020 0%, #0f172a 100%);
+  color: #e2e8f0;
+  padding: 28px 20px 64px;
+}
+
+.itc-legal-shell {
+  width: 100%;
+  max-width: 760px;
+  margin: 0 auto;
+}
+
+.itc-legal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 28px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.itc-legal-brand {
+  text-decoration: none;
+  color: inherit;
+}
+
+.itc-legal-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.itc-legal-nav a {
+  color: #94a3b8;
+  text-decoration: none;
+}
+
+.itc-legal-nav a:hover {
+  color: var(--itc-emerald);
+}
+
+.itc-legal-effective {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: #64748b;
+  letter-spacing: 0.02em;
+}
+
+.itc-legal-title {
+  margin: 0 0 28px;
+  font-size: clamp(1.75rem, 4vw, 2.25rem);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: #f8fafc;
+}
+
+.itc-legal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+.itc-legal-section h2 {
+  margin: 0 0 10px;
+  font-size: 1.05rem;
+  font-weight: 650;
+  color: #f1f5f9;
+}
+
+.itc-legal-section p {
+  margin: 0 0 10px;
+  font-size: 0.95rem;
+  line-height: 1.65;
+  color: #cbd5e1;
+}
+
+.itc-legal-section ul {
+  margin: 0 0 10px;
+  padding-left: 1.25rem;
+  font-size: 0.95rem;
+  line-height: 1.65;
+  color: #cbd5e1;
+}
+
+.itc-legal-section li {
+  margin-bottom: 6px;
+}
+
+.itc-legal-contact-list {
+  list-style: none;
+  padding: 14px 16px;
+  margin: 12px 0 0;
+  background: rgba(15, 23, 42, 0.65);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 10px;
+}
+
+.itc-legal-contact-list li {
+  margin-bottom: 8px;
+  font-size: 0.95rem;
+  line-height: 1.5;
+  color: #e2e8f0;
+}
+
+.itc-legal-contact-list li:last-child {
+  margin-bottom: 0;
+}
+
+.itc-legal-contact-list a {
+  color: var(--itc-emerald);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.itc-legal-contact-list a:hover {
+  text-decoration: underline;
+}
+
+.itc-legal-footer {
+  margin-top: 40px;
+  padding-top: 24px;
+  border-top: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.itc-legal-footer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.itc-legal-footer-note {
+  margin: 0;
+  font-size: 12px;
+  color: #64748b;
+}
+
+@media (max-width: 520px) {
+  .itc-legal-page {
+    padding: 20px 16px 48px;
+  }
+
+  .itc-legal-footer-actions .itc-btn {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
 }
 

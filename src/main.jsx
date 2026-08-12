@@ -6,6 +6,7 @@ import "./inspiretech.css";
 import LandingPage from "./LandingPage.jsx";
 import App from "./App.jsx";
 import CheckoutPage from "./CheckoutPage.jsx";
+import LegalPage from "./LegalPage.jsx";
 import LiveChatInit from "./LiveChatInit.jsx";
 
 function isCompanionApp() {
@@ -32,6 +33,11 @@ createRoot(document.getElementById("root")).render(
         <Route path="/app" element={<App />} />
         <Route path="/pay" element={<CheckoutPage />} />
         <Route path="/checkout" element={<CheckoutPage />} />
+        <Route path="/terms" element={<LegalPage docId="terms" />} />
+        <Route path="/privacy" element={<LegalPage docId="privacy" />} />
+        <Route path="/refund" element={<LegalPage docId="refund" />} />
+        <Route path="/refunds" element={<LegalPage docId="refund" />} />
+        <Route path="/contact" element={<LegalPage docId="contact" />} />
         <Route path="*" element={<DefaultRedirect />} />
       </Routes>
     </HashRouter>

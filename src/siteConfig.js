@@ -184,3 +184,18 @@ export const WINDOWS_DOWNLOAD_URL =
 export const SITE_NAME = "InspireTech";
 export const SITE_TAGLINE = "Real-time AI video transformation for live calls";
 export const LOGO_SRC = `${import.meta.env.BASE_URL}logo.png`;
+
+/** Public business contact — required for payment-provider compliance (Flutterwave, etc.). Override via VITE_*. */
+export const BUSINESS_LEGAL_NAME =
+  envText("VITE_BUSINESS_LEGAL_NAME") || "InspireTech";
+export const BUSINESS_EMAIL =
+  envText("VITE_BUSINESS_EMAIL") || "inspirestream.xyz@gmail.com";
+export const BUSINESS_PHONE_DISPLAY =
+  envText("VITE_BUSINESS_PHONE") || WHATSAPP_DISPLAY;
+export const BUSINESS_ADDRESS =
+  envText("VITE_BUSINESS_ADDRESS") ||
+  "5b Ogbomosho Cl, Igando, Lagos, Nigeria";
+export const BUSINESS_WEBSITE =
+  envText("VITE_BUSINESS_WEBSITE") || "https://www.inspirestream.xyz";
+export const LEGAL_EFFECTIVE_DATE =
+  envText("VITE_LEGAL_EFFECTIVE_DATE") || "August 12, 2026";
