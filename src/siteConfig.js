@@ -4,7 +4,7 @@ import { buildAccessRequestPriceListMessage } from "./pricing.js";
 
 // Full international numbers, digits only (no +, spaces, or leading 0).
 // Nigeria: 2348145225075   US: 13802721170
-const DEFAULT_WHATSAPP_NUMBERS = ["2348145225075", "13802721170"];
+const DEFAULT_WHATSAPP_NUMBERS = ["2348145225075", "2347042135204", "13802721170"];
 
 function normalizeWhatsAppNumber(raw) {
   let digits = String(raw || "").replace(/\D/g, "");
@@ -191,7 +191,11 @@ export const BUSINESS_LEGAL_NAME =
 export const BUSINESS_EMAIL =
   envText("VITE_BUSINESS_EMAIL") || "inspirestream.xyz@gmail.com";
 export const BUSINESS_PHONE_DISPLAY =
-  envText("VITE_BUSINESS_PHONE") || WHATSAPP_DISPLAY;
+  envText("VITE_BUSINESS_PHONE") ||
+  ["2348145225075", "2347042135204", "13802721170"]
+    .map(formatWhatsAppDisplay)
+    .filter(Boolean)
+    .join(" · ");
 export const BUSINESS_ADDRESS =
   envText("VITE_BUSINESS_ADDRESS") ||
   "5b Ogbomosho Cl, Igando, Lagos, Nigeria";
