@@ -201,8 +201,12 @@ function drawVideoFrame(ctx, video, destWidth, destHeight, fit = "cover") {
 const REFERENCE_UPLOAD_MAX_EDGE = 1920;
 const DECART_PREWARM_TTL_MS = 4 * 60 * 1000;
 /** Abort & disconnect Decart if transform video never arrives (caps Decart metering). */
-const TRANSFORM_CONNECT_TIMEOUT_MS = 5000;
-const TRANSFORM_CONNECT_TIMEOUT_DESKTOP_MS = 10000;
+const TRANSFORM_CONNECT_TIMEOUT_MS = 8000;
+/** Desktop: WebRTC + first frame often needs longer than web (cold start / scene upload). */
+const TRANSFORM_CONNECT_TIMEOUT_DESKTOP_MS = 20000;
+/** Absolute ceiling while realtime.connect() itself is still in flight. */
+const TRANSFORM_HANDSHAKE_CEILING_MS = 45000;
+const TRANSFORM_HANDSHAKE_CEILING_DESKTOP_MS = 60000;
 const DECART_PRESET_DEDUP_MS = 900;
 
 function drawIdleVirtualCamFrame(ctx, width, height) {
@@ -1725,7 +1729,9 @@ export default function App() {
   // Match Decart output quality (incl. 1080p). Feeder stdin is backpressure-safe
   // in companion ≥0.3.24 — do not soft-cap below the reference / output size.
   const COMPANION_LIVE_FPS = 20;
-  const COMPANION_IDLE_FPS = 4;
+  // Keep idle pushes frequent so Electron-side branding stays on the device;
+  // the native feeder also repeats the last frame so Unity never shows yellow.
+  const COMPANION_IDLE_FPS = 12;
   const COMPANION_LIVE_FPS_1080 = 15; // slightly lower at Full HD to keep the pipe stable
 
   const getCompanionVirtualSize = () => {
@@ -3816,7 +3822,6 @@ export default function App() {
     trialSessionCapRef.current =
       isTrialAccountRef.current && !allowPurchaseRef.current ? TRIAL_MAX_SESSION_SECONDS : 0;
     setRunningState(true);
-    startInProgressRef.current = false;
     setStatus("HANDSHAKING WITH DECART WEBRTC CLUSTER...");
 
     try {
@@ -3897,16 +3902,24 @@ export default function App() {
             : "character reference only",
         });
 
-        // Cap Decart metering: if first transform frame doesn't land in time, disconnect.
+        // Cap Decart metering: timeout must not burn through the WebRTC handshake.
+        // Ceiling covers a hung connect(); first-frame window arms after connect returns.
         const connectAttempt = ++connectAttemptRef.current;
-        clearBillingOpenFallback();
-        billingOpenFallbackRef.current = setTimeout(() => {
-          if (connectAttemptRef.current !== connectAttempt) return;
-          if (!isRunningRef.current || transformOutputReadyRef.current) return;
-          console.warn("[InspireTech] Transform video never arrived — disconnecting Decart (no user billing)");
-          setStatus("CONNECT TIMEOUT — NO TRANSFORM VIDEO");
-          stopTransformation();
-        }, isCompanionApp() ? TRANSFORM_CONNECT_TIMEOUT_DESKTOP_MS : TRANSFORM_CONNECT_TIMEOUT_MS);
+        const armTransformTimeout = (ms, label) => {
+          clearBillingOpenFallback();
+          billingOpenFallbackRef.current = setTimeout(() => {
+            if (connectAttemptRef.current !== connectAttempt) return;
+            if (!isRunningRef.current || transformOutputReadyRef.current) return;
+            console.warn(`[InspireTech] ${label} — disconnecting Decart (no user billing)`);
+            setStatus("CONNECT TIMEOUT — NO TRANSFORM VIDEO");
+            stopTransformation();
+          }, ms);
+        };
+
+        armTransformTimeout(
+          isCompanionApp() ? TRANSFORM_HANDSHAKE_CEILING_DESKTOP_MS : TRANSFORM_HANDSHAKE_CEILING_MS,
+          "Decart handshake ceiling reached"
+        );
 
         const session = await client.realtime.connect(streamForDecartFinal, {
           model: realtimeModel,
@@ -3960,6 +3973,14 @@ export default function App() {
           return;
         }
 
+        // Handshake done — give the first transformed frame its own window.
+        if (!transformOutputReadyRef.current) {
+          armTransformTimeout(
+            isCompanionApp() ? TRANSFORM_CONNECT_TIMEOUT_DESKTOP_MS : TRANSFORM_CONNECT_TIMEOUT_MS,
+            "Transform video never arrived after handshake"
+          );
+        }
+
         wireDecartSession(session);
         realtimeClientRef.current = session;
 
@@ -4003,6 +4024,8 @@ export default function App() {
       }
       setRunningState(false);
       stopActiveVoicePipeline();
+    } finally {
+      startInProgressRef.current = false;
     }
   };
 

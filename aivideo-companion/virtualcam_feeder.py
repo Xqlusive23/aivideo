@@ -15,17 +15,22 @@ repeated for as long as frames keep arriving.
 One-time setup needed before this will do anything (see README.md):
     1. Install Unity Capture's driver (schellingb/UnityCapture on GitHub).
     2. pip install pyvirtualcam numpy
+
+Important: Unity Capture's native idle buffer is yellowish. We always keep
+sending frames (black until Electron delivers real ones) so that color never
+appears while this feeder is running.
 """
 
-import sys
-sys.stdout.reconfigure(encoding='utf-8')
-sys.stderr.reconfigure(encoding='utf-8')
 import argparse
 import struct
 import sys
+import threading
 
 import numpy as np
 import pyvirtualcam
+
+sys.stdout.reconfigure(encoding="utf-8")
+sys.stderr.reconfigure(encoding="utf-8")
 
 
 def read_exact(stream, n):
@@ -38,6 +43,13 @@ def read_exact(stream, n):
             return None  # stdin closed / Electron process ended
         buf += chunk
     return buf
+
+
+def make_idle_frame(width, height):
+    """Opaque black RGBA — overrides Unity Capture's yellowish default buffer."""
+    frame = np.zeros((height, width, 4), dtype=np.uint8)
+    frame[:, :, 3] = 255
+    return frame
 
 
 def main():
@@ -58,6 +70,11 @@ def main():
         flush=True,
     )
 
+    frame_size = args.width * args.height * 4  # RGBA = 4 bytes/pixel
+    latest_lock = threading.Lock()
+    latest_frame = make_idle_frame(args.width, args.height)
+    stop_sender = threading.Event()
+
     with pyvirtualcam.Camera(
         width=args.width,
         height=args.height,
@@ -69,30 +86,52 @@ def main():
         print(f"✅ Virtual camera active as: {cam.device}", flush=True)
         print("Zoom/Telegram/Discord should now be able to select this as a camera.", flush=True)
 
-        frame_size = args.width * args.height * 4  # RGBA = 4 bytes/pixel
+        def sender_loop():
+            # Keep the device fed at all times so Unity never falls back to yellow.
+            while not stop_sender.is_set():
+                with latest_lock:
+                    frame = latest_frame
+                try:
+                    cam.send(frame)
+                    cam.sleep_until_next_frame()
+                except Exception as err:
+                    print(f"sender stopped: {err}", flush=True)
+                    break
+
+        sender = threading.Thread(target=sender_loop, name="virtualcam-sender", daemon=True)
+        sender.start()
+
         stdin = sys.stdin.buffer
+        try:
+            while True:
+                header = read_exact(stdin, 4)
+                if header is None:
+                    print("stdin closed — stopping.", flush=True)
+                    break
+                (length,) = struct.unpack(">I", header)
 
-        while True:
-            header = read_exact(stdin, 4)
-            if header is None:
-                print("stdin closed — stopping.", flush=True)
-                break
-            (length,) = struct.unpack(">I", header)
+                payload = read_exact(stdin, length)
+                if payload is None:
+                    print("stdin closed mid-frame — stopping.", flush=True)
+                    break
 
-            payload = read_exact(stdin, length)
-            if payload is None:
-                print("stdin closed mid-frame — stopping.", flush=True)
-                break
+                if length != frame_size:
+                    # Renderer sent a frame at a different resolution than
+                    # expected — skip it rather than crash the whole feeder.
+                    print(
+                        f"⚠️  Got {length} bytes, expected {frame_size} — skipping frame.",
+                        flush=True,
+                    )
+                    continue
 
-            if length != frame_size:
-                # Renderer sent a frame at a different resolution than
-                # expected — skip it rather than crash the whole feeder.
-                print(f"⚠️  Got {length} bytes, expected {frame_size} — skipping frame.", flush=True)
-                continue
-
-            frame = np.frombuffer(payload, dtype=np.uint8).reshape((args.height, args.width, 4))
-            cam.send(frame)
-            cam.sleep_until_next_frame()
+                frame = np.frombuffer(payload, dtype=np.uint8).reshape(
+                    (args.height, args.width, 4)
+                ).copy()
+                with latest_lock:
+                    latest_frame = frame
+        finally:
+            stop_sender.set()
+            sender.join(timeout=2.0)
 
 
 if __name__ == "__main__":
