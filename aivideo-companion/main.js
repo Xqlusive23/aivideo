@@ -8,6 +8,11 @@
 // can retry or finish driver setup via the preload bridge.
 
 const { app, BrowserWindow, ipcMain, Menu } = require("electron");
+
+// Keep capturing/pushing virtual-cam frames while the user is in Zoom/Telegram.
+app.commandLine.appendSwitch("disable-renderer-backgrounding");
+app.commandLine.appendSwitch("disable-background-timer-throttling");
+app.commandLine.appendSwitch("disable-backgrounding-occluded-windows");
 const fs = require("fs");
 const path = require("path");
 const {
@@ -48,6 +53,7 @@ function createMainWindow() {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
+      backgroundThrottling: false,
     },
   });
 

@@ -16,9 +16,10 @@ One-time setup needed before this will do anything (see README.md):
     1. Install Unity Capture's driver (schellingb/UnityCapture on GitHub).
     2. pip install pyvirtualcam numpy
 
-Important: Unity Capture's native idle buffer is yellowish. We always keep
-sending frames (black until Electron delivers real ones) so that color never
-appears while this feeder is running.
+Unity Capture's native idle buffer is yellowish. We send an opaque black
+frame immediately, then keep sending on the same thread that opened the
+camera (DirectShow/shared-memory updates fail if send() is called from a
+worker thread — calling apps then stay on a blank/black picture).
 """
 
 import argparse
@@ -73,37 +74,13 @@ def main():
     frame_size = args.width * args.height * 4  # RGBA = 4 bytes/pixel
     latest_lock = threading.Lock()
     latest_frame = make_idle_frame(args.width, args.height)
-    stop_sender = threading.Event()
+    stop_reader = threading.Event()
 
-    with pyvirtualcam.Camera(
-        width=args.width,
-        height=args.height,
-        fps=args.fps,
-        fmt=pyvirtualcam.PixelFormat.RGBA,  # Unity Capture specifically supports RGBA (most backends don't)
-        backend="unitycapture",
-        device=args.device,
-    ) as cam:
-        print(f"✅ Virtual camera active as: {cam.device}", flush=True)
-        print("Zoom/Telegram/Discord should now be able to select this as a camera.", flush=True)
-
-        def sender_loop():
-            # Keep the device fed at all times so Unity never falls back to yellow.
-            while not stop_sender.is_set():
-                with latest_lock:
-                    frame = latest_frame
-                try:
-                    cam.send(frame)
-                    cam.sleep_until_next_frame()
-                except Exception as err:
-                    print(f"sender stopped: {err}", flush=True)
-                    break
-
-        sender = threading.Thread(target=sender_loop, name="virtualcam-sender", daemon=True)
-        sender.start()
-
+    def stdin_loop():
+        nonlocal latest_frame
         stdin = sys.stdin.buffer
         try:
-            while True:
+            while not stop_reader.is_set():
                 header = read_exact(stdin, 4)
                 if header is None:
                     print("stdin closed — stopping.", flush=True)
@@ -127,11 +104,42 @@ def main():
                 frame = np.frombuffer(payload, dtype=np.uint8).reshape(
                     (args.height, args.width, 4)
                 ).copy()
+                frame[:, :, 3] = 255
                 with latest_lock:
                     latest_frame = frame
         finally:
-            stop_sender.set()
-            sender.join(timeout=2.0)
+            stop_reader.set()
+
+    reader = threading.Thread(target=stdin_loop, name="virtualcam-stdin", daemon=True)
+    reader.start()
+
+    with pyvirtualcam.Camera(
+        width=args.width,
+        height=args.height,
+        fps=args.fps,
+        fmt=pyvirtualcam.PixelFormat.RGBA,  # Unity Capture specifically supports RGBA (most backends don't)
+        backend="unitycapture",
+        device=args.device,
+    ) as cam:
+        print(f"✅ Virtual camera active as: {cam.device}", flush=True)
+        print("Zoom/Telegram/Discord should now be able to select this as a camera.", flush=True)
+
+        # First send MUST happen on this thread so DirectShow clients see a
+        # real buffer instead of Unity's yellow unused memory.
+        cam.send(latest_frame)
+
+        while not stop_reader.is_set():
+            with latest_lock:
+                frame = latest_frame
+            try:
+                cam.send(frame)
+                cam.sleep_until_next_frame()
+            except Exception as err:
+                print(f"sender stopped: {err}", flush=True)
+                break
+
+    stop_reader.set()
+    reader.join(timeout=2.0)
 
 
 if __name__ == "__main__":

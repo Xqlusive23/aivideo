@@ -1754,18 +1754,23 @@ export default function App() {
     const { width, height } = getCompanionVirtualSize();
     canvas.width = width;
     canvas.height = height;
-    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    const ctx = canvas.getContext("2d", { alpha: false, willReadFrequently: true });
     let cancelled = false;
     let intervalId = null;
     let lastFps = 0;
+    let hasLiveFrame = false;
 
     const pushFrame = () => {
-      if (cancelled || !window.inspiretechCompanion?.sendFrame) return;
+      if (cancelled || !window.inspiretechCompanion?.sendFrame || !ctx) return;
       try {
         const video = outputVideoRef.current;
-        if (isRunningRef.current && video?.videoWidth) {
+        const canDrawLive = Boolean(
+          isRunningRef.current && video && video.readyState >= 2 && video.videoWidth > 0
+        );
+        if (canDrawLive) {
           drawVideoFrame(ctx, video, canvas.width, canvas.height, "cover");
-        } else {
+          hasLiveFrame = true;
+        } else if (!hasLiveFrame) {
           drawIdleVirtualCamFrame(ctx, canvas.width, canvas.height);
         }
         const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
