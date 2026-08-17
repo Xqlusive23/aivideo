@@ -129,7 +129,7 @@ const FEATURES = [
   {
     icon: "🎟️",
     title: "Invite access + credit packs",
-    body: "Request an access code on WhatsApp (separate invite packages). After unlock, buy credit packs in the studio and pay via bank transfer or USDT.",
+    body: "Request an access code on WhatsApp (separate invite packages, paid in USDT). After unlock, buy credit packs in the studio with Flutterwave.",
   },
 ];
 
@@ -137,7 +137,7 @@ const STEPS = [
   "Request an access code on WhatsApp — the message includes invite pricing and our USDT address for payment.",
   "We send a personal access token. Paste it in the web studio or Windows app.",
   "Upload a reference photo, go live, then select InspireTech Camera (and mic) in your calling app.",
-  "When you need more credits, open Buy credits in the studio — pay via USDT or Nigerian bank transfer and send proof.",
+  "When you need more credits, open Buy credits in the studio and pay with Flutterwave.",
 ];
 
 export default function LandingPage() {

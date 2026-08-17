@@ -137,7 +137,7 @@ export function buildAccessRequestPriceListMessage({
   if (address) {
     const network = String(usdtNetwork || "").trim();
     lines.push("");
-    lines.push("Pay with USDT (outside Nigeria / preferred for access requests):");
+    lines.push("Pay with USDT (for access-token / invite packages):");
     if (network) lines.push(`• Network: ${network}`);
     lines.push(`• Address: ${address}`);
     lines.push("Send the exact USD amount for your plan, then reply here with the tx hash / screenshot.");

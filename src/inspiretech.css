@@ -669,7 +669,7 @@ body {
 
 .itc-checkout-method-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   gap: 10px;
 }
 
@@ -720,6 +720,45 @@ body {
   margin: 0 0 14px;
   font-size: 0.8125rem;
   color: #94a3b8;
+  line-height: 1.45;
+}
+
+.itc-checkout-fields {
+  display: grid;
+  gap: 12px;
+}
+
+.itc-checkout-field {
+  display: grid;
+  gap: 6px;
+}
+
+.itc-checkout-field label {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #cbd5e1;
+}
+
+.itc-checkout-field input {
+  width: 100%;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  background: rgba(11, 16, 32, 0.85);
+  color: #f1f5f9;
+  font: inherit;
+  font-size: 0.9375rem;
+  padding: 10px 12px;
+}
+
+.itc-checkout-field input:focus {
+  outline: none;
+  border-color: rgba(52, 211, 153, 0.55);
+}
+
+.itc-checkout-error {
+  margin: 0;
+  font-size: 0.8125rem;
+  color: #fb7185;
   line-height: 1.45;
 }
 
@@ -2357,6 +2396,7 @@ body {
   max-width: 100%;
   height: auto;
   flex-shrink: 0;
+  background: #000;
 }
 
 .itc-fixed-output.itc-scene-transitioning .itc-output-video {

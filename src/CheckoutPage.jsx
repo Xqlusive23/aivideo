@@ -1,16 +1,7 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { LogoLockup } from "./Logo.jsx";
-import WhatsAppLink from "./WhatsAppLink.jsx";
-import {
-  PAYMENT_BANK,
-  PAYMENT_BANKS,
-  PAYMENT_USDT,
-  buildStudioTopUpWhatsAppMessage,
-  hasBankPayment,
-  hasUsdtPayment,
-} from "./siteConfig.js";
-import { normalizeAccessToken } from "./ledgerClient.js";
+import { LEDGER_URL, getClientPlatform, normalizeAccessToken } from "./ledgerClient.js";
 import {
   TOP_UP_OPTIONS,
   formatCredits,
@@ -19,20 +10,8 @@ import {
   formatUsdFromNaira,
 } from "./pricing.js";
 
-const METHODS = [
-  {
-    id: "usdt",
-    label: "USDT",
-    subtitle: "Crypto · TRC20",
-    available: hasUsdtPayment,
-  },
-  {
-    id: "bank",
-    label: "Bank transfer",
-    subtitle: `Nigeria · ${PAYMENT_BANK.currency || "NGN"}`,
-    available: hasBankPayment,
-  },
-];
+const EMAIL_STORAGE_KEY = "inspiretech_checkout_email";
+const PHONE_STORAGE_KEY = "inspiretech_checkout_phone";
 
 function readStoredAccessToken() {
   try {
@@ -40,6 +19,30 @@ function readStoredAccessToken() {
   } catch {
     return "";
   }
+}
+
+function readStoredContact(key) {
+  try {
+    return String(window.localStorage.getItem(key) || "").trim();
+  } catch {
+    return "";
+  }
+}
+
+function writeStoredContact(key, value) {
+  try {
+    window.localStorage.setItem(key, String(value || "").trim());
+  } catch {
+    // ignore
+  }
+}
+
+function isValidEmail(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim());
+}
+
+function isValidPhone(value) {
+  return String(value || "").replace(/\D/g, "").length >= 10;
 }
 
 export default function CheckoutPage() {
@@ -50,21 +53,84 @@ export default function CheckoutPage() {
     () => TOP_UP_OPTIONS.find((opt) => opt.credits === creditsParam) || null,
     [creditsParam]
   );
-  const [method, setMethod] = useState("");
+  const [email, setEmail] = useState(() => readStoredContact(EMAIL_STORAGE_KEY));
+  const [phone, setPhone] = useState(() => readStoredContact(PHONE_STORAGE_KEY));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
   const accessToken = useMemo(() => readStoredAccessToken(), []);
 
-  const availableMethods = METHODS.filter((entry) => entry.available);
-  const selectedMethod = availableMethods.find((entry) => entry.id === method) || null;
+  useEffect(() => {
+    if (!accessToken) return undefined;
+    let cancelled = false;
+    const loadContact = async () => {
+      try {
+        const res = await fetch(`${LEDGER_URL}/api/access-check`, {
+          headers: {
+            "X-Access-Token": accessToken,
+            "X-Client-Platform": getClientPlatform(),
+          },
+        });
+        const data = await res.json().catch(() => ({}));
+        if (cancelled || !res.ok) return;
+        if (!email && data.customerEmail) setEmail(String(data.customerEmail));
+        if (!phone && data.customerPhone) setPhone(String(data.customerPhone));
+      } catch {
+        // ignore — user can type contact details
+      }
+    };
+    void loadContact();
+    return () => {
+      cancelled = true;
+    };
+    // Prefill once from the ledger; don't re-run when the user edits fields.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accessToken]);
 
-  const whatsappMessage = useMemo(
-    () =>
-      buildStudioTopUpWhatsAppMessage({
-        credits: pack?.credits,
-        method: selectedMethod?.id || "",
-        accessToken,
-      }),
-    [pack?.credits, selectedMethod?.id, accessToken]
-  );
+  const startFlutterwaveCheckout = async () => {
+    if (!pack) return;
+    const nextEmail = email.trim();
+    const nextPhone = phone.trim();
+    if (!isValidEmail(nextEmail)) {
+      setError("Enter a valid email address.");
+      return;
+    }
+    if (!isValidPhone(nextPhone)) {
+      setError("Enter a valid phone number.");
+      return;
+    }
+    if (!accessToken) {
+      setError("Sign in with your access token in the studio first.");
+      return;
+    }
+
+    writeStoredContact(EMAIL_STORAGE_KEY, nextEmail);
+    writeStoredContact(PHONE_STORAGE_KEY, nextPhone);
+    setError("");
+    setBusy(true);
+    try {
+      const res = await fetch(`${LEDGER_URL}/api/checkout`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Access-Token": accessToken,
+          "X-Client-Platform": getClientPlatform(),
+        },
+        body: JSON.stringify({
+          credits: pack.credits,
+          email: nextEmail,
+          phone: nextPhone,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.url) {
+        throw new Error(data.error || `Checkout failed (${res.status})`);
+      }
+      window.location.assign(data.url);
+    } catch (err) {
+      setError(err?.message || "Could not start Flutterwave checkout.");
+      setBusy(false);
+    }
+  };
 
   if (!pack) {
     return (
@@ -73,7 +139,7 @@ export default function CheckoutPage() {
           <LogoLockup size="md" />
           <h1 className="itc-checkout-title">Choose a credit pack first</h1>
           <p className="itc-checkout-lead">
-            Return to the studio, select a pack, then continue to payment.
+            Return to the studio, select a pack, then continue to Flutterwave checkout.
           </p>
           <Link to="/app" className="itc-btn itc-btn-primary">
             Back to studio
@@ -100,9 +166,9 @@ export default function CheckoutPage() {
         </header>
 
         <p className="itc-checkout-eyebrow">Secure checkout</p>
-        <h1 className="itc-checkout-title">Complete your payment</h1>
+        <h1 className="itc-checkout-title">Pay with Flutterwave</h1>
         <p className="itc-checkout-lead">
-          Pick how you want to pay. Payment details appear only after you choose a method.
+          Studio credit packs are paid by card, USSD, or Flutterwave bank options. Credits are added automatically after a successful payment.
         </p>
 
         <article className="itc-checkout-summary">
@@ -119,91 +185,51 @@ export default function CheckoutPage() {
           </div>
         </article>
 
-        <section className="itc-checkout-methods" aria-label="Payment methods">
-          <h2 className="itc-checkout-section-title">Choose payment method</h2>
-          <div className="itc-checkout-method-grid">
-            {availableMethods.map((entry) => (
-              <button
-                key={entry.id}
-                type="button"
-                className={`itc-checkout-method${method === entry.id ? " is-active" : ""}`}
-                onClick={() => setMethod(entry.id)}
-              >
-                <span className="itc-checkout-method-label">{entry.label}</span>
-                <span className="itc-checkout-method-sub">{entry.subtitle}</span>
-              </button>
-            ))}
+        <section className="itc-checkout-details">
+          <h2 className="itc-checkout-section-title">Billing details</h2>
+          <p className="itc-checkout-details-lead">
+            Email and phone are required by Flutterwave.
+          </p>
+          <div className="itc-checkout-fields">
+            <div className="itc-checkout-field">
+              <label htmlFor="itc-checkout-email">Email</label>
+              <input
+                id="itc-checkout-email"
+                type="email"
+                autoComplete="email"
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                placeholder="you@email.com"
+              />
+            </div>
+            <div className="itc-checkout-field">
+              <label htmlFor="itc-checkout-phone">Phone</label>
+              <input
+                id="itc-checkout-phone"
+                type="tel"
+                autoComplete="tel"
+                value={phone}
+                onChange={(event) => setPhone(event.target.value)}
+                placeholder="+234 …"
+              />
+            </div>
           </div>
         </section>
 
-        {selectedMethod?.id === "usdt" ? (
-          <section className="itc-checkout-details">
-            <h2 className="itc-checkout-section-title">USDT payment details</h2>
-            <p className="itc-checkout-details-lead">{PAYMENT_USDT.note}</p>
-            <dl className="itc-checkout-dl">
-              <div>
-                <dt>Network</dt>
-                <dd>{PAYMENT_USDT.network}</dd>
-              </div>
-              <div>
-                <dt>Address</dt>
-                <dd className="itc-mono itc-checkout-address">{PAYMENT_USDT.address}</dd>
-              </div>
-              <div>
-                <dt>Amount</dt>
-                <dd>≈ {formatUsdFromNaira(pack.naira)} USDT</dd>
-              </div>
-            </dl>
-          </section>
-        ) : null}
-
-        {selectedMethod?.id === "bank" ? (
-          <section className="itc-checkout-details">
-            <h2 className="itc-checkout-section-title">Bank transfer details</h2>
-            <p className="itc-checkout-details-lead">{PAYMENT_BANK.note}</p>
-            <div className="itc-checkout-banks">
-              {PAYMENT_BANKS.map((bank) => (
-                <dl key={`${bank.bankName}-${bank.accountNumber}`} className="itc-checkout-dl">
-                  <div>
-                    <dt>Bank</dt>
-                    <dd>{bank.bankName}</dd>
-                  </div>
-                  <div>
-                    <dt>Account name</dt>
-                    <dd>{bank.accountName}</dd>
-                  </div>
-                  <div>
-                    <dt>Account number</dt>
-                    <dd className="itc-mono">{bank.accountNumber}</dd>
-                  </div>
-                  <div>
-                    <dt>Amount</dt>
-                    <dd>
-                      {formatNaira(pack.naira)} ({PAYMENT_BANK.currency})
-                    </dd>
-                  </div>
-                </dl>
-              ))}
-            </div>
-          </section>
-        ) : null}
-
-        {selectedMethod ? (
-          <div className="itc-checkout-actions">
-            <WhatsAppLink
-              message={whatsappMessage}
-              className="itc-btn itc-btn-primary"
-              showFallback={false}
-            >
-              Upload proof on WhatsApp
-            </WhatsAppLink>
-            <p className="itc-checkout-fine">
-              Your access token is attached automatically so we can credit the right account.
-            </p>
-          </div>
-        ) : (
-          <p className="itc-checkout-fine itc-checkout-wait">Select a payment method to continue.</p>
-        )}
+        <div className="itc-checkout-actions">
+          <button
+            type="button"
+            className="itc-btn itc-btn-primary"
+            onClick={() => void startFlutterwaveCheckout()}
+            disabled={busy}
+          >
+            {busy ? "Opening Flutterwave…" : "Continue to Flutterwave"}
+          </button>
+          {error ? <p className="itc-checkout-error">{error}</p> : null}
+          <p className="itc-checkout-fine">
+            You’ll return to the studio after payment. Credits are applied automatically.
+          </p>
+        </div>
 
         <nav className="itc-checkout-legal" aria-label="Policies">
           <Link to="/terms">Terms</Link>

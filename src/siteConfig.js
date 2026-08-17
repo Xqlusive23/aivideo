@@ -57,9 +57,9 @@ export const WHATSAPP_DISPLAY =
   WHATSAPP_NUMBERS.map((number) => formatWhatsAppDisplay(number)).join(" · ");
 
 /**
- * Manual payout rails.
- * - Access-token WhatsApp requests: USDT only
- * - Studio credit checkout (existing unlocked users): USDT + all bank accounts
+ * Payment rails.
+ * - New access-token / invite requests (WhatsApp): USDT only
+ * - Studio credit checkout (existing unlocked users): Flutterwave only
  */
 export const PAYMENT_USDT = {
   // Locked to Bybit TRC20 deposit screenshot (do not “fix” from chat paste — paste often corrupts).
@@ -70,62 +70,19 @@ export const PAYMENT_USDT = {
     "Send USDT on TRC20 only, then message proof on WhatsApp",
 };
 
-const DEFAULT_PAYMENT_BANKS = [
-  {
-    bankName: "Wema Bank PLC",
-    accountName: "Sogbuyi Imisioluwa",
-    accountNumber: "0451404819",
-  },
-];
-
-function parsePaymentBanksFromEnv() {
-  const raw = envText("VITE_PAYMENT_BANKS_JSON");
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return null;
-    return parsed
-      .map((entry) => ({
-        bankName: String(entry?.bankName || "").trim(),
-        accountName: String(entry?.accountName || "").trim(),
-        accountNumber: String(entry?.accountNumber || "").trim(),
-      }))
-      .filter((entry) => entry.bankName && entry.accountName && entry.accountNumber);
-  } catch {
-    return null;
-  }
-}
-
-export const PAYMENT_BANKS = (() => {
-  const fromEnv = parsePaymentBanksFromEnv();
-  if (fromEnv?.length) return fromEnv;
-
-  const single = {
-    bankName: envText("VITE_PAYMENT_BANK_NAME"),
-    accountName: envText("VITE_PAYMENT_BANK_ACCOUNT_NAME"),
-    accountNumber: envText("VITE_PAYMENT_BANK_ACCOUNT_NUMBER"),
-  };
-  if (single.bankName && single.accountName && single.accountNumber) {
-    return [single];
-  }
-  return DEFAULT_PAYMENT_BANKS;
-})();
-
-/** @deprecated Use PAYMENT_BANKS — kept for older imports. */
+export const PAYMENT_BANKS = [];
 export const PAYMENT_BANK = {
-  ...(PAYMENT_BANKS[0] || {
-    bankName: "",
-    accountName: "",
-    accountNumber: "",
-  }),
-  currency: envText("VITE_PAYMENT_BANK_CURRENCY") || "NGN",
-  note:
-    envText("VITE_PAYMENT_BANK_NOTE") ||
-    "For Nigeria bank transfer — send proof on WhatsApp after payment",
+  bankName: "",
+  accountName: "",
+  accountNumber: "",
+  currency: "NGN",
+  note: "",
 };
 
 export const hasUsdtPayment = Boolean(PAYMENT_USDT.address);
-export const hasBankPayment = PAYMENT_BANKS.length > 0;
+export const hasBankPayment = false;
+export const hasFlutterwavePayment =
+  envText("VITE_FLUTTERWAVE_CHECKOUT") !== "0";
 
 const accessRequestPaymentOpts = {
   usdtAddress: PAYMENT_USDT.address,
@@ -161,7 +118,6 @@ export function buildStudioTopUpWhatsAppMessage({
   }
 
   if (method === "usdt") lines.push("Paid via: USDT");
-  if (method === "bank") lines.push("Paid via: bank transfer");
 
   return lines.join("\n");
 }

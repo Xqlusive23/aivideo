@@ -76,8 +76,8 @@ const DOCS = {
       {
         heading: "5. Payments",
         body: [
-          "Payments may be collected through supported channels such as Flutterwave checkout, bank transfer, or USDT, as shown at the time of purchase.",
-          "For manual payments, credits or access are applied after we confirm payment. For card / Flutterwave checkout (when enabled on your account), credits are typically applied after successful verification of the transaction.",
+          "Studio credit packs are paid through Flutterwave checkout (card, USSD, and other options Flutterwave offers). New access-token / invite packages are paid with USDT on WhatsApp.",
+          "For USDT access payments, credits or access are applied after we confirm payment. For Flutterwave checkout, credits are typically applied after successful verification of the transaction.",
           "Prices may be shown in NGN and/or USD equivalents. FX display amounts are approximate.",
         ],
       },
@@ -223,7 +223,7 @@ const DOCS = {
           "Dissatisfaction with AI output quality, latency, or creative results.",
           "Device, network, or third-party calling-app issues outside our control.",
           "Trial usage, unused remaining credits after voluntary non-use, or revoked access for Terms violations / abuse.",
-          "Wrong payment method details entered by the customer for manual bank/USDT transfers (always verify details on the checkout page before paying).",
+          "Wrong USDT payment details entered by the customer for access-token purchases (always verify the address in the WhatsApp message before paying).",
         ],
       },
       {

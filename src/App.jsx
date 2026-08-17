@@ -5086,7 +5086,7 @@ export default function App() {
               <>
             {!isMobileWebStudio && (
               <p style={styles.modalSubtitle}>
-                Choose a pack to open secure checkout and pick your payment method.
+                Choose a pack to pay securely with Flutterwave. Credits are added after a successful payment.
               </p>
             )}
             <div style={styles.creditCardGrid} className="itc-credit-grid">
@@ -5126,7 +5126,7 @@ export default function App() {
               <div style={{ ...styles.checkoutContactError, marginTop: 10 }}>{checkoutContactError}</div>
             )}
             <div style={styles.modalNote}>
-              You’ll choose USDT or bank transfer on the next page. Credits are added after we confirm payment.
+              Studio top-ups use Flutterwave (card / USSD). New access-token requests are paid with USDT on WhatsApp.
             </div>
               </>
             )}
@@ -5427,52 +5427,6 @@ export default function App() {
                       </span>
                     )}
                   </button>
-                )}
-                {!isRunning && (
-                  <div style={styles.canvasOverlay}>
-                    <div style={styles.overlayPingWrap}>
-                      <div style={styles.overlayRadarPing} />
-                      <div style={styles.overlayPingDot} />
-                    </div>
-                    <div style={styles.overlayText}>
-                      {trialEnded
-                        ? "Trial ended"
-                        : credits <= 0 && creditsLoaded
-                        ? "Out of credits"
-                        : "Not connected"}
-                    </div>
-                    <div style={styles.overlaySubtext}>
-                      {trialEnded
-                        ? "Message us on WhatsApp to buy a plan ($70 / $80 / $120). USDT details are included — we unlock your account after payment."
-                        : credits <= 0 && creditsLoaded
-                        ? "Add credits to continue."
-                        : weakNetwork
-                        ? networkQuality.message
-                        : isMobileWebStudio
-                        ? "Choose a photo and turn on your camera, then tap Go live."
-                        : "Upload a reference image, start your camera, then hit Start transformation."}
-                    </div>
-                    {trialEnded ? (
-                      <div className="itc-trial-ended-actions">
-                        <WhatsAppLink
-                          message={WHATSAPP_TRIAL_PURCHASE_MESSAGE}
-                          className="itc-btn itc-btn-primary"
-                        >
-                          Buy a plan on WhatsApp
-                        </WhatsAppLink>
-                        <button
-                          type="button"
-                          className="itc-btn itc-btn-secondary"
-                          onClick={scrollToCreditsSection}
-                        >
-                          Open purchase panel
-                        </button>
-                      </div>
-                    ) : null}
-                    {networkChecked && !weakNetwork && networkQuality.level === NETWORK_QUALITY.FAIR && (
-                      <p className="itc-network-hint is-fair">{networkQuality.message}</p>
-                    )}
-                  </div>
                 )}
               </div>
 
