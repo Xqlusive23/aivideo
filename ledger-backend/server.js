@@ -7,9 +7,10 @@
 // their balance, purchases, and usage — completely separate from anyone
 // else's token.
 //
-// A small browser-based admin page lives at /admin.html (see ./public) so
-// you don't have to run curl/PowerShell by hand — open it in your browser,
-// paste your ADMIN_SECRET, and mint/view tokens from there.
+// A small browser-based admin page lives at /admin.html (see ./public).
+// Production URL is https://www.inspirestream.xyz/admin (Vercel serves the page
+// and proxies /api to this backend). Locally: http://localhost:3002/admin.html
+// or http://localhost:5173/admin while Vite is running.
 //
 // Run with: node server.js   (after `npm install` + setting up .env)
 
@@ -173,10 +174,8 @@ if (!ADMIN_SECRET) {
 
 const app = express();
 
-// Serves ./public/admin.html at http://localhost:3002/admin.html (and on
-// whatever your deployed backend URL is, e.g. https://your-app.up.railway.app/admin.html).
-// This is separate from your public React app's bundle — the admin secret
-// is typed in by hand on this page, never baked into any shipped JS.
+// Serves ./public/admin.html at http://localhost:3002/admin.html.
+// Production customers never use this URL — they use inspirestream.xyz/admin.
 app.use(express.static(path.join(__dirname, "public")));
 
 // --- Database setup -------------------------------------------------------
