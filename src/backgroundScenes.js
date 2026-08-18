@@ -4,7 +4,7 @@ const FULL_FRAME_CLAUSE =
 
 /** Extra clarity for hotel/office scenes (matches premium compositing in reference output). */
 const CLARITY_CLAUSE =
-  "Render crisp textures on walls, fabrics, and furniture; use natural depth of field, accurate perspective, and seamless edge blending around hair and shoulders so the subject appears physically present in the scene.";
+  "Render crisp textures on walls, fabrics, and furniture; keep the person razor-sharp with defined facial features, hair, and clothing edges; use natural depth of field, accurate perspective, and seamless edge blending around hair and shoulders so the subject appears physically present in the scene.";
 
 export const OUTPUT_QUALITY_OPTIONS = [
   {

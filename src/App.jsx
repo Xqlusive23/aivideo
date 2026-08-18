@@ -322,7 +322,7 @@ async function prepareReferenceImageForUpload(file) {
     const ctx = canvas.getContext("2d");
     if (!ctx) return file;
     ctx.drawImage(image, 0, 0, width, height);
-    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.92));
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.96));
     if (!blob) return file;
     const baseName = file.name.replace(/\.[^.]+$/, "") || "reference";
     return new File([blob], `${baseName}.jpg`, { type: "image/jpeg" });
@@ -333,9 +333,11 @@ async function prepareReferenceImageForUpload(file) {
   }
 }
 
+const OUTPUT_DETAIL_CLAUSE =
+  " Keep the output ultra-sharp and high definition: crisp facial features, defined hair strands, clear clothing texture, and clean edges — no softness, waxiness, blur, or motion smear when the camera is still.";
 const DEFAULT_TRANSFORMATION_PROMPT =
   "Substitute the character in the video with the person in the reference image, matching their full appearance exactly as shown in the reference — clothing, hair, skin tone, and body shape only; do not add a hat, cap, glasses, jewelry, or any accessory that is not clearly visible in the reference image.";
-const CHARACTER_WITH_REF_PROMPT = DEFAULT_TRANSFORMATION_PROMPT;
+const CHARACTER_WITH_REF_PROMPT = `${DEFAULT_TRANSFORMATION_PROMPT}${OUTPUT_DETAIL_CLAUSE}`;
 const CHARACTER_SWAP_PATTERN =
   /substitute the character|replace the character|transform into this character|person in the reference image|character from the reference image|with this character/i;
 const BACKGROUND_INTENT_PATTERN =
@@ -345,7 +347,7 @@ const DEFAULT_BACKGROUND_PROMPT =
 const REFERENCE_BACKGROUND_PROMPT =
   "Change the background to closely match the environment, setting, and mood shown in the reference image — recreate the same type of room, location, layout, colors, materials, lighting direction, and depth cues with photorealistic detail filling every pixel edge to edge behind the person; when exact pixels are unavailable, infer and synthesize the closest plausible match to the reference scene rather than leaving the original webcam room visible; completely remove and replace the entire original webcam room with zero visible bleed-through, ghosting, edges, or leftover walls, furniture, or lighting from the live camera feed.";
 const REFERENCE_BACKGROUND_ENHANCE_SUFFIX =
-  " Maximize environmental fidelity with rich textures, crisp depth, accurate colors, fine surface detail, consistent ambient lighting, and stable background geometry that stays aligned with the reference scene.";
+  " Maximize environmental fidelity with rich textures, razor-sharp depth, accurate colors, fine surface detail, consistent ambient lighting, and stable background geometry that stays aligned with the reference scene. Keep the subject ultra-sharp with crisp facial detail and defined edges.";
 const TEMPORAL_STABILITY_CLAUSE =
   " Keep the subject and background spatially stable frame-to-frame when the input camera is still — no sway, drift, idle motion, breathing wobble on static poses, or background shimmer.";
 function hasBackgroundIntent(text) {
@@ -1728,11 +1730,10 @@ export default function App() {
   // affects regular web use at all.
   // Match Decart output quality (incl. 1080p). Feeder stdin is backpressure-safe
   // in companion ≥0.3.24 — do not soft-cap below the reference / output size.
-  const COMPANION_LIVE_FPS = 20;
-  // Keep idle pushes frequent so Electron-side branding stays on the device;
-  // the native feeder also repeats the last frame so Unity never shows yellow.
-  const COMPANION_IDLE_FPS = 12;
-  const COMPANION_LIVE_FPS_1080 = 15; // slightly lower at Full HD to keep the pipe stable
+  const COMPANION_LIVE_FPS = 24;
+  // Idle can stay low — the native feeder repeats the last frame.
+  const COMPANION_IDLE_FPS = 6;
+  const COMPANION_LIVE_FPS_1080 = 20;
 
   const getCompanionVirtualSize = () => {
     const { virtualWidth, virtualHeight } = getOutputQualityConfig(outputQuality);
@@ -1757,11 +1758,31 @@ export default function App() {
     const ctx = canvas.getContext("2d", { alpha: false, willReadFrequently: true });
     let cancelled = false;
     let intervalId = null;
+    let rvfcHandle = null;
     let lastFps = 0;
     let hasLiveFrame = false;
+    let pushing = false;
+    let lastPushAt = 0;
+
+    const cancelLiveSync = () => {
+      const video = outputVideoRef.current;
+      if (rvfcHandle != null && video?.cancelVideoFrameCallback) {
+        try {
+          video.cancelVideoFrameCallback(rvfcHandle);
+        } catch {
+          // ignore
+        }
+      }
+      rvfcHandle = null;
+    };
 
     const pushFrame = () => {
-      if (cancelled || !window.inspiretechCompanion?.sendFrame || !ctx) return;
+      if (cancelled || pushing || !window.inspiretechCompanion?.sendFrame || !ctx) return;
+      const minDelta = 1000 / (isRunningRef.current ? getCompanionLiveFps() : COMPANION_IDLE_FPS);
+      const now = performance.now();
+      if (now - lastPushAt < minDelta - 2) return;
+      pushing = true;
+      lastPushAt = now;
       try {
         const video = outputVideoRef.current;
         const canDrawLive = Boolean(
@@ -1777,13 +1798,48 @@ export default function App() {
         window.inspiretechCompanion.sendFrame(imageData.data.buffer);
       } catch (err) {
         console.warn("[InspireTech] Virtual camera frame push failed:", err);
+      } finally {
+        pushing = false;
       }
     };
 
-    const syncInterval = (force = false) => {
-      const fps = isRunningRef.current ? getCompanionLiveFps() : COMPANION_IDLE_FPS;
-      if (!force && fps === lastFps && intervalId) return;
+    const scheduleLiveSync = () => {
+      const video = outputVideoRef.current;
+      if (!video?.requestVideoFrameCallback) {
+        if (!intervalId) {
+          intervalId = setInterval(pushFrame, 1000 / getCompanionLiveFps());
+          companionCaptureIntervalRef.current = intervalId;
+        }
+        return;
+      }
+      cancelLiveSync();
+      const onVideoFrame = () => {
+        if (cancelled || !isRunningRef.current) return;
+        pushFrame();
+        if (outputVideoRef.current?.requestVideoFrameCallback) {
+          rvfcHandle = outputVideoRef.current.requestVideoFrameCallback(onVideoFrame);
+        }
+      };
+      rvfcHandle = video.requestVideoFrameCallback(onVideoFrame);
+    };
+
+    const syncCapture = (force = false) => {
+      const live = isRunningRef.current;
+      const fps = live ? getCompanionLiveFps() : COMPANION_IDLE_FPS;
+      if (!force && fps === lastFps && (live ? rvfcHandle != null : intervalId)) return;
       lastFps = fps;
+
+      if (live) {
+        if (intervalId) {
+          clearInterval(intervalId);
+          intervalId = null;
+          companionCaptureIntervalRef.current = null;
+        }
+        scheduleLiveSync();
+        return;
+      }
+
+      cancelLiveSync();
       if (intervalId) clearInterval(intervalId);
       intervalId = setInterval(pushFrame, 1000 / fps);
       companionCaptureIntervalRef.current = intervalId;
@@ -1798,12 +1854,12 @@ export default function App() {
         }
       }
       if (cancelled) return;
-      syncInterval(true);
+      syncCapture(true);
       pushFrame();
     };
 
     const fpsWatch = setInterval(() => {
-      if (!cancelled) syncInterval(false);
+      if (!cancelled) syncCapture(false);
     }, 500);
 
     void beginCapture();
@@ -1811,6 +1867,7 @@ export default function App() {
     return () => {
       cancelled = true;
       clearInterval(fpsWatch);
+      cancelLiveSync();
       if (intervalId) clearInterval(intervalId);
       if (companionCaptureIntervalRef.current === intervalId) {
         companionCaptureIntervalRef.current = null;
@@ -3893,9 +3950,12 @@ export default function App() {
         activeSceneUseRefBackgroundRef.current = composeOptions.useReferenceBackground;
         decartSetGuardRef.current = { inFlight: false, lastKey: "", lastAt: 0, reconnectAt: 0 };
 
+        const useEnhanceAtConnect =
+          referenceBackgroundAtStart || sceneReferenceAtStart || getDecartEnhance(sourcePrompt);
+
         console.info("[InspireTech] Decart connect →", {
           connectPrompt: connectPrompt.slice(0, 160) + (connectPrompt.length > 160 ? "…" : ""),
-          enhance: false,
+          enhance: useEnhanceAtConnect,
           hasReference: Boolean(selectedFile),
           referenceBackgroundAtStart,
           sceneReferenceAtStart,
@@ -3960,8 +4020,7 @@ export default function App() {
           initialState: {
             prompt: {
               text: connectPrompt,
-              // Faster first frames — enhance can be turned on later via Apply.
-              enhance: false,
+              enhance: useEnhanceAtConnect,
             },
             ...(referenceImage ? { image: referenceImage } : {}),
             passthrough: false,
@@ -4348,7 +4407,7 @@ export default function App() {
                   disabled={promptApplyBusy}
                   className="itc-checkbox"
                 />
-                <span>Enhance prompt (recommended)</span>
+                <span>Enhance output (recommended)</span>
               </label>
             )}
           </div>
@@ -5666,8 +5725,6 @@ const styles = {
     height: "100%",
     objectFit: "contain",
     backgroundColor: "#000",
-    filter: "contrast(1.08) saturate(1.06) brightness(1.02)",
-    transform: "translateZ(0)",
   },
   fittedImage: { width: "100%", height: "100%", objectFit: "contain" },
   canvasOverlay: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", backgroundColor: "rgba(11, 16, 32, 0.94)" },
