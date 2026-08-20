@@ -333,38 +333,28 @@ async function prepareReferenceImageForUpload(file) {
   }
 }
 
-const OUTPUT_DETAIL_CLAUSE =
-  " Keep the output ultra-sharp and high definition: crisp facial features, defined hair strands, clear clothing texture, and clean edges — no softness, waxiness, blur, or motion smear when the camera is still.";
-const FULL_BODY_FIDELITY_CLAUSE =
-  " Replace the entire visible person end to end — face, neck, torso, arms, wrists, hands, fingers, and any other visible body — with the character from the reference image. Keep the live person's pose, gestures, and motion exactly: when they raise a hand, wave, point, or move their fingers, the character's matching hand and fingers do the same action while still looking like the reference character.";
-const LIP_SYNC_CLAUSE =
-  " Match the character's mouth and lips to the live person's mouth shape only: closed and still while the person is silent, opening and articulating only when they speak, with precise lip sync to the live feed and no idle chewing, muttering, or random mouth motion.";
-const ACCESSORY_MATCH_CLAUSE =
-  " Match accessories exactly as shown on the reference person — only the clothing, hair, and accessories visible in that image.";
-const TEMPORAL_STABILITY_CLAUSE =
-  " Keep the subject and background spatially stable frame-to-frame when the input camera is still — no sway, drift, idle motion, breathing wobble on static poses, background shimmer, or spontaneous mouth movement.";
-const DEFAULT_TRANSFORMATION_PROMPT =
-  "Substitute the character in the video with the person in the reference image, matching their full appearance exactly as shown in the reference — face, skin tone, hair, clothing, and body shape.";
-const CHARACTER_WITH_REF_PROMPT = `${DEFAULT_TRANSFORMATION_PROMPT}${ACCESSORY_MATCH_CLAUSE}${FULL_BODY_FIDELITY_CLAUSE}${LIP_SYNC_CLAUSE}${OUTPUT_DETAIL_CLAUSE}${TEMPORAL_STABILITY_CLAUSE}`;
+// Lucy 2.5 wants short prompts (≈4 sentences). Long stacks break enhance and can yield no edit.
+const DEFAULT_TRANSFORM_PROMPT =
+  "Substitute the character in the video with the person in the reference image.";
+const CHARACTER_WITH_REF_PROMPT =
+  "Substitute the character in the video with the person in the reference image, including face, hands, fingers, hair, clothing, and body shape. Follow the live person's pose and gestures. Keep the mouth still when silent and lip-sync only while speaking.";
 const CHARACTER_SWAP_PATTERN =
   /substitute the character|replace the character|transform into this character|person in the reference image|character from the reference image|with this character/i;
 const BACKGROUND_INTENT_PATTERN =
   /background|office|beach|studio|city|skyline|environment|room|setting|scene|backdrop|interior|outdoor|setup|suite|hotel|luxury|presidential|executive|broadcast|penthouse/i;
 const DEFAULT_BACKGROUND_PROMPT =
-  "Change the background to a bright modern office with desk, chair, window light, soft afternoon shadows, coworkers passing in the background, and sunlight on the floor.";
+  "Change the background to a bright modern office with desk, chair, window light, and soft afternoon shadows.";
 const REFERENCE_BACKGROUND_PROMPT =
-  "Change the background to closely match the environment, setting, and mood shown in the reference image — recreate the same type of room, location, layout, colors, materials, lighting direction, and depth cues with photorealistic detail filling every pixel edge to edge behind the person; when exact pixels are unavailable, infer and synthesize the closest plausible match to the reference scene rather than leaving the original webcam room visible; completely remove and replace the entire original webcam room with zero visible bleed-through, ghosting, edges, or leftover walls, furniture, or lighting from the live camera feed.";
-const REFERENCE_BACKGROUND_ENHANCE_SUFFIX =
-  " Maximize environmental fidelity with rich textures, razor-sharp depth, accurate colors, fine surface detail, consistent ambient lighting, and stable background geometry that stays aligned with the reference scene. Keep the subject ultra-sharp with crisp facial detail, defined hands, and clean body edges.";
-const CHARACTER_FIDELITY_SUFFIX = `${ACCESSORY_MATCH_CLAUSE}${FULL_BODY_FIDELITY_CLAUSE}${LIP_SYNC_CLAUSE}${OUTPUT_DETAIL_CLAUSE}${TEMPORAL_STABILITY_CLAUSE}`;
+  "Change the background to match the environment in the reference image, filling the frame behind the person and removing the original webcam room.";
 
 function ensureCharacterFidelity(promptText) {
   const text = String(promptText || "").trim();
   if (!text) return CHARACTER_WITH_REF_PROMPT;
-  if (text.includes("Replace the entire visible person end to end")) {
+  if (CHARACTER_SWAP_PATTERN.test(text) && /hands?|fingers?/i.test(text)) {
     return text.endsWith(".") ? text : `${text}.`;
   }
-  return `${text.endsWith(".") ? text.slice(0, -1) : text}.${CHARACTER_FIDELITY_SUFFIX}`;
+  if (CHARACTER_SWAP_PATTERN.test(text)) return CHARACTER_WITH_REF_PROMPT;
+  return `${text.endsWith(".") ? text.slice(0, -1) : text}. ${CHARACTER_WITH_REF_PROMPT}`;
 }
 function hasBackgroundIntent(text) {
   return BACKGROUND_INTENT_PATTERN.test(String(text || "").trim());
@@ -386,10 +376,9 @@ function normalizeBackgroundClause(text) {
 
   if (!clause) return DEFAULT_BACKGROUND_PROMPT;
   if (/^change the background to/i.test(clause)) {
-    const base = clause.endsWith(".") ? clause.slice(0, -1) : clause;
-    return `${base}, completely replacing the entire frame behind the person edge to edge with the new environment and erasing every pixel of the original webcam room, walls, furniture, and ambient lighting with no bleed-through or ghosting.`;
+    return clause.endsWith(".") ? clause : `${clause}.`;
   }
-  return `Change the background to ${clause}, completely replacing the entire frame behind the person edge to edge with the new environment and erasing every pixel of the original webcam room, walls, furniture, and ambient lighting with no bleed-through or ghosting.`;
+  return `Change the background to ${clause}.`;
 }
 
 function composeBackgroundOnlyPrompt(userText) {
@@ -398,7 +387,7 @@ function composeBackgroundOnlyPrompt(userText) {
 }
 
 function composeReferenceBackgroundPrompt() {
-  return `${REFERENCE_BACKGROUND_PROMPT}${REFERENCE_BACKGROUND_ENHANCE_SUFFIX}${TEMPORAL_STABILITY_CLAUSE}`;
+  return REFERENCE_BACKGROUND_PROMPT;
 }
 
 function composeLayeredPrompt(userText, hasReferenceImage = true, options = {}) {
@@ -408,8 +397,8 @@ function composeLayeredPrompt(userText, hasReferenceImage = true, options = {}) 
   const backgroundClause = useReferenceBackground
     ? composeReferenceBackgroundPrompt(options)
     : composeBackgroundOnlyPrompt(trimmed || DEFAULT_BACKGROUND_PROMPT);
-  // Decart layered edits: one sentence per edit type (see lucy-2.5-prompting guide).
-  return ensureCharacterFidelity(`${backgroundClause} ${DEFAULT_TRANSFORMATION_PROMPT}`);
+  // Decart: one focused edit type per sentence — background + character swap.
+  return `${backgroundClause} ${CHARACTER_WITH_REF_PROMPT}`;
 }
 
 /** Scene library uses a composite (character + room) — same layered prompt as reference photo background. */

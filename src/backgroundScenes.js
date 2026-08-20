@@ -1,11 +1,4 @@
-/** Shared anti-bleed clause for full-frame background replacement (no webcam room visible). */
-const FULL_FRAME_CLAUSE =
-  "The new environment must fill 100% of the frame behind the person edge to edge with photorealistic depth, razor-sharp detail, and consistent lighting that matches the subject; completely erase every pixel of the original webcam room, walls, furniture, bedding, and ambient light with zero bleed-through, ghosting, halos, color spill, or visible edges from the live camera feed.";
-
-/** Extra clarity for hotel/office scenes (matches premium compositing in reference output). */
-const CLARITY_CLAUSE =
-  "Render crisp textures on walls, fabrics, and furniture; keep the person razor-sharp with defined facial features, hair, hands, fingers, and clothing edges; use natural depth of field, accurate perspective, and seamless edge blending around hair, hands, and shoulders so the subject appears physically present in the scene.";
-
+/** Curated scene presets with photoreal preview art and short Decart prompts. */
 export const OUTPUT_QUALITY_OPTIONS = [
   {
     id: "1080p",
@@ -53,7 +46,7 @@ export function readStoredOutputQuality() {
   return getOutputQualityConfig(stored).id;
 }
 
-/** Curated scene presets with photoreal preview art and Decart-optimized prompts. */
+/** Short scene prompts — Lucy enhance expands them; long stacks weaken/break edits. */
 export const BACKGROUND_SCENES = [
   {
     id: "presidential-suite",
@@ -61,7 +54,8 @@ export const BACKGROUND_SCENES = [
     tagline: "Ultra-luxury penthouse",
     category: "Hotels",
     image: "/backgrounds/presidential-suite.jpg",
-    prompt: `Change the background to an ultra-luxury presidential suite with floor-to-ceiling windows, marble floors, a crystal chandelier, designer lounge seating, rich gold-and-cream tones, and soft warm evening city glow through the windows. ${FULL_FRAME_CLAUSE} ${CLARITY_CLAUSE}`,
+    prompt:
+      "Change the background to an ultra-luxury presidential suite with floor-to-ceiling windows, marble floors, a crystal chandelier, and warm evening city glow.",
   },
   {
     id: "premium-business-hotel",
@@ -69,7 +63,8 @@ export const BACKGROUND_SCENES = [
     tagline: "Warm executive stay",
     category: "Hotels",
     image: "/backgrounds/premium-business-hotel.jpg",
-    prompt: `Change the background to a premium business hotel room with a king bed, plush headboard, warm amber bedside lamps, floor-to-ceiling curtains, a sleek desk, and soft golden ambient lighting that fills the entire frame behind the person. ${FULL_FRAME_CLAUSE} ${CLARITY_CLAUSE}`,
+    prompt:
+      "Change the background to a premium business hotel room with a king bed, warm amber lamps, floor-to-ceiling curtains, and soft golden lighting.",
   },
   {
     id: "executive-ceo-office",
@@ -77,7 +72,8 @@ export const BACKGROUND_SCENES = [
     tagline: "Corner suite workspace",
     category: "Offices",
     image: "/backgrounds/executive-ceo-office.jpg",
-    prompt: `Change the background to an executive CEO corner office with floor-to-ceiling glass, a large wooden desk, leather chair, city skyline view, indoor plants, and polished professional lighting. ${FULL_FRAME_CLAUSE} ${CLARITY_CLAUSE}`,
+    prompt:
+      "Change the background to an executive CEO corner office with floor-to-ceiling glass, a large wooden desk, leather chair, and city skyline view.",
   },
   {
     id: "corporate-meeting-room",
@@ -85,7 +81,8 @@ export const BACKGROUND_SCENES = [
     tagline: "Boardroom ready",
     category: "Offices",
     image: "/backgrounds/corporate-meeting.jpg",
-    prompt: `Change the background to a modern corporate meeting room with a long conference table, ergonomic chairs, glass walls, subtle recessed lighting, and a clean professional atmosphere. ${FULL_FRAME_CLAUSE} ${CLARITY_CLAUSE}`,
+    prompt:
+      "Change the background to a modern corporate meeting room with a long conference table, glass walls, and clean professional lighting.",
   },
   {
     id: "sunset-beach",
@@ -93,7 +90,8 @@ export const BACKGROUND_SCENES = [
     tagline: "Golden hour coast",
     category: "Outdoor",
     image: "/backgrounds/sunset-beach.jpg",
-    prompt: `Change the background to a tropical beach at golden hour with gentle waves, wet sand reflections, palm silhouettes, and warm orange-pink sky gradients. ${FULL_FRAME_CLAUSE} ${CLARITY_CLAUSE}`,
+    prompt:
+      "Change the background to a tropical beach at golden hour with gentle waves, wet sand, palm silhouettes, and a warm orange-pink sky.",
   },
   {
     id: "broadcast-studio",
@@ -101,7 +99,8 @@ export const BACKGROUND_SCENES = [
     tagline: "Pro key-lit set",
     category: "Studio",
     image: "/backgrounds/broadcast-studio.jpg",
-    prompt: `Change the background to a professional broadcast studio with soft key lighting, subtle gradient backdrop, clean floor, and polished on-air production look. ${FULL_FRAME_CLAUSE} ${CLARITY_CLAUSE}`,
+    prompt:
+      "Change the background to a professional broadcast studio with soft key lighting and a subtle gradient backdrop.",
   },
 ];
 
