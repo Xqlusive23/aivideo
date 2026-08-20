@@ -334,7 +334,7 @@ async function prepareReferenceImageForUpload(file) {
 }
 
 // Lucy 2.5 wants short prompts (≈4 sentences). Long stacks break enhance and can yield no edit.
-const DEFAULT_TRANSFORM_PROMPT =
+const DEFAULT_TRANSFORMATION_PROMPT =
   "Substitute the character in the video with the person in the reference image.";
 const CHARACTER_WITH_REF_PROMPT =
   "Substitute the character in the video with the person in the reference image, including face, hands, fingers, hair, clothing, and body shape. Follow the live person's pose and gestures. Keep the mouth still when silent and lip-sync only while speaking.";
