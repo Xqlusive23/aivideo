@@ -335,9 +335,17 @@ async function prepareReferenceImageForUpload(file) {
 
 const OUTPUT_DETAIL_CLAUSE =
   " Keep the output ultra-sharp and high definition: crisp facial features, defined hair strands, clear clothing texture, and clean edges — no softness, waxiness, blur, or motion smear when the camera is still.";
+const FULL_BODY_FIDELITY_CLAUSE =
+  " Replace the entire visible person end to end — face, neck, torso, arms, wrists, hands, fingers, and any other visible body — with the character from the reference image. Keep the live person's pose, gestures, and motion exactly: when they raise a hand, wave, point, or move their fingers, the character's matching hand and fingers do the same action while still looking like the reference character.";
+const LIP_SYNC_CLAUSE =
+  " Match the character's mouth and lips to the live person's mouth shape only: closed and still while the person is silent, opening and articulating only when they speak, with precise lip sync to the live feed and no idle chewing, muttering, or random mouth motion.";
+const ACCESSORY_MATCH_CLAUSE =
+  " Match accessories exactly as shown on the reference person — only the clothing, hair, and accessories visible in that image.";
+const TEMPORAL_STABILITY_CLAUSE =
+  " Keep the subject and background spatially stable frame-to-frame when the input camera is still — no sway, drift, idle motion, breathing wobble on static poses, background shimmer, or spontaneous mouth movement.";
 const DEFAULT_TRANSFORMATION_PROMPT =
-  "Substitute the character in the video with the person in the reference image, matching their full appearance exactly as shown in the reference — clothing, hair, skin tone, and body shape only; do not add a hat, cap, glasses, jewelry, or any accessory that is not clearly visible in the reference image.";
-const CHARACTER_WITH_REF_PROMPT = `${DEFAULT_TRANSFORMATION_PROMPT}${OUTPUT_DETAIL_CLAUSE}`;
+  "Substitute the character in the video with the person in the reference image, matching their full appearance exactly as shown in the reference — face, skin tone, hair, clothing, and body shape.";
+const CHARACTER_WITH_REF_PROMPT = `${DEFAULT_TRANSFORMATION_PROMPT}${ACCESSORY_MATCH_CLAUSE}${FULL_BODY_FIDELITY_CLAUSE}${LIP_SYNC_CLAUSE}${OUTPUT_DETAIL_CLAUSE}${TEMPORAL_STABILITY_CLAUSE}`;
 const CHARACTER_SWAP_PATTERN =
   /substitute the character|replace the character|transform into this character|person in the reference image|character from the reference image|with this character/i;
 const BACKGROUND_INTENT_PATTERN =
@@ -347,9 +355,17 @@ const DEFAULT_BACKGROUND_PROMPT =
 const REFERENCE_BACKGROUND_PROMPT =
   "Change the background to closely match the environment, setting, and mood shown in the reference image — recreate the same type of room, location, layout, colors, materials, lighting direction, and depth cues with photorealistic detail filling every pixel edge to edge behind the person; when exact pixels are unavailable, infer and synthesize the closest plausible match to the reference scene rather than leaving the original webcam room visible; completely remove and replace the entire original webcam room with zero visible bleed-through, ghosting, edges, or leftover walls, furniture, or lighting from the live camera feed.";
 const REFERENCE_BACKGROUND_ENHANCE_SUFFIX =
-  " Maximize environmental fidelity with rich textures, razor-sharp depth, accurate colors, fine surface detail, consistent ambient lighting, and stable background geometry that stays aligned with the reference scene. Keep the subject ultra-sharp with crisp facial detail and defined edges.";
-const TEMPORAL_STABILITY_CLAUSE =
-  " Keep the subject and background spatially stable frame-to-frame when the input camera is still — no sway, drift, idle motion, breathing wobble on static poses, or background shimmer.";
+  " Maximize environmental fidelity with rich textures, razor-sharp depth, accurate colors, fine surface detail, consistent ambient lighting, and stable background geometry that stays aligned with the reference scene. Keep the subject ultra-sharp with crisp facial detail, defined hands, and clean body edges.";
+const CHARACTER_FIDELITY_SUFFIX = `${ACCESSORY_MATCH_CLAUSE}${FULL_BODY_FIDELITY_CLAUSE}${LIP_SYNC_CLAUSE}${OUTPUT_DETAIL_CLAUSE}${TEMPORAL_STABILITY_CLAUSE}`;
+
+function ensureCharacterFidelity(promptText) {
+  const text = String(promptText || "").trim();
+  if (!text) return CHARACTER_WITH_REF_PROMPT;
+  if (text.includes("Replace the entire visible person end to end")) {
+    return text.endsWith(".") ? text : `${text}.`;
+  }
+  return `${text.endsWith(".") ? text.slice(0, -1) : text}.${CHARACTER_FIDELITY_SUFFIX}`;
+}
 function hasBackgroundIntent(text) {
   return BACKGROUND_INTENT_PATTERN.test(String(text || "").trim());
 }
@@ -393,7 +409,7 @@ function composeLayeredPrompt(userText, hasReferenceImage = true, options = {}) 
     ? composeReferenceBackgroundPrompt(options)
     : composeBackgroundOnlyPrompt(trimmed || DEFAULT_BACKGROUND_PROMPT);
   // Decart layered edits: one sentence per edit type (see lucy-2.5-prompting guide).
-  return `${backgroundClause} ${CHARACTER_WITH_REF_PROMPT}`;
+  return ensureCharacterFidelity(`${backgroundClause} ${DEFAULT_TRANSFORMATION_PROMPT}`);
 }
 
 /** Scene library uses a composite (character + room) — same layered prompt as reference photo background. */
@@ -420,7 +436,7 @@ function composeTransformationPrompt(userText, hasReferenceImage = true, options
   if (!trimmed || trimmed === DEFAULT_TRANSFORMATION_PROMPT) {
     return wantsBackground
       ? composeLayeredPrompt(trimmed || DEFAULT_BACKGROUND_PROMPT, true, options)
-      : CHARACTER_WITH_REF_PROMPT;
+      : ensureCharacterFidelity(CHARACTER_WITH_REF_PROMPT);
   }
 
   if (wantsBackground) {
@@ -428,10 +444,10 @@ function composeTransformationPrompt(userText, hasReferenceImage = true, options
   }
 
   if (CHARACTER_SWAP_PATTERN.test(trimmed)) {
-    return trimmed.endsWith(".") ? trimmed : `${trimmed}.`;
+    return ensureCharacterFidelity(trimmed);
   }
 
-  return `${CHARACTER_WITH_REF_PROMPT} ${trimmed.endsWith(".") ? trimmed : `${trimmed}.`}`;
+  return ensureCharacterFidelity(`${DEFAULT_TRANSFORMATION_PROMPT} ${trimmed}`);
 }
 
 function shouldEnhanceDecartPrompt(_userText, enhanceEnabled) {
@@ -3289,6 +3305,8 @@ export default function App() {
     composeTransformationPrompt(getPromptText(), Boolean(selectedFile), getPromptComposeOptions());
 
   const getDecartEnhance = (sourcePrompt = getPromptText()) => {
+    // Character reference swaps need enhance so Lucy structures full-body + lip-sync instructions.
+    if (selectedFile) return true;
     const composeOptions = getPromptComposeOptions();
     if (composeOptions.useReferenceBackground) return true;
     return shouldEnhanceDecartPrompt(sourcePrompt, enhanceMask);
@@ -3908,7 +3926,7 @@ export default function App() {
         const connectPrompt =
           referenceBackgroundAtStart || sceneReferenceAtStart
             ? composeLayeredPrompt("", true, { useReferenceBackground: true })
-            : CHARACTER_WITH_REF_PROMPT;
+            : ensureCharacterFidelity(CHARACTER_WITH_REF_PROMPT);
 
         const voiceAllowedNow = voiceChangerAccess && voiceChangerEnabled;
         const hasValidVoiceNow =
@@ -3950,8 +3968,7 @@ export default function App() {
         activeSceneUseRefBackgroundRef.current = composeOptions.useReferenceBackground;
         decartSetGuardRef.current = { inFlight: false, lastKey: "", lastAt: 0, reconnectAt: 0 };
 
-        const useEnhanceAtConnect =
-          referenceBackgroundAtStart || sceneReferenceAtStart || getDecartEnhance(sourcePrompt);
+        const useEnhanceAtConnect = Boolean(selectedFile) || getDecartEnhance(sourcePrompt);
 
         console.info("[InspireTech] Decart connect →", {
           connectPrompt: connectPrompt.slice(0, 160) + (connectPrompt.length > 160 ? "…" : ""),
